@@ -12,6 +12,7 @@
   "license": "ISC",
   "dependencies": {
     "@lit-labs/virtualizer": "^2.1.0",
+    "@mdi/js": "^7.4.47",
     "custom-card-helpers": "^1.9.0",
     "lit": "^3.3.0"
   },

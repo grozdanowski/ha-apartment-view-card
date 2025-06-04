@@ -10,11 +10,14 @@ interface ApartmentObject {
     customIcon?: string;
 }
 interface ApartmentViewConfig {
+    type: string;
     objects: ApartmentObject[];
-    baseImage: string;
+    allLightsImage: string;
     dayImage: string;
     nightImage: string;
     duskdawnImage: string;
+    columns?: number;
+    rows?: number;
 }
 export declare class ApartmentViewCard extends LitElement {
     hass: HomeAssistant;
@@ -25,6 +28,17 @@ export declare class ApartmentViewCard extends LitElement {
     private _isDragging;
     private _lastPosition;
     static styles: import("lit").CSSResult;
+    static getConfigElement(): HTMLElement;
+    static getStubConfig(): {
+        type: string;
+        objects: never[];
+        allLightsImage: string;
+        dayImage: string;
+        nightImage: string;
+        duskdawnImage: string;
+        columns: number;
+        rows: number;
+    };
     connectedCallback(): void;
     disconnectedCallback(): void;
     private _handleResize;
@@ -39,6 +53,9 @@ export declare class ApartmentViewCard extends LitElement {
     private _getSizeInPixels;
     private _getScale;
     private _handleEntityClick;
+    setConfig(config: ApartmentViewConfig): void;
     render(): import("lit").TemplateResult<1>;
+    private _getIconPath;
+    private _isEntityActive;
 }
 export {};
