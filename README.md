@@ -1,5 +1,7 @@
 # Apartment View Card
 
+> ⚠️ **Work in Progress**: This card is currently under development and does not work with HACS yet. For now, please use the manual installation method described below.
+
 A custom Lovelace card for Home Assistant that provides an interactive apartment visualization. Control lights, media players, and climate devices directly from a visual map of your home.
 
 ## Features
