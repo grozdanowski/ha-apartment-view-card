@@ -1,0 +1,11 @@
+{
+  "name": "Apartment View Card",
+  "render_readme": true,
+  "domains": [
+    "light",
+    "media_player",
+    "climate"
+  ],
+  "homeassistant": "2023.1.0",
+  "iot_class": "calculated"
+}
