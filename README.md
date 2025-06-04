@@ -4,6 +4,19 @@
 
 A Home Assistant card that shows your apartment layout with interactive lights. The card displays different images based on the time of day and allows you to control your lights by clicking on their positions in the layout.
 
+![Desktop View](screenshots/01.png)
+![Mobile View](screenshots/02.png)
+
+## Time of Day Behavior
+
+The card automatically switches between different views based on the time of day to create a realistic representation of your apartment:
+
+- **Day View**: Shows your apartment in natural daylight, typically from sunrise until late afternoon
+- **Dusk/Dawn View**: Displays a warm, ambient lighting during sunrise and sunset hours
+- **Night View**: Shows your apartment in darkness, typically from late evening until early morning
+
+The transitions between these views are smooth and automatic, creating a natural flow throughout the day. The card uses Home Assistant's sun position to determine the appropriate view, ensuring accurate representation of your local daylight conditions.
+
 ## Current Status
 
 - ✅ Basic functionality works
