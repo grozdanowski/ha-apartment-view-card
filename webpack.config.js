@@ -4,7 +4,7 @@ module.exports = {
   entry: './src/ApartmentViewCard.ts',
   output: {
     filename: 'apartment-view-card.js',
-    path: path.resolve(__dirname, 'dist'),
+    path: path.resolve(__dirname, './'),
   },
   module: {
     rules: [

@@ -16,6 +16,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Build output
+dist/
+
 # Keep dist directory but ignore its contents
-dist/*
 !dist/.gitkeep 
