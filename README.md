@@ -4,8 +4,8 @@
 
 A Home Assistant card that shows your apartment layout with interactive lights. The card displays different images based on the time of day and allows you to control your lights by clicking on their positions in the layout.
 
-![Desktop View](screenshots/01.png)
-![Mobile View](screenshots/02.png)
+![Desktop View](screenshots/card-screenshot-01.png)
+![Mobile View](screenshots/card-screenshot-02.jpeg)
 
 ## Time of Day Behavior
 
