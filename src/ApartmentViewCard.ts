@@ -303,3 +303,12 @@ export class ApartmentViewCard extends LitElement {
     `;
   }
 }
+
+// Register the card with Home Assistant
+(window as any).customCards = (window as any).customCards || [];
+(window as any).customCards.push({
+  type: "apartment-view-card",
+  name: "Apartment View Card",
+  description:
+    "A card that shows your apartment layout with interactive lights",
+});
