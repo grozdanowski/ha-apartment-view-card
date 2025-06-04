@@ -15,9 +15,19 @@ A Home Assistant card that shows your apartment layout with interactive lights. 
 
 ## Installation
 
-1. Download the `apartment-view-card.js` file from the [latest release](https://github.com/grozdanowski/ha-apartment-view-card/releases/latest)
+1. Download the `apartment-view-card.js` file
 2. Copy the file to your Home Assistant's `/config/www/` directory
-3. Add the card to your dashboard using the "Show Code Editor" option (the visual editor is currently under development)
+3. Add the card to your configuration:
+
+Example of adding to `configuration.yaml`:
+
+```yaml
+frontend:
+  themes: !include_dir_merge_named themes
+  extra_module_url:
+    - /hacsfiles/lovelace-card-mod/card-mod.js
+    - /local/apartment-view-card.js
+```
 
 ## Creating the Required Images
 
@@ -57,24 +67,90 @@ You need to prepare and upload the following images to your Home Assistant's `/c
 ### Example Configuration
 
 ```yaml
-type: apartment-view-card
+type: custom:apartment-view-card
 allLightsImage: /local/all-lights.png
 dayImage: /local/day.png
 nightImage: /local/night.png
 duskdawnImage: /local/duskdawn.png
 objects:
-  - offsetX: 25
-    offsetY: 30
-    size: medium
-    customName: Living Room Light
-    entityName: light.living_room
+  - offsetX: 52
+    offsetY: 72
+    size: small
+    customName: Bedroom ceiling
+    entityName: light.bar_1
+    customIcon: mdi:ceiling-light
+  - offsetX: 53
+    offsetY: 82
+    size: small
+    customName: Bedroom ceiling
+    entityName: light.sank_viseca_2
     customIcon: mdi:ceiling-light
   - offsetX: 75
-    offsetY: 40
+    offsetY: 52
     size: small
-    customName: Kitchen Light
-    entityName: light.kitchen
-    customIcon: mdi:wall-sconce
+    customName: Living Room Meblo
+    entityName: light.meblo_1
+    customIcon: mdi:floor-lamp
+  - offsetX: 80
+    offsetY: 52
+    size: small
+    customName: Living Room Meblo
+    entityName: light.meblo_2
+    customIcon: mdi:floor-lamp
+  - offsetX: 68
+    offsetY: 85
+    size: medium
+    customName: Living Room aside couch
+    entityName: light.wash_right
+    customIcon: mdi:light-bulb
+  - offsetX: 76
+    offsetY: 84
+    size: medium
+    customName: Living Room aside couch 2
+    entityName: light.hue_color_lamp_1
+    customIcon: mdi:light-bulb
+  - offsetX: 83
+    offsetY: 82
+    size: tiny
+    customName: Living Room Tree
+    entityName: light.bedroom_smart_plug
+    customIcon: mdi:lightbulb-outline
+  - offsetX: 90
+    offsetY: 60
+    size: medium
+    customName: Living Room TV
+    entityName: media_player.philips_tv
+    customIcon: mdi:television
+  - offsetX: 86
+    offsetY: 66
+    size: medium
+    customName: Naim Mu-So
+    entityName: media_player.naim_mu_so_2
+    customIcon: mdi:speaker
+  - offsetX: 34
+    offsetY: 18
+    size: tiny
+    customName: Study room under desk
+    entityName: light.home_office_floor_light
+    customIcon: mdi:lightbulb-outline
+  - offsetX: 47
+    offsetY: 16
+    size: medium
+    customName: Naim Mu-So
+    entityName: media_player.kef
+    customIcon: mdi:speaker
+  - offsetX: 54
+    offsetY: 46
+    size: small
+    customName: Living Room A/C
+    entityName: climate.living_room_a_c
+    customIcon: mdi:air-conditioner
+    disableService: true
+view_layout:
+  position: main
+grid_options:
+  rows: 8
+  columns: 18
 ```
 
 ### Configuration Options
