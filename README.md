@@ -4,11 +4,11 @@
 
 A Home Assistant card that shows your apartment layout with interactive lights. The card displays different images based on the time of day and allows you to control your lights by clicking on their positions in the layout.
 
-### Desktop View
+### Example 1 - (desktop)
 
 ![Desktop View](screenshots/card-screenshot-01.png)
 
-### Mobile View
+### Example 2 - (mobile, different configuration - this one is the original React component I am personally using and porting here)
 
 ![Mobile View](screenshots/card-screenshot-02.jpeg)
 
