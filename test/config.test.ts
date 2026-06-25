@@ -1,0 +1,190 @@
+import { describe, it, expect } from 'vitest';
+import {
+  normalizeConfig,
+  zoneForPoint,
+  type ApartmentViewConfig,
+  type ZoneConfig,
+} from '../src/core/config';
+
+describe('normalizeConfig', () => {
+  it('throws when images.base is missing', () => {
+    expect(() => normalizeConfig({ type: 'x' })).toThrow(/images\.base/);
+    expect(() =>
+      normalizeConfig({ type: 'x', images: {} }),
+    ).toThrow(/images\.base/);
+  });
+
+  it('accepts legacy top-level dayImage as images.base', () => {
+    const cfg = normalizeConfig({
+      type: 'custom:apartment-view-card',
+      dayImage: '/local/day.png',
+    });
+    expect(cfg.images.base).toBe('/local/day.png');
+  });
+
+  it('fills option defaults', () => {
+    const cfg = normalizeConfig({ images: { base: '/b.png' } });
+    expect(cfg.options).toEqual({
+      view: 'auto',
+      lightStyle: 'lit',
+      freePanZoom: true,
+      zoomMax: 1.5,
+      duskDawnOffsetMinutes: 60,
+    });
+    expect(cfg.entities).toEqual([]);
+    expect(cfg.zones).toEqual([]);
+  });
+
+  it('maps legacy image keys into images object', () => {
+    const cfg = normalizeConfig({
+      dayImage: '/d.png',
+      allLightsImage: '/all.png',
+      nightImage: '/n.png',
+      duskdawnImage: '/dd.png',
+    });
+    expect(cfg.images).toEqual({
+      base: '/d.png',
+      allLights: '/all.png',
+      night: '/n.png',
+      duskDawn: '/dd.png',
+    });
+  });
+
+  it('prefers explicit images.base over legacy dayImage', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/new.png' },
+      dayImage: '/old.png',
+    });
+    expect(cfg.images.base).toBe('/new.png');
+  });
+
+  it('maps legacy objects[] -> entities[] with per-field renames', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      objects: [
+        {
+          entityName: 'light.kitchen',
+          customName: 'Kitchen',
+          customIcon: 'mdi:ceiling-light',
+          offsetX: 35,
+          offsetY: 16,
+          size: 'small',
+          disableService: true,
+        },
+      ],
+    });
+    expect(cfg.entities).toHaveLength(1);
+    expect(cfg.entities[0]).toEqual({
+      entity: 'light.kitchen',
+      name: 'Kitchen',
+      icon: 'mdi:ceiling-light',
+      x: 35,
+      y: 16,
+      size: 'small',
+      tap: 'none',
+      orientation: null,
+    });
+  });
+
+  it('maps disableService:false -> tap:toggle', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      objects: [{ entityName: 'light.a', disableService: false }],
+    });
+    expect(cfg.entities[0].tap).toBe('toggle');
+  });
+
+  it('fills entity defaults for a v2 entity', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      entities: [{ entity: 'light.a', x: 10, y: 20 }],
+    });
+    expect(cfg.entities[0]).toEqual({
+      entity: 'light.a',
+      x: 10,
+      y: 20,
+      size: 'medium',
+      tap: 'toggle',
+      orientation: null,
+    });
+  });
+
+  it('preserves a numeric orientation and lightStyle override', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      entities: [
+        { entity: 'light.a', x: 1, y: 2, orientation: 90, lightStyle: 'glow' },
+      ],
+    });
+    expect(cfg.entities[0].orientation).toBe(90);
+    expect(cfg.entities[0].lightStyle).toBe('glow');
+  });
+
+  it('normalizes zones, defaulting absent name', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      zones: [{ x: 1, y: 2, width: 10, height: 20, icon: 'mdi:sofa' }],
+    });
+    expect(cfg.zones[0]).toEqual({
+      name: 'Zone',
+      icon: 'mdi:sofa',
+      x: 1,
+      y: 2,
+      width: 10,
+      height: 20,
+    });
+  });
+
+  it('preserves unknown top-level keys (v1 columns/rows bug)', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      columns: 2,
+      rows: 3,
+      somethingFuture: { a: 1 },
+    }) as ApartmentViewConfig & Record<string, unknown>;
+    expect(cfg.columns).toBe(2);
+    expect(cfg.rows).toBe(3);
+    expect(cfg.somethingFuture).toEqual({ a: 1 });
+  });
+
+  it('sets type when absent', () => {
+    const cfg = normalizeConfig({ images: { base: '/b.png' } });
+    expect(cfg.type).toBe('custom:apartment-view-card');
+  });
+
+  it('preserves a provided type verbatim', () => {
+    const cfg = normalizeConfig({
+      type: 'custom:apartment-view-card',
+      images: { base: '/b.png' },
+    });
+    expect(cfg.type).toBe('custom:apartment-view-card');
+  });
+});
+
+describe('zoneForPoint', () => {
+  const big: ZoneConfig = { name: 'big', x: 0, y: 0, width: 100, height: 100 };
+  const small: ZoneConfig = { name: 'small', x: 40, y: 40, width: 20, height: 20 };
+
+  it('returns null when no zone contains the point', () => {
+    expect(zoneForPoint(5, 5, [small])).toBeNull();
+  });
+
+  it('returns the only containing zone', () => {
+    expect(zoneForPoint(5, 5, [big])).toBe(big);
+  });
+
+  it('returns the smallest-AREA zone when multiple contain the point', () => {
+    expect(zoneForPoint(50, 50, [big, small])).toBe(small);
+    // order independent
+    expect(zoneForPoint(50, 50, [small, big])).toBe(small);
+  });
+
+  it('treats rectangle edges as inside (inclusive bounds)', () => {
+    expect(zoneForPoint(0, 0, [big])).toBe(big);
+    expect(zoneForPoint(100, 100, [big])).toBe(big);
+  });
+
+  it('returns null for an empty zone list', () => {
+    expect(zoneForPoint(50, 50, [])).toBeNull();
+  });
+});
