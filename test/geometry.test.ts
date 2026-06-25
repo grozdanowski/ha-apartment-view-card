@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { sizeTierFraction, haloRadiusPx } from '../src/core/geometry';
+import {
+  sizeTierFraction,
+  haloRadiusPx,
+  markerScreenPos,
+  clampIconScale,
+  type Viewport,
+  type ZoomTransform,
+} from '../src/core/geometry';
 
 describe('sizeTierFraction', () => {
   it('tiny -> 0.09', () => expect(sizeTierFraction('tiny')).toBe(0.09));
@@ -21,5 +28,41 @@ describe('haloRadiusPx', () => {
   });
   it('tiny at cardWidth=500, brightness=0.5 -> 0.09*500*(0.45+0.275)', () => {
     expect(haloRadiusPx(500, 'tiny', 0.5)).toBeCloseTo(0.09 * 500 * 0.725, 5);
+  });
+});
+
+const vp: Viewport = { width: 800, height: 600 };
+
+describe('markerScreenPos', () => {
+  it('maps percent to screen px at identity transform', () => {
+    const t: ZoomTransform = { scale: 1, panX: 0, panY: 0 };
+    // 50% of 800 = 400, 25% of 600 = 150
+    expect(markerScreenPos(50, 25, t, vp)).toEqual({ left: 400, top: 150 });
+  });
+
+  it('applies scale then pan: left = xPct/100*W*scale + panX', () => {
+    const t: ZoomTransform = { scale: 1.5, panX: 30, panY: -20 };
+    // left = 50/100*800*1.5 + 30 = 600 + 30 = 630
+    // top  = 50/100*600*1.5 - 20 = 450 - 20 = 430
+    expect(markerScreenPos(50, 50, t, vp)).toEqual({ left: 630, top: 430 });
+  });
+
+  it('handles 0% and 100% corners', () => {
+    const t: ZoomTransform = { scale: 2, panX: 10, panY: 5 };
+    expect(markerScreenPos(0, 0, t, vp)).toEqual({ left: 10, top: 5 });
+    // 100/100*800*2 + 10 = 1610 ; 100/100*600*2 + 5 = 1205
+    expect(markerScreenPos(100, 100, t, vp)).toEqual({ left: 1610, top: 1205 });
+  });
+});
+
+describe('clampIconScale', () => {
+  it('passes small scales through unchanged', () => {
+    expect(clampIconScale(1)).toBe(1);
+    expect(clampIconScale(1.5)).toBe(1.5);
+  });
+
+  it('caps icon scale at 2.0', () => {
+    expect(clampIconScale(2.0)).toBe(2.0);
+    expect(clampIconScale(3.7)).toBe(2.0);
   });
 });
