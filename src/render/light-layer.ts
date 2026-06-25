@@ -40,19 +40,13 @@ export function renderLight(
   const style = effectiveLightStyle(cfg, options);
   const color = state ? rgbCss(resolveLightColor(state)) : 'rgb(255, 250, 230)';
 
-  // Halo grows with brightness; when off keep the last tier radius (b=0 -> base*0.45)
-  // but the whole overlay fades to 0 opacity anyway.
-  const radius = haloRadiusPx(cardWidth, cfg.size, b);
-  const mask = radialMask(cfg.x, cfg.y, radius);
-
   const overlayStyle = {
     position: 'absolute',
     inset: '0',
     opacity: on ? '1' : '0',
     transition: FADE,
     'pointer-events': 'none',
-    'mask-image': mask,
-    '-webkit-mask-image': mask,
+    ...lightPatchMaskCss(cfg, cardWidth, b),
   };
 
   let inner: TemplateResult;
@@ -176,6 +170,34 @@ export function coneMask(o: number, half: number, feather: number, at: string): 
     `transparent ${half + feather}deg, transparent ${360 - half - feather}deg, ` +
     `black ${360 - half}deg, black 360deg)`
   );
+}
+
+/**
+ * Build the `styleMap` record for a single light patch's mask, §4.4.
+ * Radius from haloRadiusPx; cone threaded from cfg.orientation.
+ * Returns kebab-cased CSS props so it can be spread into styleMap().
+ *
+ * v2.0 DEVIATION (spec §4.2): `reveal` should use a HARDER-edged mask while
+ * `lit`/`glow` use the soft radial; this helper currently builds the soft
+ * radial for every style, so `reveal` shares the soft mask. Branching mask
+ * hardness by `effectiveLightStyle` is a deferred follow-up.
+ */
+export function lightPatchMaskCss(
+  cfg: EntityConfig,
+  cardWidth: number,
+  brightness: number,
+): Record<string, string> {
+  const radiusPx = haloRadiusPx(cardWidth, cfg.size, brightness);
+  const m = lightMaskStyles(cfg.x, cfg.y, radiusPx, cfg.orientation);
+  const out: Record<string, string> = {
+    'mask-image': m.maskImage,
+    '-webkit-mask-image': m.maskImage,
+  };
+  if (m.maskComposite) {
+    out['mask-composite'] = m.maskComposite;
+    out['-webkit-mask-composite'] = m.webkitMaskComposite;
+  }
+  return out;
 }
 
 /**
