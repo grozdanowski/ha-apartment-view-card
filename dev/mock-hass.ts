@@ -125,7 +125,7 @@ export function createMockHass(
           const next = ent.state === 'off' ? 'on' : 'off';
           states[id] = {
             ...ent,
-            state: isLightId(id) ? next : next,
+            state: isLightId(id) ? next : ent.state,
             last_changed: nowIso(),
             last_updated: nowIso(),
           };

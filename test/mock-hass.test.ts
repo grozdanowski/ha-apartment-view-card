@@ -51,6 +51,32 @@ describe('createMockHass', () => {
     expect(hass.states['light.kitchen_ceiling'].state).toBe('on');
   });
 
+  it('homeassistant.toggle does not flip non-light entities', async () => {
+    const hass = createMockHass();
+    const initialMediaState = hass.states['media_player.tv'].state;
+    expect(initialMediaState).toBe('playing');
+    await hass.callService('homeassistant', 'toggle', {
+      entity_id: 'media_player.tv',
+    });
+    // media_player.tv state should remain unchanged
+    expect(hass.states['media_player.tv'].state).toBe('playing');
+    // but the call should be recorded
+    expect(hass.serviceCalls).toContainEqual({
+      domain: 'homeassistant',
+      service: 'toggle',
+      data: { entity_id: 'media_player.tv' },
+    });
+  });
+
+  it('homeassistant.toggle still flips light entities after regression', async () => {
+    const hass = createMockHass();
+    expect(hass.states['light.kitchen_ceiling'].state).toBe('on');
+    await hass.callService('homeassistant', 'toggle', {
+      entity_id: 'light.kitchen_ceiling',
+    });
+    expect(hass.states['light.kitchen_ceiling'].state).toBe('off');
+  });
+
   it('applies overrides over seeded defaults', () => {
     const hass = createMockHass({
       'light.living_lamp': { state: 'off' },
