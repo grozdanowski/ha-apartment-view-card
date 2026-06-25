@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Apartment View Card — dev harness</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css"
+    />
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 18px; background: #0b0d10; color: #e6ebf2;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        display: flex; flex-direction: column; gap: 14px; align-items: center;
+      }
+      .app { width: 100%; max-width: 1000px; display: flex; flex-direction: column; gap: 14px; }
+      h1 { font-size: 16px; font-weight: 500; margin: 0; }
+      .muted { color: #8b94a0; font-size: 13px; }
+      .stage {
+        position: relative; width: 100%; aspect-ratio: 1166 / 930;
+        background: #07090b; border-radius: 12px; overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      .scene { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; }
+      #base { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+        transition: filter 0.3s ease; user-select: none; -webkit-user-drag: none; }
+      #lights { position: absolute; inset: 0; pointer-events: none; }
+      /* the real card mounts here in Phase 2; harmless empty in Phase 1 */
+      apartment-view-card { position: absolute; inset: 0; display: block; pointer-events: none; }
+      .panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+      .card { background: #12151a; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 12px 14px; }
+      .card h2 { font-size: 12px; font-weight: 500; margin: 0 0 10px; color: #aab3bf;
+        text-transform: uppercase; letter-spacing: 0.04em; }
+      .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+      button.b { font-size: 13px; padding: 6px 11px; border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.16); background: transparent; color: #e6ebf2; cursor: pointer; }
+      button.b:hover { background: rgba(255, 255, 255, 0.06); }
+      button.b.on { background: #2f6fed; border-color: transparent; color: #fff; }
+      .lc-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px;
+        align-items: center; margin-bottom: 10px; }
+      .lc-label { font-size: 13px; color: #cdd6e0; }
+      .lc-row input[type='range'] { width: 90px; }
+      .lc-row input[type='color'] { width: 34px; height: 26px; padding: 0; border: none; background: none; }
+      pre#calls { margin: 0; font-size: 12px; color: #9fb4d6; white-space: pre-wrap;
+        min-height: 60px; max-height: 180px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <h1>Apartment View Card — dev harness</h1>
+      <p class="muted">
+        Mock <code>hass</code> (no live HA). Toggle / dim / recolor lights and
+        switch time-of-day; service calls are logged below.
+      </p>
+
+      <div class="stage">
+        <div class="scene" id="scene">
+          <img id="base" src="/day.png" alt="floorplan base render" />
+          <div id="lights"></div>
+        </div>
+        <apartment-view-card id="card"></apartment-view-card>
+      </div>
+
+      <div class="panel">
+        <div class="card">
+          <h2>Time of day</h2>
+          <div class="seg">
+            <button class="b" data-tod="day">Day</button>
+            <button class="b" data-tod="duskDawn">Dusk / dawn</button>
+            <button class="b" data-tod="night">Night</button>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Lights</h2>
+          <div id="light-controls"></div>
+        </div>
+        <div class="card">
+          <h2>callService log</h2>
+          <pre id="calls"></pre>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/harness.ts"></script>
+  </body>
+</html>
