@@ -1,0 +1,76 @@
+import type { ZoomTransform } from './geometry';
+
+export interface PanZoomOptions {
+  zoomMax: number;
+  minScale?: number;
+}
+
+/** Per-wheel-notch zoom step (multiplicative). */
+const WHEEL_STEP = 1.1;
+
+/**
+ * Pure pan/zoom math with an `enabled` gate. No DOM. While disabled (used for
+ * focused zones and options.freePanZoom:false) every input is a no-op and the
+ * unchanged transform is returned. Anchored zoom keeps the point under the
+ * cursor/pinch-center fixed: pan' = anchor - (anchor - pan) * (newScale/oldScale).
+ */
+export class PanZoomController {
+  private readonly zoomMax: number;
+  private readonly minScale: number;
+  private _t: ZoomTransform = { scale: 1, panX: 0, panY: 0 };
+  private enabled = true;
+
+  constructor(opts: PanZoomOptions) {
+    this.zoomMax = opts.zoomMax;
+    this.minScale = opts.minScale ?? 1;
+  }
+
+  get transform(): ZoomTransform {
+    return { ...this._t };
+  }
+
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+  }
+
+  panBy(dx: number, dy: number): ZoomTransform {
+    if (!this.enabled) return this.transform;
+    this._t = { ...this._t, panX: this._t.panX + dx, panY: this._t.panY + dy };
+    return this.transform;
+  }
+
+  wheelZoom(deltaY: number, anchorX: number, anchorY: number): ZoomTransform {
+    if (!this.enabled) return this.transform;
+    const factor = deltaY < 0 ? WHEEL_STEP : 1 / WHEEL_STEP;
+    return this._applyZoom(factor, anchorX, anchorY);
+  }
+
+  pinchZoom(scaleFactor: number, anchorX: number, anchorY: number): ZoomTransform {
+    if (!this.enabled) return this.transform;
+    return this._applyZoom(scaleFactor, anchorX, anchorY);
+  }
+
+  pinchDistance(ax: number, ay: number, bx: number, by: number): number {
+    return Math.hypot(bx - ax, by - ay);
+  }
+
+  reset(): ZoomTransform {
+    this._t = { scale: 1, panX: 0, panY: 0 };
+    return this.transform;
+  }
+
+  private _applyZoom(factor: number, anchorX: number, anchorY: number): ZoomTransform {
+    const oldScale = this._t.scale;
+    const newScale = Math.min(
+      this.zoomMax,
+      Math.max(this.minScale, oldScale * factor)
+    );
+    const k = newScale / oldScale;
+    this._t = {
+      scale: newScale,
+      panX: anchorX - (anchorX - this._t.panX) * k,
+      panY: anchorY - (anchorY - this._t.panY) * k,
+    };
+    return this.transform;
+  }
+}
