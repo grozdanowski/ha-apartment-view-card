@@ -8,7 +8,7 @@
  *   - Tapping a marker fires homeassistant.toggle
  *   - Light-overlay opacity matches the glow formula
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import '../src/apartment-view-card';
 import { createMockHass } from '../dev/mock-hass';
 import { markerScreenPos } from '../src/core/geometry';
@@ -48,7 +48,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('card-component: marker rendering', () => {
-  beforeAll(() => {
+  it('registers the apartment-view-card custom element', () => {
     expect(customElements.get('apartment-view-card')).toBeTruthy();
   });
 
