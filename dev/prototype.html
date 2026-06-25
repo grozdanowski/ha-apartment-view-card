@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Apartment View Card — behavior prototype</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #0b0d10; color: #e6ebf2;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 18px; display: flex; flex-direction: column; gap: 14px; align-items: center;
+  }
+  .app { width: 100%; max-width: 1000px; display: flex; flex-direction: column; gap: 14px; }
+  h1 { font-size: 16px; font-weight: 500; margin: 0; }
+  .muted { color: #8b94a0; font-size: 13px; }
+
+  .stage {
+    position: relative; width: 100%; aspect-ratio: 1166 / 930;
+    background: #07090b; border-radius: 12px; overflow: hidden; touch-action: none;
+    border: 1px solid rgba(255,255,255,.08); cursor: grab;
+  }
+  .stage.grabbing { cursor: grabbing; }
+  .scene { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; }
+  .scene.animate { transition: transform .6s cubic-bezier(.4,0,.2,1); }
+  .base { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; user-select: none; -webkit-user-drag: none; }
+
+  .light { position: absolute; inset: 0; pointer-events: none; }
+  .light .all { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transition: opacity .3s ease; }
+  .light .tint { position: absolute; inset: 0; transition: opacity .3s ease, background .3s ease; }
+
+  .fx { position: absolute; transform: translate(-50%,-50%); pointer-events: none; opacity: 0; transition: opacity .3s ease; }
+  .fx.on { opacity: 1; }
+  .fx-screen { width: 22%; aspect-ratio: 1; }
+  .fx-screen .glow { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle, rgba(90,160,255,.9) 0%, rgba(90,160,255,0) 70%); mix-blend-mode: screen; animation: tvpulse 3.2s ease-in-out infinite; }
+  .fx-waves { width: 17%; aspect-ratio: 1; }
+  .fx-waves span { position: absolute; top: 50%; left: 50%; width: 100%; height: 100%; border-radius: 50%; border: 2px solid var(--fxcol, rgba(210,225,255,.8)); transform: translate(-50%,-50%) scale(.15); animation: ripple 2.6s ease-out infinite; }
+  .fx-waves span:nth-child(2) { animation-delay: .87s; }
+  .fx-waves span:nth-child(3) { animation-delay: 1.73s; }
+  .fx-air { width: 22%; aspect-ratio: 1; }
+  .fx-air svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .fx-air path { fill: none; stroke: var(--fxcol, rgba(90,160,255,.9)); stroke-width: 3.5; stroke-linecap: round; opacity: 0; transform-box: fill-box; transform-origin: center; animation: airflow 2.8s ease-in-out infinite; }
+  .fx-air path:nth-child(2) { animation-delay: .55s; }
+  .fx-air path:nth-child(3) { animation-delay: 1.1s; }
+  @keyframes tvpulse { 0%, 100% { opacity: .5; } 50% { opacity: .85; } }
+  @keyframes ripple { 0% { transform: translate(-50%,-50%) scale(.15); opacity: .8; } 70% { opacity: .08; } 100% { transform: translate(-50%,-50%) scale(1); opacity: 0; } }
+  @keyframes airflow { 0% { opacity: 0; transform: translateX(-22%) scaleX(.85); } 35% { opacity: .9; } 65% { opacity: .9; } 100% { opacity: 0; transform: translateX(22%) scaleX(1.1); } }
+  .beam { position: absolute; inset: 0; animation: glowpulse 3.4s ease-in-out infinite; }
+  @keyframes glowpulse { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
+  .beam.radar { animation: none; }
+  .beam.radar span { position: absolute; top: 50%; left: 50%; width: 100%; height: 100%; border-radius: 50%; border: 4.5px solid var(--fxcol, rgba(200,220,255,.9)); transform: translate(-50%,-50%) scale(.1); animation: ripple 2.4s ease-out infinite; }
+  .beam.radar span:nth-child(2) { animation-delay: .48s; }
+  .beam.radar span:nth-child(3) { animation-delay: .96s; }
+  .beam.radar span:nth-child(4) { animation-delay: 1.44s; }
+  .beam.radar span:nth-child(5) { animation-delay: 1.92s; }
+  #markers { position: absolute; inset: 0; pointer-events: none; }
+  #markers .chip { pointer-events: auto; }
+  #markers.zooming .marker { transition: left .6s cubic-bezier(.4,0,.2,1), top .6s cubic-bezier(.4,0,.2,1), transform .6s cubic-bezier(.4,0,.2,1), opacity .35s ease; }
+  .marker { position: absolute; transition: opacity .35s ease; }
+  .marker.faded { opacity: .25; }
+  .chip {
+    width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: rgba(28,32,38,.86); color: #d7dde5; border: 1px solid rgba(255,255,255,.14);
+    font-size: 22px; cursor: pointer; backdrop-filter: blur(2px);
+    transition: background .2s, color .2s, box-shadow .2s; box-shadow: 0 2px 6px rgba(0,0,0,.35);
+  }
+  .chip:hover { background: rgba(48,54,62,.95); }
+  .chip.active { background: #2f6fed; color: #fff; border-color: transparent; box-shadow: 0 0 0 3px rgba(47,111,237,.32); }
+  .chip.sel { outline: 2px solid #ffd27a; outline-offset: 2px; }
+
+  .zone { position: absolute; border-radius: 8px; }
+  .zone .lbl {
+    position: absolute; top: -10px; left: 8px; font-size: 11px; color: #bcd4ff;
+    background: rgba(16,22,32,.75); padding: 1px 7px; border-radius: 6px; display: none;
+  }
+  .stage:not(.editing) .zone { pointer-events: none; }
+  .stage.editing .zone { border: 1px dashed rgba(120,170,255,.7); }
+  .stage.editing .zone .lbl { display: block; }
+  .zone .del {
+    position: absolute; top: -10px; right: -10px; width: 20px; height: 20px; border-radius: 50%;
+    background: #c0392b; color: #fff; border: none; cursor: pointer; font-size: 13px; display: none;
+    align-items: center; justify-content: center; line-height: 1;
+  }
+  .stage.editing .zone .del { display: flex; }
+
+  .back {
+    position: absolute; top: 12px; left: 12px; z-index: 10; display: none; align-items: center; gap: 6px;
+    background: rgba(14,18,24,.9); color: #e6ebf2; border: 1px solid rgba(255,255,255,.2);
+    border-radius: 8px; padding: 7px 12px; font-size: 14px; cursor: pointer;
+  }
+  .toast {
+    position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 11;
+    background: rgba(14,18,24,.92); color: #e6ebf2; border: 1px solid rgba(255,255,255,.18);
+    border-radius: 8px; padding: 7px 13px; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .25s;
+  }
+
+  .zonebar { display: flex; gap: 8px; overflow-x: auto; padding: 2px; }
+  .zchip {
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 13px;
+    padding: 8px 14px; border-radius: 999px; border: 1px solid rgba(255,255,255,.16);
+    background: #12151a; color: #e6ebf2; cursor: pointer; flex: 0 0 auto;
+  }
+  .zchip:hover { background: rgba(255,255,255,.06); }
+  .zchip.on { background: #2f6fed; border-color: transparent; color: #fff; }
+  .zchip.back { background: rgba(255,255,255,.05); border-color: rgba(255,255,255,.28); }
+  .zchip .mdi { font-size: 16px; opacity: .85; }
+  .panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .card { background: #12151a; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; padding: 12px 14px; }
+  .card h2 { font-size: 13px; font-weight: 500; margin: 0 0 10px; color: #aab3bf; text-transform: uppercase; letter-spacing: .04em; }
+  .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+  button.b {
+    font-size: 13px; padding: 6px 11px; border-radius: 8px; border: 1px solid rgba(255,255,255,.16);
+    background: transparent; color: #e6ebf2; cursor: pointer;
+  }
+  button.b:hover { background: rgba(255,255,255,.06); }
+  button.b.on { background: #2f6fed; border-color: transparent; color: #fff; }
+  label.f { display: block; font-size: 12px; color: #8b94a0; margin: 10px 0 4px; }
+  select, input[type=range], input[type=color] { width: 100%; }
+  input[type=color] { height: 32px; padding: 0; background: none; border: 1px solid rgba(255,255,255,.16); border-radius: 6px; }
+  .rowline { display: flex; align-items: center; gap: 10px; }
+  .rowline .out { font-size: 13px; min-width: 42px; text-align: right; font-variant-numeric: tabular-nums; }
+  .selname { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div>
+    <h1>Apartment View Card — behavior prototype</h1>
+    <div class="muted">Real renders + true masked-reveal lighting. Tap an icon to toggle &amp; select · hold for more-info · tap a room to zoom + focus · wheel/drag to pan-zoom.</div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="scene" id="scene">
+      <img class="base" id="base" alt="apartment base render" />
+      <div id="lights"></div>
+      <div id="fx"></div>
+      <div id="zones"></div>
+    </div>
+    <div id="markers"></div>
+    <button class="back" id="back"><span class="mdi mdi-arrow-left"></span> Back</button>
+    <div class="toast" id="toast"></div>
+  </div>
+
+  <div class="zonebar" id="zonebar"></div>
+
+  <div class="panel">
+    <div class="card">
+      <h2>Time of day</h2>
+      <div class="seg" id="tod">
+        <button class="b" data-tod="day">Day</button>
+        <button class="b" data-tod="duskdawn">Dusk/Dawn</button>
+        <button class="b on" data-tod="night">Night</button>
+      </div>
+      <label class="f">Base source</label>
+      <div class="seg">
+        <button class="b on" id="baseReal">Real day/night</button>
+        <button class="b" id="baseDerived">Derive from all-lights</button>
+      </div>
+      <label class="f">View</label>
+      <div class="seg">
+        <button class="b" id="allOn">All lights on</button>
+        <button class="b" id="allOff">All off</button>
+        <button class="b" id="resetView">Reset view</button>
+      </div>
+      <label class="f"><input type="checkbox" id="showIcons" checked style="width:auto"> Show icons</label>
+    </div>
+
+    <div class="card">
+      <h2>Light color blend (A/B)</h2>
+      <div class="muted" style="margin-bottom:8px">How per-light RGB tints the revealed render. Compare on your real images.</div>
+      <label class="f">Blend mode</label>
+      <select id="blend">
+        <option value="color">color — recolor, keep brightness (recommended)</option>
+        <option value="multiply" selected>multiply — current card behavior</option>
+        <option value="screen">screen — brighten toward color</option>
+        <option value="overlay">overlay</option>
+        <option value="soft-light">soft-light</option>
+        <option value="normal">normal (flat overlay)</option>
+      </select>
+      <label class="f">Tint strength</label>
+      <div class="rowline"><input type="range" id="strength" min="0" max="100" step="1" value="70"><span class="out" id="strengthOut">70%</span></div>
+      <label class="f">Lit reveal source</label>
+      <div class="seg">
+        <button class="b on" id="litReal">Real all-lights</button>
+        <button class="b" id="litDerived">Derived from day</button>
+      </div>
+      <label class="f">Light style</label>
+      <div class="seg">
+        <button class="b" id="styleReveal">Reveal render</button>
+        <button class="b on" id="styleLit">Lit (render-free)</button>
+        <button class="b" id="styleGlow">Synthetic glow</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Selected device</h2>
+      <div class="selname" id="selName">—</div>
+      <div class="muted" id="selHint">Tap an icon to select it.</div>
+      <label class="f">Color</label>
+      <input type="color" id="selColor" value="#b07aff" />
+      <label class="f">Brightness</label>
+      <div class="rowline"><input type="range" id="selBri" min="0" max="100" step="1" value="80"><span class="out" id="selBriOut">80%</span></div>
+      <label class="f"><input type="checkbox" id="orientOn" style="width:auto"> Directional (orientation)</label>
+      <div class="rowline"><input type="range" id="orient" min="0" max="359" step="1" value="0" disabled><span class="out" id="orientOut">—</span></div>
+      <div id="climateCtl" style="display:none">
+        <label class="f">A/C mode</label>
+        <div class="seg">
+          <button class="b" id="acCool">Cool</button>
+          <button class="b" id="acHeat">Heat</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Zones</h2>
+      <div class="muted" style="margin-bottom:8px">Tap a room on the stage to zoom + focus (other rooms' icons dim).</div>
+      <div class="seg">
+        <button class="b" id="editZones">Edit zones</button>
+      </div>
+      <div class="muted" id="zoneHint" style="margin-top:8px">In edit mode: drag a box to add a zone; click × to delete.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var TIERS = { tiny: 0.09, small: 0.13, medium: 0.17, large: 0.22, huge: 0.28 };
+  var BASES = { day: "assets/day.png", duskdawn: "assets/duskdawn.png", night: "assets/night.png" };
+
+  // Real entity positions from the repo README config.
+  var entities = [
+    { id: "bar_1",       entity: "light.bar_1",                  name: "Bedroom ceiling",      mdi: "ceiling-light",  kind: "light", size: "small",  x: 52, y: 72, on: false, color: "#ffcf9e", bri: 0.8 },
+    { id: "sank",        entity: "light.sank_viseca_2",          name: "Bedroom ceiling 2",    mdi: "ceiling-light",  kind: "light", size: "small",  x: 53, y: 82, on: false, color: "#ffcf9e", bri: 0.8 },
+    { id: "meblo1",      entity: "light.meblo_1",                name: "Living room Meblo L",  mdi: "floor-lamp",     kind: "light", size: "small",  x: 75, y: 52, on: true,  color: "#ffcf9e", bri: 0.85 },
+    { id: "meblo2",      entity: "light.meblo_2",                name: "Living room Meblo R",  mdi: "floor-lamp",     kind: "light", size: "small",  x: 80, y: 52, on: true,  color: "#ffcf9e", bri: 0.85 },
+    { id: "wash",        entity: "light.wash_right",             name: "Couch wash",           mdi: "lightbulb",      kind: "light", size: "medium", x: 68, y: 85, on: true,  color: "#ffcf9e", bri: 0.8, orientation: 0 },
+    { id: "hue",         entity: "light.hue_color_lamp_1",       name: "Couch lamp (RGB)",     mdi: "lightbulb",      kind: "light", size: "medium", x: 76, y: 84, on: true,  color: "#b07aff", bri: 0.8 },
+    { id: "tree",        entity: "light.bedroom_smart_plug",     name: "Holiday tree",         mdi: "lightbulb",      kind: "light", size: "tiny",   x: 83, y: 82, on: true,  color: "#5fd08a", bri: 0.6 },
+    { id: "tv",          entity: "media_player.philips_tv",      name: "Living room TV",       mdi: "television",     kind: "media", size: "medium", x: 90, y: 60, on: true, fx: "screen", orientation: 270 },
+    { id: "naim",        entity: "media_player.naim_mu_so_2",    name: "Naim Mu-So",           mdi: "speaker",        kind: "media", size: "medium", x: 86, y: 66, on: false, fx: "waves" },
+    { id: "office",      entity: "light.home_office_floor_light",name: "Study floor light",    mdi: "lightbulb",      kind: "light", size: "tiny",   x: 34, y: 18, on: false, color: "#ffcf9e", bri: 0.7 },
+    { id: "kef",         entity: "media_player.kef",             name: "KEF speaker",          mdi: "speaker",        kind: "media", size: "medium", x: 47, y: 16, on: false, fx: "waves" },
+    { id: "ac",          entity: "climate.living_room_a_c",      name: "Living room A/C",      mdi: "air-conditioner",kind: "climate", size: "small", x: 54, y: 46, on: false, tapNone: true, fx: "air", mode: "cool", orientation: 150 }
+  ];
+
+  var zones = [
+    { id: "z1", name: "Study / Kitchen", icon: "desk", x: 26, y: 6,  w: 28, h: 24 },
+    { id: "z2", name: "Bedroom",         icon: "bed",  x: 44, y: 62, w: 22, h: 32 },
+    { id: "z3", name: "Living room",     icon: "sofa", x: 52, y: 42, w: 46, h: 54 }
+  ];
+
+  var stage = document.getElementById("stage");
+  var scene = document.getElementById("scene");
+  var baseImg = document.getElementById("base");
+  var lightsEl = document.getElementById("lights");
+  var markersEl = document.getElementById("markers");
+  var fxLayer = document.getElementById("fx");
+  var zonesEl = document.getElementById("zones");
+  var zonebar = document.getElementById("zonebar");
+  var back = document.getElementById("back");
+  var toast = document.getElementById("toast");
+
+  var blendMode = "multiply", tintStrength = 0.7, tod = "night", litSource = "real", baseSource = "real", lightStyle = "lit";
+  var scale = 1, pos = { x: 0, y: 0 }, focused = null, selId = "hue", editing = false;
+  var lightEls = {}, markerEls = {}, fxEls = {};
+  var selClimateId = null, selEntityId = null;
+  var toastT = null;
+
+  function showToast(t) { toast.textContent = t; toast.style.opacity = "1"; clearTimeout(toastT); toastT = setTimeout(function () { toast.style.opacity = "0"; }, 1500); }
+
+  function maskFor(e) {
+    var base = stage.clientWidth * (TIERS[e.size] || 0.17);
+    var r = Math.round(base * (0.45 + 0.55 * (e.bri == null ? 1 : e.bri))); // brightness grows the halo; tier is the max
+    return "radial-gradient(circle " + r + "px at " + e.x + "% " + e.y + "%, black 0%, rgba(0,0,0,0.55) 40%, transparent 100%)";
+  }
+
+  function buildLights() {
+    lightsEl.innerHTML = ""; lightEls = {};
+    entities.forEach(function (e) {
+      if (e.kind !== "light") return;
+      var wrap = document.createElement("div");
+      wrap.className = "light";
+      var img = document.createElement("img");
+      img.className = "all"; img.src = "assets/all-lights.png"; img.alt = "";
+      var tint = document.createElement("div");
+      tint.className = "tint";
+      wrap.appendChild(img); wrap.appendChild(tint);
+      lightsEl.appendChild(wrap);
+      lightEls[e.id] = { wrap: wrap, img: img, tint: tint };
+      renderLight(e);
+    });
+  }
+
+  function renderLight(e) {
+    var L = lightEls[e.id]; if (!L) return;
+    var radial = maskFor(e);
+    if (e.orientation != null) {
+      var m = radial + ", " + coneMask(e.orientation, 30, 12, e.x + "% " + e.y + "%");
+      L.wrap.style.webkitMaskImage = m; L.wrap.style.maskImage = m;
+      L.wrap.style.webkitMaskComposite = "source-in"; L.wrap.style.maskComposite = "intersect";
+    } else {
+      L.wrap.style.webkitMaskImage = radial; L.wrap.style.maskImage = radial;
+      L.wrap.style.webkitMaskComposite = ""; L.wrap.style.maskComposite = "";
+    }
+    if (lightStyle === "glow") { // procedural colored glow — no render needed, fully data-driven
+      L.img.style.opacity = "0";
+      L.tint.style.background = e.color;
+      L.tint.style.mixBlendMode = "screen";
+      L.tint.style.opacity = e.on ? String(0.4 + 0.55 * e.bri) : "0";
+    } else if (lightStyle === "lit") { // brighten the base render inside the mask + tint -> render-free realism
+      L.img.src = "assets/day.png";
+      L.img.style.filter = "brightness(1.08) saturate(1.12) contrast(0.97)";
+      L.img.style.opacity = e.on ? String(0.4 + 0.4 * e.bri) : "0";
+      L.tint.style.background = e.color;
+      L.tint.style.mixBlendMode = "soft-light";
+      L.tint.style.opacity = e.on ? String(0.55 + 0.3 * e.bri) : "0";
+    } else { // reveal a baked render
+      var derived = litSource === "derived";
+      L.img.src = derived ? "assets/day.png" : "assets/all-lights.png";
+      L.img.style.filter = derived ? "brightness(1.6) saturate(1.15) contrast(1.03)" : "none";
+      L.img.style.opacity = e.on ? String(e.bri) : "0";
+      L.tint.style.background = e.color;
+      L.tint.style.mixBlendMode = blendMode === "normal" ? "normal" : blendMode;
+      L.tint.style.opacity = e.on ? String(tintStrength) : "0";
+    }
+  }
+  function renderAllLights() { entities.forEach(function (e) { if (e.kind === "light") renderLight(e); }); }
+  function applyLitSource() { renderAllLights(); }
+  function applyBase() {
+    if (baseSource === "derived") { // darken the all-lights render to fake the lights-off ambient
+      baseImg.src = "assets/all-lights.png";
+      baseImg.style.filter = tod === "night" ? "brightness(.3) saturate(.6)"
+        : tod === "duskdawn" ? "brightness(.62) sepia(.3) saturate(1.05)"
+        : "brightness(.85) saturate(.92)";
+    } else {
+      baseImg.src = BASES[tod];
+      baseImg.style.filter = "none";
+    }
+  }
+
+  function buildFx() {
+    fxLayer.innerHTML = ""; fxEls = {};
+    entities.forEach(function (e) {
+      if (e.kind === "light" || !e.fx) return;
+      var d = document.createElement("div");
+      d.className = "fx fx-" + e.fx;
+      d.style.left = e.x + "%"; d.style.top = e.y + "%";
+      fxLayer.appendChild(d);
+      fxEls[e.id] = d;
+      renderFx(e);
+    });
+  }
+  function coneMask(o, half, feather, at) { // wedge of black (visible) +/- half around the facing angle; 0deg = up, clockwise
+    return "conic-gradient(from " + o + "deg at " + at + ", black 0deg, black " + half + "deg, transparent " + (half + feather) + "deg, transparent " + (360 - half - feather) + "deg, black " + (360 - half) + "deg, black 360deg)";
+  }
+  function fxColor(e) {
+    return e.fx === "air" ? (e.mode === "heat" ? "rgba(255,110,90,.95)" : "rgba(90,160,255,.95)")
+      : e.fx === "screen" ? "rgba(95,165,255,.5)"
+      : "rgba(200,220,255,.92)";
+  }
+  function renderFx(e) {
+    var d = fxEls[e.id]; if (!d) return;
+    var directional = e.orientation != null, color = fxColor(e);
+    var mode = (e.fx === "waves" && !directional) ? "rings"
+      : ((e.fx === "air" || e.fx === "waves") && directional) ? "radar"
+      : "glow"; // screen (TV), or omni air fallback
+    d.style.transform = "translate(-50%,-50%)";
+    d.style.setProperty("--fxcol", color);
+    if (d.dataset.mode !== mode) {
+      d.dataset.mode = mode;
+      d.innerHTML = mode === "rings" ? "<span></span><span></span><span></span>"
+        : mode === "radar" ? '<div class="beam radar"><span></span><span></span><span></span><span></span><span></span></div>'
+        : '<div class="beam"></div>';
+    }
+    if (mode === "rings") {
+      d.style.width = ""; d.style.aspectRatio = "";
+    } else if (mode === "radar") {
+      var rb = d.querySelector(".beam");
+      var rm = coneMask(e.orientation, 34, 14, "50% 50%");
+      rb.style.webkitMaskImage = rm; rb.style.maskImage = rm;
+      d.style.width = "52%"; d.style.aspectRatio = "1";
+    } else {
+      var gb = d.querySelector(".beam");
+      gb.style.background = "radial-gradient(circle at 50% 50%, " + color + " 0%, transparent 72%)";
+      gb.style.mixBlendMode = "screen";
+      if (directional) {
+        var gm = coneMask(e.orientation, 34, 14, "50% 50%");
+        gb.style.webkitMaskImage = gm; gb.style.maskImage = gm;
+        d.style.width = "46%"; d.style.aspectRatio = "1";
+      } else {
+        gb.style.webkitMaskImage = ""; gb.style.maskImage = "";
+        d.style.width = ""; d.style.aspectRatio = "";
+      }
+    }
+    d.classList.toggle("on", !!e.on);
+  }
+  function ent(id) { return entities.find(function (x) { return x.id === id; }); }
+  function applyEntity(e) { if (e.kind === "light") renderLight(e); if (e.fx) renderFx(e); }
+  function updateAcButtons(e) {
+    document.getElementById("acCool").classList.toggle("on", e.mode !== "heat");
+    document.getElementById("acHeat").classList.toggle("on", e.mode === "heat");
+  }
+
+  function buildMarkers() {
+    markersEl.innerHTML = ""; markerEls = {};
+    entities.forEach(function (e) {
+      var m = document.createElement("div");
+      m.className = "marker";
+      var c = document.createElement("button");
+      c.className = "chip"; c.title = e.name; c.setAttribute("aria-label", e.name);
+      c.innerHTML = '<span class="mdi mdi-' + e.mdi + '"></span>';
+      m.appendChild(c);
+      m.style.left = e.x + "%"; m.style.top = e.y + "%";
+      markersEl.appendChild(m);
+      markerEls[e.id] = { m: m, c: c };
+
+      var held = false, t = null;
+      c.addEventListener("pointerdown", function (ev) {
+        ev.stopPropagation();
+        held = false;
+        t = setTimeout(function () { held = true; selectLight(e); showToast("More-info · " + e.name); }, 450);
+      });
+      c.addEventListener("pointerup", function () { clearTimeout(t); });
+      c.addEventListener("pointerleave", function () { clearTimeout(t); });
+      c.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        if (held) return;
+        selectLight(e);
+        toggle(e);
+      });
+      renderMarker(e);
+    });
+    applyTransform();
+    applyFocus();
+  }
+
+  function renderMarker(e) {
+    var M = markerEls[e.id]; if (!M) return;
+    var active = !!e.on;
+    M.c.classList.toggle("active", active);
+    M.c.classList.toggle("sel", e.id === selId);
+  }
+
+  function toggle(e) { e.on = !e.on; renderMarker(e); if (e.kind === "light") renderLight(e); if (e.fx) renderFx(e); showToast((e.on ? "On · " : "Off · ") + e.name); }
+
+  function selectLight(e) {
+    var isLight = e.kind === "light", isClimate = e.kind === "climate";
+    document.getElementById("selName").textContent = e.name;
+    document.getElementById("selColor").disabled = !isLight;
+    document.getElementById("selBri").disabled = !isLight;
+    document.getElementById("climateCtl").style.display = isClimate ? "block" : "none";
+    if (isLight) {
+      selId = e.id;
+      document.getElementById("selHint").textContent = e.entity;
+      document.getElementById("selColor").value = e.color;
+      document.getElementById("selBri").value = Math.round(e.bri * 100);
+      document.getElementById("selBriOut").textContent = Math.round(e.bri * 100) + "%";
+    } else {
+      document.getElementById("selHint").textContent = e.entity + (isClimate ? " · " + (e.mode || "cool") : "");
+    }
+    if (isClimate) { selClimateId = e.id; updateAcButtons(e); }
+    selEntityId = e.id;
+    var hasOrient = e.orientation != null;
+    document.getElementById("orientOn").checked = hasOrient;
+    document.getElementById("orient").disabled = !hasOrient;
+    document.getElementById("orient").value = hasOrient ? e.orientation : 0;
+    document.getElementById("orientOut").textContent = hasOrient ? e.orientation + "°" : "—";
+    entities.forEach(renderMarker);
+  }
+
+  function applyTransform() {
+    scene.style.transform = "translate(" + pos.x + "px," + pos.y + "px) scale(" + scale + ")";
+    // markers live OUTSIDE the scaled scene (so SVG/icons stay crisp); position them in screen px to match the scene transform
+    var W = stage.clientWidth, H = stage.clientHeight, ms = Math.min(scale, 2);
+    entities.forEach(function (e) {
+      var M = markerEls[e.id]; if (!M) return;
+      M.m.style.left = ((e.x / 100) * W * scale + pos.x) + "px";
+      M.m.style.top = ((e.y / 100) * H * scale + pos.y) + "px";
+      M.m.style.transform = "translate(-50%,-50%) scale(" + ms + ")";
+    });
+  }
+
+  function applyFocus() {
+    entities.forEach(function (e) {
+      var M = markerEls[e.id]; if (!M) return;
+      var inZone = !focused || pointInZone(e, focused);
+      M.m.classList.toggle("faded", !!focused && !inZone);
+    });
+    back.style.display = focused ? "flex" : "none";
+    renderZoneBar();
+  }
+
+  function pointInZone(e, z) { return e.x >= z.x && e.x <= z.x + z.w && e.y >= z.y && e.y <= z.y + z.h; }
+
+  function animateTo(fn) { scene.classList.add("animate"); markersEl.classList.add("zooming"); fn(); setTimeout(function () { scene.classList.remove("animate"); markersEl.classList.remove("zooming"); }, 650); }
+
+  function zoomToZone(z) {
+    var W = stage.clientWidth, H = stage.clientHeight;
+    var s = Math.min(100 / z.w, 100 / z.h) * 0.92; s = Math.min(s, 1.5);
+    var cx = (z.x + z.w / 2) / 100, cy = (z.y + z.h / 2) / 100;
+    focused = z;
+    animateTo(function () { scale = s; pos = { x: W / 2 - cx * W * s, y: H / 2 - cy * H * s }; applyTransform(); });
+    applyFocus();
+  }
+  function resetView() { focused = null; animateTo(function () { scale = 1; pos = { x: 0, y: 0 }; applyTransform(); }); applyFocus(); }
+
+  function buildZones() {
+    zonesEl.innerHTML = "";
+    zones.forEach(function (z) {
+      var d = document.createElement("div");
+      d.className = "zone"; d.style.left = z.x + "%"; d.style.top = z.y + "%"; d.style.width = z.w + "%"; d.style.height = z.h + "%";
+      d.innerHTML = '<span class="lbl">' + z.name + '</span>';
+      var del = document.createElement("button"); del.className = "del"; del.textContent = "×";
+      del.addEventListener("click", function (ev) { ev.stopPropagation(); zones = zones.filter(function (x) { return x !== z; }); buildZones(); });
+      d.appendChild(del);
+      d.addEventListener("click", function (ev) {
+        if (editing) return;
+        if (gestureMoved) return;
+        ev.stopPropagation();
+        zoomToZone(z);
+      });
+      zonesEl.appendChild(d);
+    });
+    renderZoneBar();
+  }
+
+  function renderZoneBar() {
+    zonebar.innerHTML = "";
+    if (focused) {
+      var ba = document.createElement("button");
+      ba.className = "zchip back";
+      ba.innerHTML = '<span class="mdi mdi-arrow-left"></span> Back to All';
+      ba.addEventListener("click", resetView);
+      zonebar.appendChild(ba);
+    }
+    zones.forEach(function (z) {
+      var b = document.createElement("button");
+      b.className = "zchip" + (focused === z ? " on" : "");
+      b.innerHTML = '<span class="mdi mdi-' + (z.icon || "floor-plan") + '"></span> ' + z.name;
+      b.addEventListener("click", function () { zoomToZone(z); });
+      zonebar.appendChild(b);
+    });
+  }
+
+  // ---- pan / wheel zoom ----
+  var panning = false, gestureMoved = false, startC = null, startPos = null;
+  stage.addEventListener("pointerdown", function (ev) {
+    if (editing) { startDraw(ev); return; }
+    panning = true; gestureMoved = false; startC = { x: ev.clientX, y: ev.clientY }; startPos = { x: pos.x, y: pos.y };
+    stage.classList.add("grabbing");
+  });
+  window.addEventListener("pointermove", function (ev) {
+    if (drawState) { doDraw(ev); return; }
+    if (!panning) return;
+    var dx = ev.clientX - startC.x, dy = ev.clientY - startC.y;
+    if (Math.abs(dx) + Math.abs(dy) > 5) gestureMoved = true;
+    pos = { x: startPos.x + dx, y: startPos.y + dy }; applyTransform();
+  });
+  window.addEventListener("pointerup", function (ev) {
+    if (drawState) { endDraw(ev); }
+    panning = false; stage.classList.remove("grabbing");
+  });
+  stage.addEventListener("wheel", function (ev) {
+    ev.preventDefault();
+    var f = ev.deltaY > 0 ? 0.9 : 1.1;
+    var ns = Math.min(Math.max(scale * f, 0.5), 5);
+    var r = stage.getBoundingClientRect();
+    var x = ev.clientX - r.left, y = ev.clientY - r.top;
+    pos = { x: x - (x - pos.x) * (ns / scale), y: y - (y - pos.y) * (ns / scale) };
+    scale = ns; applyTransform();
+  }, { passive: false });
+
+  // ---- zone drawing (edit mode) ----
+  var drawState = null, drawEl = null;
+  function startDraw(ev) {
+    var r = stage.getBoundingClientRect();
+    drawState = { x0: (ev.clientX - r.left) / r.width * 100, y0: (ev.clientY - r.top) / r.height * 100, r: r };
+    drawEl = document.createElement("div"); drawEl.className = "zone"; zonesEl.appendChild(drawEl);
+  }
+  function doDraw(ev) {
+    var r = drawState.r;
+    var cx = (ev.clientX - r.left) / r.width * 100, cy = (ev.clientY - r.top) / r.height * 100;
+    var x = Math.min(drawState.x0, cx), y = Math.min(drawState.y0, cy), w = Math.abs(cx - drawState.x0), h = Math.abs(cy - drawState.y0);
+    drawEl.style.left = x + "%"; drawEl.style.top = y + "%"; drawEl.style.width = w + "%"; drawEl.style.height = h + "%";
+    drawState.cur = { x: x, y: y, w: w, h: h };
+  }
+  function endDraw() {
+    var c = drawState && drawState.cur; drawState = null;
+    if (c && c.w > 3 && c.h > 3) {
+      var name = prompt("Zone name", "New zone") || "New zone";
+      var icon = prompt("Zone icon (MDI name, e.g. sofa, bed, desk, fridge)", "floor-plan") || "floor-plan";
+      zones.push({ id: "z" + (zones.length + 1), name: name, icon: icon, x: Math.round(c.x), y: Math.round(c.y), w: Math.round(c.w), h: Math.round(c.h) });
+    }
+    buildZones();
+  }
+
+  // ---- controls ----
+  document.getElementById("tod").addEventListener("click", function (ev) {
+    var b = ev.target.closest("[data-tod]"); if (!b) return;
+    tod = b.dataset.tod; applyBase();
+    [].forEach.call(this.children, function (c) { c.classList.toggle("on", c === b); });
+  });
+  document.getElementById("blend").addEventListener("change", function () { blendMode = this.value; renderAllLights(); });
+  var strengthOut = document.getElementById("strengthOut");
+  document.getElementById("strength").addEventListener("input", function () { tintStrength = this.value / 100; strengthOut.textContent = this.value + "%"; renderAllLights(); });
+  document.getElementById("selColor").addEventListener("input", function () { var e = entities.find(function (x) { return x.id === selId; }); if (e) { e.color = this.value; renderLight(e); } });
+  var selBriOut = document.getElementById("selBriOut");
+  document.getElementById("selBri").addEventListener("input", function () { var e = entities.find(function (x) { return x.id === selId; }); selBriOut.textContent = this.value + "%"; if (e) { e.bri = this.value / 100; renderLight(e); } });
+  document.getElementById("allOn").addEventListener("click", function () { entities.forEach(function (e) { e.on = true; renderMarker(e); if (e.kind === "light") renderLight(e); if (e.fx) renderFx(e); }); });
+  document.getElementById("allOff").addEventListener("click", function () { entities.forEach(function (e) { e.on = false; renderMarker(e); if (e.kind === "light") renderLight(e); if (e.fx) renderFx(e); }); });
+  document.getElementById("resetView").addEventListener("click", resetView);
+  document.getElementById("showIcons").addEventListener("change", function () { markersEl.style.display = this.checked ? "block" : "none"; });
+  document.getElementById("acCool").addEventListener("click", function () { var e = entities.find(function (x) { return x.id === selClimateId; }); if (e) { e.mode = "cool"; renderFx(e); updateAcButtons(e); } });
+  document.getElementById("acHeat").addEventListener("click", function () { var e = entities.find(function (x) { return x.id === selClimateId; }); if (e) { e.mode = "heat"; renderFx(e); updateAcButtons(e); } });
+  document.getElementById("orientOn").addEventListener("change", function () { var e = ent(selEntityId); if (!e) return; if (this.checked) { e.orientation = parseInt(document.getElementById("orient").value, 10) || 0; document.getElementById("orient").disabled = false; } else { e.orientation = null; document.getElementById("orient").disabled = true; } document.getElementById("orientOut").textContent = e.orientation == null ? "—" : e.orientation + "°"; applyEntity(e); });
+  document.getElementById("orient").addEventListener("input", function () { var e = ent(selEntityId); if (!e || e.orientation == null) return; e.orientation = parseInt(this.value, 10); document.getElementById("orientOut").textContent = e.orientation + "°"; applyEntity(e); });
+  document.getElementById("litReal").addEventListener("click", function () { litSource = "real"; this.classList.add("on"); document.getElementById("litDerived").classList.remove("on"); applyLitSource(); });
+  document.getElementById("litDerived").addEventListener("click", function () { litSource = "derived"; this.classList.add("on"); document.getElementById("litReal").classList.remove("on"); applyLitSource(); });
+  document.getElementById("baseReal").addEventListener("click", function () { baseSource = "real"; this.classList.add("on"); document.getElementById("baseDerived").classList.remove("on"); applyBase(); });
+  document.getElementById("baseDerived").addEventListener("click", function () { baseSource = "derived"; this.classList.add("on"); document.getElementById("baseReal").classList.remove("on"); litSource = "real"; document.getElementById("litReal").classList.add("on"); document.getElementById("litDerived").classList.remove("on"); applyBase(); });
+  function styleBtns(s) { document.getElementById("styleReveal").classList.toggle("on", s === "reveal"); document.getElementById("styleLit").classList.toggle("on", s === "lit"); document.getElementById("styleGlow").classList.toggle("on", s === "glow"); }
+  document.getElementById("styleReveal").addEventListener("click", function () { lightStyle = "reveal"; styleBtns("reveal"); renderAllLights(); });
+  document.getElementById("styleLit").addEventListener("click", function () { lightStyle = "lit"; styleBtns("lit"); renderAllLights(); });
+  document.getElementById("styleGlow").addEventListener("click", function () { lightStyle = "glow"; styleBtns("glow"); renderAllLights(); });
+  document.getElementById("editZones").addEventListener("click", function () { editing = !editing; this.classList.toggle("on", editing); stage.classList.toggle("editing", editing); if (editing) resetView(); });
+  back.addEventListener("click", resetView);
+  window.addEventListener("keydown", function (ev) { if (ev.key === "Escape" && focused) resetView(); });
+  window.addEventListener("resize", function () { renderAllLights(); applyTransform(); });
+
+  // ---- init ----
+  baseImg.onload = function () { buildLights(); applyLitSource(); buildFx(); buildZones(); buildMarkers(); selectLight(entities.find(function (e) { return e.id === selId; })); };
+  applyBase();
+  if (baseImg.complete) baseImg.onload();
+})();
+</script>
+</body>
+</html>

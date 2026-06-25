@@ -1,0 +1,6 @@
+node_modules
+dist
+dev/assets
+dev/prototype.html
+src/ApartmentViewCard.ts
+src/ApartmentViewCardEditor.ts

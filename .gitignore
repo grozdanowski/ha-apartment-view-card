@@ -20,4 +20,13 @@ yarn-error.log*
 dist/
 
 # Keep dist directory but ignore its contents
-!dist/.gitkeep 
+!dist/.gitkeep
+
+# Claude Code local settings (personal, not committed)
+.claude/settings.json
+.claude/settings.local.json
+.superpowers/
+
+# Root-level build duplicate (v1 webpack output — no longer produced)
+/apartment-view-card.js
+/apartment-view-card.js.LICENSE.txt

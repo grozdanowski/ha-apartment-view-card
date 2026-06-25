@@ -1,29 +1,27 @@
 {
   "compilerOptions": {
-    "target": "es2017",
-    "module": "es2020",
-    "lib": ["es2020", "dom"],
-    "declaration": true,
+    "target": "ES2022",
+    "module": "esnext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "moduleResolution": "bundler",
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
-    "noImplicitThis": true,
-    "alwaysStrict": true,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
     "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": false,
-    "moduleResolution": "node",
-    "baseUrl": "./",
-    "paths": {
-      "*": ["node_modules/*"]
-    },
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "esModuleInterop": true,
     "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
+    "useDefineForClassFields": false,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "types": ["vite/client"]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*.ts", "dev/**/*.ts", "test/**/*.ts", "vite.config.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/ApartmentViewCard.ts",
+    "src/ApartmentViewCard.d.ts"
+  ]
 }

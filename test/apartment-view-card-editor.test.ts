@@ -1,0 +1,359 @@
+// @vitest-environment happy-dom
+import { describe, it, expect, beforeEach } from 'vitest';
+import '../src/editor/apartment-view-card-editor';
+import type { ApartmentViewConfig } from '../src/core/config';
+
+function baseConfig(): ApartmentViewConfig {
+  return {
+    type: 'custom:apartment-view-card',
+    images: { base: '/local/day.png' },
+    entities: [],
+    zones: [],
+    options: {
+      view: 'auto',
+      lightStyle: 'lit',
+      freePanZoom: true,
+      zoomMax: 1.5,
+      duskDawnOffsetMinutes: 60,
+    },
+  };
+}
+
+async function mount() {
+  const el = document.createElement('apartment-view-card-editor') as any;
+  el.hass = { states: {}, localize: (k: string) => k };
+  el.setConfig(baseConfig());
+  document.body.appendChild(el);
+  await el.updateComplete;
+  return el;
+}
+
+describe('apartment-view-card-editor: images + options', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('setConfig preserves unknown keys', async () => {
+    const el = document.createElement('apartment-view-card-editor') as any;
+    el.hass = { states: {} };
+    el.setConfig({ ...baseConfig(), _legacy: 'keep' });
+    expect(el.config._legacy).toBe('keep');
+  });
+
+  it('renders an ha-form whose data is the flattened images+options', async () => {
+    const el = await mount();
+    const form = el.shadowRoot.querySelector('ha-form.images-options') as any;
+    expect(form).toBeTruthy();
+    expect(form.data.base).toBe('/local/day.png');
+    expect(form.data.view).toBe('auto');
+    expect(form.data.zoomMax).toBe(1.5);
+  });
+
+  it('a form value-changed re-nests into images/options and fires config-changed', async () => {
+    const el = await mount();
+    let fired: ApartmentViewConfig | null = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => {
+      fired = e.detail.config;
+    });
+    const form = el.shadowRoot.querySelector('ha-form.images-options') as any;
+    form.dispatchEvent(
+      new CustomEvent('value-changed', {
+        detail: {
+          value: {
+            base: '/local/new.png',
+            allLights: '/local/all.png',
+            night: undefined,
+            duskDawn: undefined,
+            view: 'night',
+            lightStyle: 'glow',
+            freePanZoom: false,
+            zoomMax: 2,
+            duskDawnOffsetMinutes: 45,
+          },
+        },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(fired).not.toBeNull();
+    expect(fired!.images.base).toBe('/local/new.png');
+    expect(fired!.images.allLights).toBe('/local/all.png');
+    expect(fired!.options.view).toBe('night');
+    expect(fired!.options.freePanZoom).toBe(false);
+    expect(fired!.options.zoomMax).toBe(2);
+  });
+
+  it('config-changed preserves entities, zones, and unknown keys', async () => {
+    const el = document.createElement('apartment-view-card-editor') as any;
+    el.hass = { states: {} };
+    el.setConfig({
+      ...baseConfig(),
+      entities: [
+        { entity: 'light.a', x: 1, y: 2, size: 'small', tap: 'toggle', orientation: null },
+      ],
+      _legacy: 'keep',
+    });
+    document.body.appendChild(el);
+    await el.updateComplete;
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const form = el.shadowRoot.querySelector('ha-form.images-options') as any;
+    form.dispatchEvent(
+      new CustomEvent('value-changed', {
+        detail: { value: { ...form.data, view: 'day' } },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(fired.entities.length).toBe(1);
+    expect(fired._legacy).toBe('keep');
+  });
+});
+
+describe('apartment-view-card-editor: entities', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  async function mountWithEntities() {
+    const el = document.createElement('apartment-view-card-editor') as any;
+    el.hass = { states: {}, localize: (k: string) => k };
+    el.setConfig({
+      type: 'custom:apartment-view-card',
+      images: { base: '/local/day.png' },
+      entities: [
+        { entity: 'light.a', x: 10, y: 20, size: 'small', tap: 'toggle', orientation: null },
+        { entity: 'light.b', x: 30, y: 40, size: 'small', tap: 'toggle', orientation: 90 },
+      ],
+      zones: [],
+      options: {
+        view: 'auto',
+        lightStyle: 'lit',
+        freePanZoom: true,
+        zoomMax: 1.5,
+        duskDawnOffsetMinutes: 60,
+      },
+    });
+    document.body.appendChild(el);
+    await el.updateComplete;
+    return el;
+  }
+
+  it('renders one entity row per configured entity', async () => {
+    const el = await mountWithEntities();
+    expect(el.shadowRoot.querySelectorAll('.entity-row').length).toBe(2);
+  });
+
+  it('Add entity appends a default entity and fires config-changed', async () => {
+    const el = await mountWithEntities();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    (el.shadowRoot.querySelector('.add-entity') as HTMLElement).click();
+    expect(fired.entities.length).toBe(3);
+    expect(fired.entities[2]).toMatchObject({
+      entity: '',
+      x: 50,
+      y: 50,
+      size: 'small',
+      tap: 'toggle',
+      orientation: null,
+    });
+  });
+
+  it('Remove entity drops that index and fires config-changed', async () => {
+    const el = await mountWithEntities();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const remove = el.shadowRoot.querySelectorAll('.remove-entity')[0] as HTMLElement;
+    remove.click();
+    expect(fired.entities.length).toBe(1);
+    expect(fired.entities[0].entity).toBe('light.b');
+  });
+
+  it('the per-entity form schema includes orientation only when directional', async () => {
+    const el = await mountWithEntities();
+    const forms = el.shadowRoot.querySelectorAll('ha-form.entity-form');
+    const namesA = (forms[0] as any).schema.map((s: any) => s.name);
+    const namesB = (forms[1] as any).schema.map((s: any) => s.name);
+    expect(namesA.includes('orientation')).toBe(false); // light.a orientation null
+    expect(namesB.includes('orientation')).toBe(true); // light.b orientation 90
+    // entity selector NOT domain-limited
+    const entityRow = (forms[0] as any).schema.find((s: any) => s.name === 'entity');
+    expect(entityRow.selector.entity).toEqual({});
+  });
+
+  it('turning the directional toggle on writes orientation 0 (nullable->0)', async () => {
+    const el = await mountWithEntities();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const form = el.shadowRoot.querySelectorAll('ha-form.entity-form')[0] as any;
+    form.dispatchEvent(
+      new CustomEvent('value-changed', {
+        detail: { value: { ...form.data, directional: true } },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(fired.entities[0].orientation).toBe(0);
+  });
+
+  it('turning the directional toggle off restores orientation null', async () => {
+    const el = await mountWithEntities();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const form = el.shadowRoot.querySelectorAll('ha-form.entity-form')[1] as any;
+    form.dispatchEvent(
+      new CustomEvent('value-changed', {
+        detail: { value: { ...form.data, directional: false } },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(fired.entities[1].orientation).toBeNull();
+  });
+
+  it('preview-entity-moved updates the moved entity x/y and fires config-changed', async () => {
+    const el = await mountWithEntities();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const preview = el.shadowRoot.querySelector('preview-canvas') as HTMLElement;
+    preview.dispatchEvent(
+      new CustomEvent('preview-entity-moved', {
+        detail: { index: 0, x: 66, y: 77 },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(fired.entities[0].x).toBe(66);
+    expect(fired.entities[0].y).toBe(77);
+  });
+
+  it('preview-entity-selected sets the selected index on the preview', async () => {
+    const el = await mountWithEntities();
+    const preview = el.shadowRoot.querySelector('preview-canvas') as any;
+    preview.dispatchEvent(
+      new CustomEvent('preview-entity-selected', {
+        detail: { index: 1 },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    await el.updateComplete;
+    expect((el.shadowRoot.querySelector('preview-canvas') as any).selectedEntity).toBe(1);
+  });
+});
+
+describe('apartment-view-card-editor: zones', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  async function mountWithZones() {
+    const el = document.createElement('apartment-view-card-editor') as any;
+    el.hass = { states: {}, localize: (k: string) => k };
+    el.setConfig({
+      type: 'custom:apartment-view-card',
+      images: { base: '/local/day.png' },
+      entities: [],
+      zones: [
+        { name: 'Living', x: 5, y: 5, width: 40, height: 40 },
+        { name: 'Kitchen', x: 50, y: 5, width: 30, height: 30 },
+      ],
+      options: {
+        view: 'auto',
+        lightStyle: 'lit',
+        freePanZoom: true,
+        zoomMax: 1.5,
+        duskDawnOffsetMinutes: 60,
+      },
+    });
+    document.body.appendChild(el);
+    await el.updateComplete;
+    return el;
+  }
+
+  it('renders one zone row per configured zone with a zone-form each', async () => {
+    const el = await mountWithZones();
+    expect(el.shadowRoot.querySelectorAll('.zone-row').length).toBe(2);
+    expect(el.shadowRoot.querySelectorAll('ha-form.zone-form').length).toBe(2);
+  });
+
+  it('Add zone puts the preview into crosshair draw mode', async () => {
+    const el = await mountWithZones();
+    (el.shadowRoot.querySelector('.add-zone') as HTMLElement).click();
+    await el.updateComplete;
+    expect((el.shadowRoot.querySelector('preview-canvas') as any).drawingZone).toBe(true);
+  });
+
+  it('preview-zone-drawn appends a zone, exits draw mode, fires config-changed', async () => {
+    const el = await mountWithZones();
+    (el.shadowRoot.querySelector('.add-zone') as HTMLElement).click();
+    await el.updateComplete;
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const preview = el.shadowRoot.querySelector('preview-canvas') as HTMLElement;
+    preview.dispatchEvent(
+      new CustomEvent('preview-zone-drawn', {
+        detail: { x: 12, y: 15, width: 22, height: 18 },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    await el.updateComplete;
+    expect(fired.zones.length).toBe(3);
+    expect(fired.zones[2]).toMatchObject({ x: 12, y: 15, width: 22, height: 18 });
+    expect((el.shadowRoot.querySelector('preview-canvas') as any).drawingZone).toBe(false);
+  });
+
+  it('preview-zone-draw-cancelled just exits draw mode (no new zone)', async () => {
+    const el = await mountWithZones();
+    (el.shadowRoot.querySelector('.add-zone') as HTMLElement).click();
+    await el.updateComplete;
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const preview = el.shadowRoot.querySelector('preview-canvas') as HTMLElement;
+    preview.dispatchEvent(
+      new CustomEvent('preview-zone-draw-cancelled', {
+        detail: {},
+        bubbles: true,
+        composed: true,
+      })
+    );
+    await el.updateComplete;
+    expect(fired).toBeNull();
+    expect((el.shadowRoot.querySelector('preview-canvas') as any).drawingZone).toBe(false);
+  });
+
+  it('Remove zone drops that index and fires config-changed', async () => {
+    const el = await mountWithZones();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    (el.shadowRoot.querySelectorAll('.remove-zone')[0] as HTMLElement).click();
+    expect(fired.zones.length).toBe(1);
+    expect(fired.zones[0].name).toBe('Kitchen');
+  });
+
+  it('editing a zone form re-nests x/y/w/h and fires config-changed', async () => {
+    const el = await mountWithZones();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const form = el.shadowRoot.querySelectorAll('ha-form.zone-form')[0] as any;
+    form.dispatchEvent(
+      new CustomEvent('value-changed', {
+        detail: { value: { ...form.data, name: 'Lounge', width: 55 } },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(fired.zones[0].name).toBe('Lounge');
+    expect(fired.zones[0].width).toBe(55);
+  });
+
+  it('move-down reorders zones', async () => {
+    const el = await mountWithZones();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    (el.shadowRoot.querySelectorAll('.zone-down')[0] as HTMLElement).click();
+    expect(fired.zones.map((z: any) => z.name)).toEqual(['Kitchen', 'Living']);
+  });
+});

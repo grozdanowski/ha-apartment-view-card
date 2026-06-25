@@ -1,25 +1,43 @@
 {
   "name": "ha-apartment-view-card",
-  "version": "1.0.0",
-  "description": "",
-  "main": "src/ApartmentViewCard.ts",
+  "version": "2.0.0",
+  "description": "Home Assistant custom Lovelace card overlaying interactive, state-aware device markers and procedural lighting on a floorplan render.",
+  "type": "module",
+  "main": "dist/apartment-view-card.js",
   "scripts": {
-    "build": "webpack --mode=production",
-    "watch": "webpack --mode=development --watch"
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint --no-error-on-unmatched-pattern \"src/**/*.ts\" \"dev/**/*.ts\" \"test/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"dev/**/*.ts\" \"test/**/*.ts\""
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "lit"
+  ],
+  "author": "grozdanowski",
+  "license": "MIT",
   "dependencies": {
-    "@lit-labs/virtualizer": "^2.1.0",
     "@mdi/js": "^7.4.47",
     "custom-card-helpers": "^1.9.0",
     "lit": "^3.3.0"
   },
   "devDependencies": {
-    "ts-loader": "^9.5.2",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "@vitest/browser": "^2.1.9",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.2",
+    "eslint-plugin-lit": "^1.15.0",
+    "happy-dom": "^20.10.6",
+    "playwright": "^1.61.1",
+    "prettier": "^3.8.4",
     "typescript": "^5.8.3",
-    "webpack": "^5.99.9",
-    "webpack-cli": "^6.0.1"
+    "vite": "^5.4.21",
+    "vitest": "^2.1.9"
   }
 }
