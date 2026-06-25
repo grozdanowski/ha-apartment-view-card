@@ -7,7 +7,7 @@
 
 A Home Assistant custom Lovelace card that overlays interactive, state-aware device markers and lighting effects on a 2D/3D floorplan render. v1 ("works but rough") is replaced by a clean rewrite. Breaking config changes are acceptable — the user re-pastes config once.
 
-The headline change vs v1: **lighting is render-free by default.** Each light is rendered procedurally from its position + color + brightness + orientation, so **adding or moving a light is pure config — no re-rendering.** The old "all-lights master render" becomes one of three optional fidelity tiers, not a requirement.
+The headline change vs v1: **lighting is render-free by default.** Each light is rendered procedurally from its position + color + brightness + orientation, so **adding or moving a light is pure config — no re-rendering.** The original multi-image system is **retained as the highest-fidelity tier** (the `reveal` light style) — fully supported, just no longer required. Both systems coexist; `lit` is the default, `reveal` is opt-in (global or per-entity).
 
 ### Goals
 - Working visual editor: add/remove/edit entities (entity + icon picker, X/Y sliders + drag-on-preview), zones, and per-entity orientation.
@@ -101,7 +101,7 @@ test/                           # Vitest browser-mode (e.g. test/light-color.tes
 - **Time of day:** `night` / `duskDawn` used if provided; otherwise derived from `base` via CSS filters. Default derivation filters (tuning subject to field feedback): night `brightness(0.4) saturate(0.9)`; duskDawn `brightness(0.75) saturate(1.1) hue-rotate(20deg) sepia(0.15)`. `view: auto` selects by `sun.sun` with a `duskDawnOffsetMinutes` window around sunrise/sunset.
 - **Light fidelity** is set by `lightStyle` (global `options.lightStyle`, per-entity override):
   - **`lit`** (default, render-free): inside each light's mask, reveal the `base` render brightened + color-tinted. Adding a light just brightens its patch of the existing render → no re-render. Validated tuning: `filter: brightness(1.08) saturate(1.12) contrast(0.97)`, image opacity `0.4 + 0.4·brightness`, tint blend `soft-light` at opacity `0.55 + 0.3·brightness`. (Higher image brightness, e.g. 1.65, overexposes — rejected.)
-  - **`reveal`** (photoreal, requires `allLights`): reveal the baked `all-lights` render at the light's mask; opacity = brightness; tint via configurable blend, **default `multiply`** (A/B `multiply` vs `screen` in the harness; ship `multiply` if the test is still pending).
+  - **`reveal`** (photoreal, requires `allLights`): reveal the baked `all-lights` render at the light's mask; opacity = brightness; tint via configurable blend, **default `multiply`** (A/B `multiply` vs `screen` in the harness; ship `multiply` if the test is still pending). **This is the original v1 high-fidelity path, kept as a first-class alternative** — set globally via `options.lightStyle: reveal` or per-entity via `lightStyle`. Providing real `night`/`duskDawn` + `allLights` with `lightStyle: reveal` reproduces the original multi-render look exactly. `lit` and `reveal` may be mixed per-entity (e.g. reveal for lights in the baked render, lit for ones added later).
   - **`glow`** (most abstract): a flat color glow (no surface detail), `screen`-blended; opacity `0.4 + 0.55·brightness`.
 
 ### 4.2 Masked reveal (the core trick)
