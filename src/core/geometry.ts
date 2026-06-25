@@ -1,4 +1,4 @@
-import type { SizeTier } from './config';
+import type { SizeTier, ZoneConfig } from './config';
 
 export interface Viewport {
   width: number;
@@ -52,4 +52,31 @@ export function markerScreenPos(
 /** Icons grow with zoom but never beyond 2x baseline (spec §5/§6). */
 export function clampIconScale(scale: number): number {
   return Math.min(scale, 2.0);
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.min(Math.max(v, lo), hi);
+}
+
+export function zoomToZone(
+  zone: ZoneConfig,
+  vp: Viewport,
+  maxScale: number,
+): ZoomTransform {
+  // Fit scale: largest zoom that still shows the whole zone. The wider/taller
+  // (in %) dimension limits the zoom; percent-based so viewport aspect cancels.
+  const fitScale = Math.min(100 / zone.width, 100 / zone.height);
+  const scale = Math.min(maxScale, fitScale);
+
+  // Center the zone center at the viewport center.
+  const cx = ((zone.x + zone.width / 2) / 100) * vp.width;
+  const cy = ((zone.y + zone.height / 2) / 100) * vp.height;
+  let panX = vp.width / 2 - cx * scale;
+  let panY = vp.height / 2 - cy * scale;
+
+  // Clamp so the scaled image still covers the viewport (no gutters).
+  panX = clamp(panX, vp.width * (1 - scale), 0);
+  panY = clamp(panY, vp.height * (1 - scale), 0);
+
+  return { scale, panX, panY };
 }
