@@ -26,6 +26,10 @@ interface MinimalHass {
 
 @customElement('apartment-view-card')
 export class ApartmentViewCard extends LitElement {
+  // MIGRATION (v1 -> v2): v1 used ad-hoc `_scale` (clamped 0.5..3) + `_position`
+  // with mouse-anchored wheel zoom and no zone awareness (old src/ApartmentViewCard.ts).
+  // v2 unifies this into a single `_transform: ZoomTransform`. Free pan/zoom (Phase 3)
+  // drives `_transform` directly; zone focus (Phase 5) drives it via geometry.zoomToZone.
   @property({ attribute: false }) public hass?: MinimalHass;
   @property({ attribute: false }) public config!: ApartmentViewConfig;
   @state() private _cardWidth = 600;
