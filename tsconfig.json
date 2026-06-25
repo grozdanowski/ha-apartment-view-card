@@ -22,8 +22,6 @@
     "node_modules",
     "dist",
     "src/ApartmentViewCard.ts",
-    "src/ApartmentViewCardEditor.ts",
-    "src/ApartmentViewCard.d.ts",
-    "src/ApartmentViewCardEditor.d.ts"
+    "src/ApartmentViewCard.d.ts"
   ]
 }
