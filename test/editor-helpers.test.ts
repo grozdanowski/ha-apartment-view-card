@@ -6,7 +6,10 @@ import {
   entitySchema,
   zoneSchema,
   isDirectional,
+  entityToForm,
+  formToEntity,
 } from '../src/editor/editor-helpers';
+import type { EntityConfig } from '../src/core/config';
 
 describe('defaultEntity', () => {
   it('matches the EntityConfig contract defaults', () => {
@@ -153,5 +156,76 @@ describe('zoneSchema', () => {
     expect(schema.find((s) => s.name === 'width')!.selector.number.mode).toBe(
       'slider'
     );
+  });
+});
+
+describe('entityToForm', () => {
+  it('null orientation -> directional false, no orientation key', () => {
+    const e: EntityConfig = {
+      entity: 'light.a',
+      x: 10,
+      y: 20,
+      size: 'small',
+      tap: 'toggle',
+      orientation: null,
+    };
+    const form = entityToForm(e);
+    expect(form.directional).toBe(false);
+    expect('orientation' in form).toBe(false);
+    expect(form).toMatchObject({ entity: 'light.a', x: 10, y: 20 });
+  });
+
+  it('numeric orientation -> directional true + orientation', () => {
+    const e: EntityConfig = {
+      entity: 'light.a',
+      x: 0,
+      y: 0,
+      size: 'small',
+      tap: 'toggle',
+      orientation: 90,
+    };
+    const form = entityToForm(e);
+    expect(form.directional).toBe(true);
+    expect(form.orientation).toBe(90);
+  });
+});
+
+describe('formToEntity', () => {
+  const base: EntityConfig = {
+    entity: 'light.a',
+    x: 10,
+    y: 20,
+    size: 'small',
+    tap: 'toggle',
+    orientation: null,
+  };
+
+  it('turning directional on with no angle defaults orientation to 0', () => {
+    const out = formToEntity(base, { directional: true });
+    expect(out.orientation).toBe(0);
+  });
+
+  it('directional on + slider value sets that orientation', () => {
+    const out = formToEntity(base, { directional: true, orientation: 145 });
+    expect(out.orientation).toBe(145);
+  });
+
+  it('turning directional off forces orientation back to null', () => {
+    const lit: EntityConfig = { ...base, orientation: 200 };
+    const out = formToEntity(lit, { directional: false, orientation: 200 });
+    expect(out.orientation).toBeNull();
+  });
+
+  it('merges scalar fields and drops the transient directional key', () => {
+    const out = formToEntity(base, { x: 33, name: 'Lamp' });
+    expect(out.x).toBe(33);
+    expect(out.name).toBe('Lamp');
+    expect('directional' in out).toBe(false);
+  });
+
+  it('preserves unknown keys already on the entity', () => {
+    const withExtra = { ...base, _legacy: 'keep' } as unknown as EntityConfig;
+    const out = formToEntity(withExtra, { x: 5 });
+    expect((out as any)._legacy).toBe('keep');
   });
 });

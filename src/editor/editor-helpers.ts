@@ -162,3 +162,63 @@ export function zoneSchema(): HaFormSchema[] {
     },
   ];
 }
+
+export interface EntityFormData {
+  entity: string;
+  name?: string;
+  icon?: string;
+  size: SizeTier;
+  tap: TapAction;
+  lightStyle?: LightStyle;
+  x: number;
+  y: number;
+  directional: boolean;
+  orientation?: number;
+}
+
+export function entityToForm(e: EntityConfig): EntityFormData {
+  const directional = isDirectional(e.orientation);
+  const form: EntityFormData = {
+    entity: e.entity,
+    name: e.name,
+    icon: e.icon,
+    size: e.size,
+    tap: e.tap,
+    lightStyle: e.lightStyle,
+    x: e.x,
+    y: e.y,
+    directional,
+  };
+  if (directional) {
+    form.orientation = e.orientation as number;
+  }
+  return form;
+}
+
+export function formToEntity(
+  prev: EntityConfig,
+  data: Partial<EntityFormData>,
+): EntityConfig {
+  // Start from prev (preserves unknown keys), overlay the form patch.
+  const merged: any = { ...prev, ...data };
+
+  // The directional toggle is authoritative over the nullable orientation.
+  const directional =
+    'directional' in data ? data.directional : isDirectional(prev.orientation);
+
+  if (directional) {
+    const angle =
+      typeof data.orientation === 'number'
+        ? data.orientation
+        : typeof prev.orientation === 'number'
+          ? prev.orientation
+          : 0;
+    merged.orientation = angle;
+  } else {
+    merged.orientation = null;
+  }
+
+  // 'directional' is a transient UI-only field; never persist it.
+  delete merged.directional;
+  return merged as EntityConfig;
+}
