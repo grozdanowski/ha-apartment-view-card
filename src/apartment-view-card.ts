@@ -4,6 +4,7 @@ import { fireEvent } from 'custom-card-helpers';
 import type { HomeAssistant } from 'custom-card-helpers';
 import type { HassEntity } from './core/ha-types';
 import { normalizeConfig, type ApartmentViewConfig, type EntityConfig, type ZoneConfig } from './core/config';
+import './editor/apartment-view-card-editor';
 import { renderBaseLayer } from './render/base-layer';
 import { renderLightLayer } from './render/light-layer';
 import { renderEffect, EFFECT_STYLES } from './render/effect-layer';
@@ -169,12 +170,20 @@ export class ApartmentViewCard extends LitElement {
     return document.createElement('apartment-view-card-editor');
   }
 
-  static getStubConfig(): Record<string, unknown> {
-    return {
+  static getStubConfig(): ApartmentViewConfig {
+    return normalizeConfig({
       type: 'custom:apartment-view-card',
-      images: { base: '/local/floorplan.png' },
+      images: { base: '/local/apartment/day.png' },
       entities: [],
-    };
+      zones: [],
+      options: {
+        view: 'auto',
+        lightStyle: 'lit',
+        freePanZoom: true,
+        zoomMax: 1.5,
+        duskDawnOffsetMinutes: 60,
+      },
+    });
   }
 
   public connectedCallback(): void {
