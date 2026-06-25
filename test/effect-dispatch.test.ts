@@ -106,31 +106,31 @@ describe('renderEffect', () => {
 
   it('TV active + directional => renders a beam div', () => {
     const host = mount(renderEffect(ent('media_player.tv', 'playing', { device_class: 'tv' }), cfg({ orientation: 90 }), 1000));
-    const beam = host.querySelector('.effect-beam');
+    const beam = host.querySelector('.device-beam');
     expect(beam).toBeTruthy();
   });
 
-  it('TV beam renders keyframes style', () => {
+  it('TV beam is wrapped in an effect-overlay', () => {
     const host = mount(renderEffect(ent('media_player.tv', 'playing', { device_class: 'tv' }), cfg({ orientation: 90 }), 1000));
-    const style = host.querySelector('style');
-    expect(style?.textContent).toContain('tv-pulse');
+    const overlay = host.querySelector('.effect-overlay');
+    expect(overlay).toBeTruthy();
   });
 
   it('speaker active omni => renders arc elements (5 arcs)', () => {
     const host = mount(renderEffect(ent('media_player.spk', 'playing', { media_content_type: 'music' }), cfg({ orientation: null }), 1000));
-    const arcs = host.querySelectorAll('.effect-arc');
+    const arcs = host.querySelectorAll('.radar-arc');
     expect(arcs.length).toBe(5);
   });
 
-  it('speaker radar renders keyframes style', () => {
+  it('speaker radar is wrapped in an effect-overlay', () => {
     const host = mount(renderEffect(ent('media_player.spk', 'playing', { media_content_type: 'music' }), cfg({ orientation: null }), 1000));
-    const style = host.querySelector('style');
-    expect(style?.textContent).toContain('radar-ripple');
+    const overlay = host.querySelector('.effect-overlay');
+    expect(overlay).toBeTruthy();
   });
 
   it('AC active => renders arc elements (5 arcs)', () => {
     const host = mount(renderEffect(ent('climate.ac', 'cool', { hvac_action: 'cooling' }), cfg({ orientation: null }), 1000));
-    const arcs = host.querySelectorAll('.effect-arc');
+    const arcs = host.querySelectorAll('.radar-arc');
     expect(arcs.length).toBe(5);
   });
 

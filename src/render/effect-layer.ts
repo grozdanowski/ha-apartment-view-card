@@ -4,6 +4,7 @@ import type { HassEntity } from '../core/ha-types';
 import type { EntityConfig } from '../core/config';
 import { isActive } from '../core/entity-state';
 import { coneMask } from './light-layer';
+import { sizeTierFraction } from '../core/geometry';
 
 /** §4.5 TV detection: media_player carrying video-ish content. */
 export function isTvLike(state: HassEntity): boolean {
@@ -169,34 +170,74 @@ export function effectModel(state: HassEntity, cfg: EntityConfig): EffectModel {
   };
 }
 
+/** §3/§4.5 styles for the effect overlay; injected once into the scene layer. */
+export const EFFECT_STYLES = `${TV_PULSE_KEYFRAMES}
+${RADAR_KEYFRAMES}
+.effect-overlay {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+.device-beam {
+  position: absolute;
+  inset: 0;
+}
+.radar-arc {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%) scale(0);
+}`;
+
 /**
- * §4.5 render the effect overlay for a single entity.
+ * §4.5 render a single entity's non-light effect into the (transformed) scene layer.
  * Returns `nothing` when state is undefined or the model says !show.
+ * Positioned at cfg.x%/cfg.y%; sized by size tier fraction of cardWidth.
  */
 export function renderEffect(
   state: HassEntity | undefined,
   cfg: EntityConfig,
-  _cardWidth: number,
-): TemplateResult {
-  if (!state) return nothing as unknown as TemplateResult;
+  cardWidth: number,
+): TemplateResult | typeof nothing {
+  if (!state) return nothing;
   const model = effectModel(state, cfg);
-  if (!model.show) return nothing as unknown as TemplateResult;
+  if (!model.show) return nothing;
+
+  const sidePx = sizeTierFraction(cfg.size) * cardWidth;
+  const overlayStyle = styleMap({
+    left: `${cfg.x}%`,
+    top: `${cfg.y}%`,
+    width: `${sidePx}px`,
+    height: `${sidePx}px`,
+    opacity: '1',
+  });
 
   if (model.kind === 'tv-cone') {
-    const beamStyle = tvBeamCss(model.orientation as number);
     return html`
-      <style>${TV_PULSE_KEYFRAMES}</style>
-      <div class="effect-beam" style=${styleMap(beamStyle)}></div>
+      <div class="effect-overlay" style=${overlayStyle}>
+        <div class="device-beam" style=${styleMap(tvBeamCss(model.orientation as number))}></div>
+      </div>
     `;
   }
 
   // speaker-radar or ac-radar
   const arcs = Array.from({ length: model.arcCount }, (_, i) => {
-    const { arc } = radarArcsCss(i, model.color, model.orientation);
-    return html`<div class="effect-arc" style=${styleMap(arc)}></div>`;
+    const { container, arc } = radarArcsCss(i, model.color, model.orientation);
+    // container mask (if any) is identical across arcs → apply to the overlay wrapper
+    return { container, arc };
   });
+  const containerStyle = arcs.length > 0 ? arcs[0].container : {};
   return html`
-    <style>${RADAR_KEYFRAMES}</style>
-    ${arcs}
+    <div
+      class="effect-overlay"
+      style=${styleMap({ ...containerStyle, left: `${cfg.x}%`, top: `${cfg.y}%`, width: `${sidePx}px`, height: `${sidePx}px`, opacity: '1' })}
+    >
+      ${arcs.map((a) => html`<div class="radar-arc" style=${styleMap(a.arc)}></div>`)}
+    </div>
   `;
 }

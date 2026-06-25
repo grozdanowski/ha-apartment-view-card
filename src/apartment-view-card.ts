@@ -1,4 +1,4 @@
-import { LitElement, html, css, type TemplateResult } from 'lit';
+import { LitElement, html, css, unsafeCSS, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { fireEvent } from 'custom-card-helpers';
 import type { HomeAssistant } from 'custom-card-helpers';
@@ -6,6 +6,7 @@ import type { HassEntity } from './core/ha-types';
 import { normalizeConfig, type ApartmentViewConfig, type EntityConfig } from './core/config';
 import { renderBaseLayer } from './render/base-layer';
 import { renderLightLayer } from './render/light-layer';
+import { renderEffect, EFFECT_STYLES } from './render/effect-layer';
 import { PanZoomController } from './core/pan-zoom';
 import { TapHoldTracker, HOLD_MS, MOVE_THRESHOLD_PX } from './core/tap-hold';
 import {
@@ -43,7 +44,8 @@ export class ApartmentViewCard extends LitElement {
   /** Inline string so Phase 5 can reference ApartmentViewCard.ZOOM_TRANSITION. */
   static readonly ZOOM_TRANSITION = 'transform 0.6s cubic-bezier(0.4, 0, 0.2, 1)';
 
-  static styles = css`
+  static styles = [
+    css`
     :host {
       display: block;
     }
@@ -102,7 +104,9 @@ export class ApartmentViewCard extends LitElement {
       cursor: default;
       color: var(--disabled-text-color);
     }
-  `;
+  `,
+    unsafeCSS(EFFECT_STYLES),
+  ];
 
   public setConfig(raw: any): void {
     this.config = normalizeConfig(raw);
@@ -314,7 +318,10 @@ export class ApartmentViewCard extends LitElement {
     const { images, options, entities } = this.config;
     const sun = this.hass?.states?.['sun.sun'];
     return html`${renderBaseLayer(images, options, sun)}
-      ${renderLightLayer(this.hass, entities, options, images, this._cardWidth)}`;
+      ${renderLightLayer(this.hass, entities, options, images, this._cardWidth)}
+      ${entities.map((e) =>
+        renderEffect(this.hass?.states?.[e.entity], e, this._cardWidth),
+      )}`;
   }
 
   // ---------------------------------------------------------------------------
