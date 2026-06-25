@@ -13,7 +13,12 @@
     "lint": "eslint --no-error-on-unmatched-pattern \"src/**/*.ts\" \"dev/**/*.ts\" \"test/**/*.ts\"",
     "format": "prettier --write \"src/**/*.ts\" \"dev/**/*.ts\" \"test/**/*.ts\""
   },
-  "keywords": ["home-assistant", "lovelace", "custom-card", "lit"],
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "lit"
+  ],
   "author": "grozdanowski",
   "license": "MIT",
   "dependencies": {
@@ -28,6 +33,7 @@
     "eslint": "^8.57.1",
     "eslint-config-prettier": "^9.1.2",
     "eslint-plugin-lit": "^1.15.0",
+    "happy-dom": "^20.10.6",
     "playwright": "^1.61.1",
     "prettier": "^3.8.4",
     "typescript": "^5.8.3",
