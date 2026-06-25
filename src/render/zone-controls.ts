@@ -46,3 +46,13 @@ export function buildZoneChips(
 
   return chips;
 }
+
+/**
+ * Zone definition rectangles render on the scene ONLY in editor edit mode
+ * (spec §5). The live card always passes `false` (so it never renders zone
+ * boxes — the predicate's only true caller is the Phase 6 editor preview,
+ * which passes `editMode === true`).
+ */
+export function showZoneBoxes(editMode: boolean): boolean {
+  return editMode;
+}
