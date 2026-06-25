@@ -242,3 +242,118 @@ describe('apartment-view-card-editor: entities', () => {
     expect((el.shadowRoot.querySelector('preview-canvas') as any).selectedEntity).toBe(1);
   });
 });
+
+describe('apartment-view-card-editor: zones', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  async function mountWithZones() {
+    const el = document.createElement('apartment-view-card-editor') as any;
+    el.hass = { states: {}, localize: (k: string) => k };
+    el.setConfig({
+      type: 'custom:apartment-view-card',
+      images: { base: '/local/day.png' },
+      entities: [],
+      zones: [
+        { name: 'Living', x: 5, y: 5, width: 40, height: 40 },
+        { name: 'Kitchen', x: 50, y: 5, width: 30, height: 30 },
+      ],
+      options: {
+        view: 'auto',
+        lightStyle: 'lit',
+        freePanZoom: true,
+        zoomMax: 1.5,
+        duskDawnOffsetMinutes: 60,
+      },
+    });
+    document.body.appendChild(el);
+    await el.updateComplete;
+    return el;
+  }
+
+  it('renders one zone row per configured zone with a zone-form each', async () => {
+    const el = await mountWithZones();
+    expect(el.shadowRoot.querySelectorAll('.zone-row').length).toBe(2);
+    expect(el.shadowRoot.querySelectorAll('ha-form.zone-form').length).toBe(2);
+  });
+
+  it('Add zone puts the preview into crosshair draw mode', async () => {
+    const el = await mountWithZones();
+    (el.shadowRoot.querySelector('.add-zone') as HTMLElement).click();
+    await el.updateComplete;
+    expect((el.shadowRoot.querySelector('preview-canvas') as any).drawingZone).toBe(true);
+  });
+
+  it('preview-zone-drawn appends a zone, exits draw mode, fires config-changed', async () => {
+    const el = await mountWithZones();
+    (el.shadowRoot.querySelector('.add-zone') as HTMLElement).click();
+    await el.updateComplete;
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const preview = el.shadowRoot.querySelector('preview-canvas') as HTMLElement;
+    preview.dispatchEvent(
+      new CustomEvent('preview-zone-drawn', {
+        detail: { x: 12, y: 15, width: 22, height: 18 },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    await el.updateComplete;
+    expect(fired.zones.length).toBe(3);
+    expect(fired.zones[2]).toMatchObject({ x: 12, y: 15, width: 22, height: 18 });
+    expect((el.shadowRoot.querySelector('preview-canvas') as any).drawingZone).toBe(false);
+  });
+
+  it('preview-zone-draw-cancelled just exits draw mode (no new zone)', async () => {
+    const el = await mountWithZones();
+    (el.shadowRoot.querySelector('.add-zone') as HTMLElement).click();
+    await el.updateComplete;
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const preview = el.shadowRoot.querySelector('preview-canvas') as HTMLElement;
+    preview.dispatchEvent(
+      new CustomEvent('preview-zone-draw-cancelled', {
+        detail: {},
+        bubbles: true,
+        composed: true,
+      })
+    );
+    await el.updateComplete;
+    expect(fired).toBeNull();
+    expect((el.shadowRoot.querySelector('preview-canvas') as any).drawingZone).toBe(false);
+  });
+
+  it('Remove zone drops that index and fires config-changed', async () => {
+    const el = await mountWithZones();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    (el.shadowRoot.querySelectorAll('.remove-zone')[0] as HTMLElement).click();
+    expect(fired.zones.length).toBe(1);
+    expect(fired.zones[0].name).toBe('Kitchen');
+  });
+
+  it('editing a zone form re-nests x/y/w/h and fires config-changed', async () => {
+    const el = await mountWithZones();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const form = el.shadowRoot.querySelectorAll('ha-form.zone-form')[0] as any;
+    form.dispatchEvent(
+      new CustomEvent('value-changed', {
+        detail: { value: { ...form.data, name: 'Lounge', width: 55 } },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(fired.zones[0].name).toBe('Lounge');
+    expect(fired.zones[0].width).toBe(55);
+  });
+
+  it('move-down reorders zones', async () => {
+    const el = await mountWithZones();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    (el.shadowRoot.querySelectorAll('.zone-down')[0] as HTMLElement).click();
+    expect(fired.zones.map((z: any) => z.name)).toEqual(['Kitchen', 'Living']);
+  });
+});

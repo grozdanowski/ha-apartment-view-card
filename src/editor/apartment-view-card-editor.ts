@@ -5,6 +5,7 @@ import {
   normalizeConfig,
   type ApartmentViewConfig,
   type EntityConfig,
+  type ZoneConfig,
 } from '../core/config';
 import {
   imagesOptionsSchema,
@@ -13,6 +14,8 @@ import {
   formToEntity,
   defaultEntity,
   isDirectional,
+  zoneSchema,
+  defaultZone,
 } from './editor-helpers';
 import './preview-canvas';
 
@@ -21,6 +24,7 @@ export class ApartmentViewCardEditor extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @state() private _config!: ApartmentViewConfig;
   @state() private _selectedEntity = -1;
+  @state() private _drawingZone = false;
 
   static styles = css`
     .section {
@@ -52,6 +56,17 @@ export class ApartmentViewCardEditor extends LitElement {
     .add-entity,
     .add-zone {
       margin-top: 8px;
+    }
+    .zone-row {
+      border: 1px solid var(--divider-color);
+      border-radius: 8px;
+      padding: 8px;
+      margin-bottom: 8px;
+    }
+    .zone-actions {
+      display: flex;
+      gap: 4px;
+      margin-left: auto;
     }
   `;
 
@@ -173,6 +188,117 @@ export class ApartmentViewCardEditor extends LitElement {
     this._selectedEntity = (ev.detail as { index: number }).index;
   }
 
+  private _commitZones(zones: ZoneConfig[]): void {
+    const config: ApartmentViewConfig = { ...this._config, zones };
+    this._config = config;
+    fireEvent(this, 'config-changed', { config });
+  }
+
+  private _startDrawZone(): void {
+    this._drawingZone = true;
+  }
+
+  private _onZoneDrawn(ev: CustomEvent): void {
+    const rect = ev.detail as {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    };
+    const base = defaultZone();
+    const zone: ZoneConfig = {
+      name: base.name,
+      ...(base.icon !== undefined ? { icon: base.icon } : {}),
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+    };
+    this._drawingZone = false;
+    this._commitZones([...this._config.zones, zone]);
+  }
+
+  private _onZoneDrawCancelled(): void {
+    this._drawingZone = false;
+  }
+
+  private _removeZone(index: number): void {
+    this._commitZones(this._config.zones.filter((_, i) => i !== index));
+  }
+
+  private _moveZone(index: number, delta: number): void {
+    const target = index + delta;
+    if (target < 0 || target >= this._config.zones.length) return;
+    const zones = [...this._config.zones];
+    const [z] = zones.splice(index, 1);
+    zones.splice(target, 0, z);
+    this._commitZones(zones);
+  }
+
+  private _zoneLabel = (schema: { name: string }): string => {
+    const labels: Record<string, string> = {
+      name: 'Name',
+      icon: 'Icon (optional)',
+      x: 'X',
+      y: 'Y',
+      width: 'Width',
+      height: 'Height',
+    };
+    return labels[schema.name] ?? schema.name;
+  };
+
+  private _onZoneChanged(ev: CustomEvent, index: number): void {
+    ev.stopPropagation();
+    const v = ev.detail.value as Partial<ZoneConfig>;
+    const zones = this._config.zones.map((z, i) =>
+      i === index ? { ...z, ...v } : z
+    );
+    this._commitZones(zones);
+  }
+
+  private _renderZones() {
+    return html`
+      <div class="section">
+        <div class="section-title">Zones</div>
+        ${this._config.zones.map(
+          (z, i) => html`
+            <div class="zone-row">
+              <div class="row-header">
+                <span class="row-title">${z.name}</span>
+                <div class="zone-actions">
+                  <ha-icon-button
+                    class="zone-up"
+                    .path=${'M7,15L12,10L17,15H7Z'}
+                    @click=${() => this._moveZone(i, -1)}
+                  ></ha-icon-button>
+                  <ha-icon-button
+                    class="zone-down"
+                    .path=${'M7,10L12,15L17,10H7Z'}
+                    @click=${() => this._moveZone(i, 1)}
+                  ></ha-icon-button>
+                  <ha-icon-button
+                    class="remove-zone"
+                    .path=${'M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z'}
+                    @click=${() => this._removeZone(i)}
+                  ></ha-icon-button>
+                </div>
+              </div>
+              <ha-form
+                class="zone-form"
+                .hass=${this.hass}
+                .data=${z}
+                .schema=${zoneSchema()}
+                .computeLabel=${this._zoneLabel}
+                @value-changed=${(ev: CustomEvent) => this._onZoneChanged(ev, i)}
+              ></ha-form>
+            </div>
+          `
+        )}
+        <ha-button class="add-zone" @click=${this._startDrawZone}>Add zone</ha-button>
+      </div>
+    `;
+  }
+
   private _renderEntities() {
     return html`
       <div class="section">
@@ -219,8 +345,11 @@ export class ApartmentViewCardEditor extends LitElement {
         .entities=${this._config.entities}
         .zones=${this._config.zones}
         .selectedEntity=${this._selectedEntity}
+        .drawingZone=${this._drawingZone}
         @preview-entity-moved=${this._onPreviewEntityMoved}
         @preview-entity-selected=${this._onPreviewEntitySelected}
+        @preview-zone-drawn=${this._onZoneDrawn}
+        @preview-zone-draw-cancelled=${this._onZoneDrawCancelled}
       ></preview-canvas>
       <div class="section">
         <div class="section-title">Images &amp; options</div>
@@ -234,6 +363,7 @@ export class ApartmentViewCardEditor extends LitElement {
         ></ha-form>
       </div>
       ${this._renderEntities()}
+      ${this._renderZones()}
     `;
   }
 }
