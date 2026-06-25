@@ -109,3 +109,136 @@ describe('apartment-view-card-editor: images + options', () => {
     expect(fired._legacy).toBe('keep');
   });
 });
+
+describe('apartment-view-card-editor: entities', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  async function mountWithEntities() {
+    const el = document.createElement('apartment-view-card-editor') as any;
+    el.hass = { states: {}, localize: (k: string) => k };
+    el.setConfig({
+      type: 'custom:apartment-view-card',
+      images: { base: '/local/day.png' },
+      entities: [
+        { entity: 'light.a', x: 10, y: 20, size: 'small', tap: 'toggle', orientation: null },
+        { entity: 'light.b', x: 30, y: 40, size: 'small', tap: 'toggle', orientation: 90 },
+      ],
+      zones: [],
+      options: {
+        view: 'auto',
+        lightStyle: 'lit',
+        freePanZoom: true,
+        zoomMax: 1.5,
+        duskDawnOffsetMinutes: 60,
+      },
+    });
+    document.body.appendChild(el);
+    await el.updateComplete;
+    return el;
+  }
+
+  it('renders one entity row per configured entity', async () => {
+    const el = await mountWithEntities();
+    expect(el.shadowRoot.querySelectorAll('.entity-row').length).toBe(2);
+  });
+
+  it('Add entity appends a default entity and fires config-changed', async () => {
+    const el = await mountWithEntities();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    (el.shadowRoot.querySelector('.add-entity') as HTMLElement).click();
+    expect(fired.entities.length).toBe(3);
+    expect(fired.entities[2]).toMatchObject({
+      entity: '',
+      x: 50,
+      y: 50,
+      size: 'small',
+      tap: 'toggle',
+      orientation: null,
+    });
+  });
+
+  it('Remove entity drops that index and fires config-changed', async () => {
+    const el = await mountWithEntities();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const remove = el.shadowRoot.querySelectorAll('.remove-entity')[0] as HTMLElement;
+    remove.click();
+    expect(fired.entities.length).toBe(1);
+    expect(fired.entities[0].entity).toBe('light.b');
+  });
+
+  it('the per-entity form schema includes orientation only when directional', async () => {
+    const el = await mountWithEntities();
+    const forms = el.shadowRoot.querySelectorAll('ha-form.entity-form');
+    const namesA = (forms[0] as any).schema.map((s: any) => s.name);
+    const namesB = (forms[1] as any).schema.map((s: any) => s.name);
+    expect(namesA.includes('orientation')).toBe(false); // light.a orientation null
+    expect(namesB.includes('orientation')).toBe(true); // light.b orientation 90
+    // entity selector NOT domain-limited
+    const entityRow = (forms[0] as any).schema.find((s: any) => s.name === 'entity');
+    expect(entityRow.selector.entity).toEqual({});
+  });
+
+  it('turning the directional toggle on writes orientation 0 (nullable->0)', async () => {
+    const el = await mountWithEntities();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const form = el.shadowRoot.querySelectorAll('ha-form.entity-form')[0] as any;
+    form.dispatchEvent(
+      new CustomEvent('value-changed', {
+        detail: { value: { ...form.data, directional: true } },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(fired.entities[0].orientation).toBe(0);
+  });
+
+  it('turning the directional toggle off restores orientation null', async () => {
+    const el = await mountWithEntities();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const form = el.shadowRoot.querySelectorAll('ha-form.entity-form')[1] as any;
+    form.dispatchEvent(
+      new CustomEvent('value-changed', {
+        detail: { value: { ...form.data, directional: false } },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(fired.entities[1].orientation).toBeNull();
+  });
+
+  it('preview-entity-moved updates the moved entity x/y and fires config-changed', async () => {
+    const el = await mountWithEntities();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const preview = el.shadowRoot.querySelector('preview-canvas') as HTMLElement;
+    preview.dispatchEvent(
+      new CustomEvent('preview-entity-moved', {
+        detail: { index: 0, x: 66, y: 77 },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(fired.entities[0].x).toBe(66);
+    expect(fired.entities[0].y).toBe(77);
+  });
+
+  it('preview-entity-selected sets the selected index on the preview', async () => {
+    const el = await mountWithEntities();
+    const preview = el.shadowRoot.querySelector('preview-canvas') as any;
+    preview.dispatchEvent(
+      new CustomEvent('preview-entity-selected', {
+        detail: { index: 1 },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    await el.updateComplete;
+    expect((el.shadowRoot.querySelector('preview-canvas') as any).selectedEntity).toBe(1);
+  });
+});
