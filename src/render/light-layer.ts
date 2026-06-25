@@ -161,3 +161,42 @@ export function renderLightLayer(
     )}
   </div>`;
 }
+
+/**
+ * Conic-gradient cone mask, §4.4. `o` = orientation in degrees (0 = up, clockwise),
+ * `half` = cone half-angle, `feather` = angular soft edge, `at` = gradient center
+ * ("x% y%" for lights, "50% 50%" for device beams). Six stops produce a black wedge
+ * of full width 2·half centered on `o`, feathering to transparent over `feather` on
+ * each side.
+ */
+export function coneMask(o: number, half: number, feather: number, at: string): string {
+  return (
+    `conic-gradient(from ${o}deg at ${at}, ` +
+    `black 0deg, black ${half}deg, ` +
+    `transparent ${half + feather}deg, transparent ${360 - half - feather}deg, ` +
+    `black ${360 - half}deg, black 360deg)`
+  );
+}
+
+/**
+ * Mask styles for a `lit`/`reveal`/`glow` light patch, §4.4.
+ * Omnidirectional (orientation === null) = radial halo only.
+ * Directional = radial ∩ cone, via mask-composite: intersect (-webkit: source-in).
+ */
+export function lightMaskStyles(
+  xPct: number,
+  yPct: number,
+  radiusPx: number,
+  orientation: number | null,
+): { maskImage: string; maskComposite: string; webkitMaskComposite: string } {
+  const radial = radialMask(xPct, yPct, radiusPx);
+  if (orientation === null) {
+    return { maskImage: radial, maskComposite: '', webkitMaskComposite: '' };
+  }
+  const cone = coneMask(orientation, 30, 12, `${xPct}% ${yPct}%`);
+  return {
+    maskImage: `${radial}, ${cone}`,
+    maskComposite: 'intersect',
+    webkitMaskComposite: 'source-in',
+  };
+}
