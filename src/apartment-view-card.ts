@@ -3,7 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { fireEvent } from 'custom-card-helpers';
 import type { HomeAssistant } from 'custom-card-helpers';
 import type { HassEntity } from './core/ha-types';
-import { normalizeConfig, type ApartmentViewConfig, type EntityConfig } from './core/config';
+import { normalizeConfig, type ApartmentViewConfig, type EntityConfig, type ZoneConfig } from './core/config';
 import { renderBaseLayer } from './render/base-layer';
 import { renderLightLayer } from './render/light-layer';
 import { renderEffect, EFFECT_STYLES } from './render/effect-layer';
@@ -14,7 +14,9 @@ import {
   renderMarkerOverlay,
   type MarkerView,
 } from './render/marker-overlay';
-import type { Viewport, ZoomTransform } from './core/geometry';
+import { zoomToZone, type Viewport, type ZoomTransform } from './core/geometry';
+import { buildZoneChips, type ZoneChip } from './render/zone-controls';
+import { entityInFocusedZone } from './render/zone-focus';
 
 interface MinimalHass {
   states: Record<string, HassEntity>;
@@ -28,7 +30,7 @@ export class ApartmentViewCard extends LitElement {
   @property({ attribute: false }) public config!: ApartmentViewConfig;
   @state() private _cardWidth = 600;
   @state() private _transform: ZoomTransform = { scale: 1, panX: 0, panY: 0 };
-  @state() private _animating = false;
+  @state() private _focusedZone: ZoneConfig | null = null;
 
   private _ro?: ResizeObserver;
   private _panZoom = new PanZoomController({ zoomMax: 1.5 });
@@ -41,8 +43,8 @@ export class ApartmentViewCard extends LitElement {
   private _pinchStartScale = 1;
   private _lastMove: { x: number; y: number } | null = null;
 
-  /** Inline string so Phase 5 can reference ApartmentViewCard.ZOOM_TRANSITION. */
-  static readonly ZOOM_TRANSITION = 'transform 0.6s cubic-bezier(0.4, 0, 0.2, 1)';
+  /** Locked transition string for scene layer and marker left/top/transform. */
+  private static readonly ZOOM_TRANSITION = 'transform 0.6s cubic-bezier(.4,0,.2,1)';
 
   static styles = [
     css`
@@ -90,8 +92,9 @@ export class ApartmentViewCard extends LitElement {
       background: var(--card-background-color);
       color: var(--primary-text-color);
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-      transition: opacity 0.3s ease, transform 0.6s cubic-bezier(0.4, 0, 0.2, 1),
-        background-color 0.3s ease, color 0.3s ease;
+      transition: left 0.6s cubic-bezier(.4,0,.2,1), top 0.6s cubic-bezier(.4,0,.2,1),
+        transform 0.6s cubic-bezier(.4,0,.2,1),
+        opacity 0.3s ease, background-color 0.3s ease, color 0.3s ease;
     }
     .marker-overlay .marker.active {
       background: var(--primary-color);
@@ -103,6 +106,42 @@ export class ApartmentViewCard extends LitElement {
     .marker-overlay .marker[disabled] {
       cursor: default;
       color: var(--disabled-text-color);
+    }
+    .zone-controls {
+      display: flex;
+      flex-direction: row;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 8px;
+      scrollbar-width: thin;
+    }
+    .zone-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+      padding: 6px 12px;
+      border: none;
+      border-radius: 16px;
+      background: var(--secondary-background-color);
+      color: var(--primary-text-color);
+      cursor: pointer;
+      white-space: nowrap;
+      font: inherit;
+    }
+    .zone-chip:hover {
+      background: var(--primary-color);
+      color: var(--text-primary-color);
+    }
+    .zone-chip--back {
+      background: var(--primary-color);
+      color: var(--text-primary-color);
+    }
+    .zone-chip ha-icon {
+      --mdc-icon-size: 18px;
+    }
+    :host(.is-focused) .wrapper {
+      /* free pan/zoom is suppressed in JS; this is a styling hook only */
     }
   `,
     unsafeCSS(EFFECT_STYLES),
@@ -139,6 +178,8 @@ export class ApartmentViewCard extends LitElement {
     window.addEventListener('pointermove', this._onWindowPointerMove);
     window.addEventListener('pointerup', this._onWindowPointerUp);
     window.addEventListener('pointercancel', this._onWindowPointerUp);
+    window.addEventListener('keydown', this._handleKeyDown);
+    if (!this.hasAttribute('tabindex')) this.setAttribute('tabindex', '0');
     if (typeof ResizeObserver !== 'undefined') {
       this._ro = new ResizeObserver((entries) => {
         const w = entries[0]?.contentRect?.width;
@@ -155,6 +196,7 @@ export class ApartmentViewCard extends LitElement {
     window.removeEventListener('pointermove', this._onWindowPointerMove);
     window.removeEventListener('pointerup', this._onWindowPointerUp);
     window.removeEventListener('pointercancel', this._onWindowPointerUp);
+    window.removeEventListener('keydown', this._handleKeyDown);
     this._cancelHold();
     this._ro?.disconnect();
     this._ro = undefined;
@@ -169,17 +211,24 @@ export class ApartmentViewCard extends LitElement {
     }
   }
 
+  protected updated(): void {
+    // Sync focus class on host so `:host(.is-focused)` CSS selector works.
+    this.classList.toggle('is-focused', this._focusedZone !== null);
+  }
+
   // ---------------------------------------------------------------------------
   // Viewport + PanZoom configuration
   // ---------------------------------------------------------------------------
 
   /**
    * Returns the .wrapper / scene image-box size.
-   * vp.width === this._cardWidth (same width passed to renderLightLayer).
+   * width === this._cardWidth (same width passed to renderLightLayer and
+   * markerScreenPos so zoomToZone's clamp and marker mapping agree).
    */
   private _viewport(): Viewport {
-    const r = this.getBoundingClientRect();
-    return { width: r.width, height: r.height };
+    const wrapper = this.renderRoot?.querySelector('.wrapper') as HTMLElement | null;
+    const r = wrapper?.getBoundingClientRect();
+    return { width: this._cardWidth, height: r?.height ?? 0 };
   }
 
   /** Apply zoomMax + freePanZoom gate whenever config changes. */
@@ -187,18 +236,51 @@ export class ApartmentViewCard extends LitElement {
     this._panZoom = new PanZoomController({
       zoomMax: this.config.options.zoomMax,
     });
-    // Overview: free pan/zoom only when enabled in options (focus state in Phase 5).
+    // Overview: free pan/zoom only when enabled in options.
     this._panZoom.setEnabled(this.config.options.freePanZoom);
     this._transform = this._panZoom.transform;
   }
+
+  // ---------------------------------------------------------------------------
+  // Zone focus state machine (Phase 5)
+  // ---------------------------------------------------------------------------
+
+  private _focusZone(zone: ZoneConfig): void {
+    this._focusedZone = zone;
+    this._transform = zoomToZone(zone, this._viewport(), this.config.options.zoomMax);
+    this._panZoom.setEnabled(false);
+  }
+
+  private _exitFocus(): void {
+    this._focusedZone = null;
+    this._transform = { scale: 1, panX: 0, panY: 0 };
+    this._panZoom.setEnabled(this.config.options.freePanZoom);
+  }
+
+  private _onZoneChip(chip: ZoneChip): void {
+    if (chip.kind === 'back') {
+      this._exitFocus();
+      return;
+    }
+    if (chip.zone) {
+      this._focusZone(chip.zone);
+    }
+  }
+
+  private _handleKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape' && this._focusedZone !== null) {
+      e.preventDefault();
+      this._exitFocus();
+    }
+  };
 
   // ---------------------------------------------------------------------------
   // Pointer / wheel handlers (named exactly per spec for Phase 5 compatibility)
   // ---------------------------------------------------------------------------
 
   private _onWheel = (e: WheelEvent) => {
+    if (this._focusedZone !== null) return;
     e.preventDefault();
-    this._animating = false;
     const r = this.getBoundingClientRect();
     this._transform = this._panZoom.wheelZoom(
       e.deltaY,
@@ -208,9 +290,9 @@ export class ApartmentViewCard extends LitElement {
   };
 
   private _onScenePointerDown = (e: PointerEvent) => {
+    if (this._focusedZone !== null) return;
     if (e.button !== 0 && e.pointerType === 'mouse') return;
     this._activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    this._animating = false;
     if (this._activePointers.size === 2) {
       // begin pinch
       const [a, b] = [...this._activePointers.values()];
@@ -228,7 +310,6 @@ export class ApartmentViewCard extends LitElement {
     e.stopPropagation();
     if (e.button !== 0 && e.pointerType === 'mouse') return;
     this._activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    this._animating = false;
     this._activeMarker = m;
     this._beginGesture(e);
   };
@@ -249,6 +330,7 @@ export class ApartmentViewCard extends LitElement {
   }
 
   private _onWindowPointerMove = (e: PointerEvent) => {
+    if (this._focusedZone !== null) return;
     if (!this._activePointers.has(e.pointerId)) return;
     this._activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
@@ -281,6 +363,7 @@ export class ApartmentViewCard extends LitElement {
   };
 
   private _onWindowPointerUp = (e: PointerEvent) => {
+    if (this._focusedZone !== null) return;
     if (!this._activePointers.has(e.pointerId)) return;
     this._activePointers.delete(e.pointerId);
     this._lastMove = null;
@@ -334,26 +417,52 @@ export class ApartmentViewCard extends LitElement {
     }
     const vp = this._viewport();
     const t = this._transform;
+
+    // Build focused entity id set for marker dimming.
+    const focusedZoneEntityIds =
+      this._focusedZone === null
+        ? null
+        : new Set(
+            this.config.entities
+              .filter((e) =>
+                entityInFocusedZone(e, this._focusedZone, this.config.zones),
+              )
+              .map((e) => e.entity),
+          );
+
     const views = computeMarkerViews(
       this.config.entities,
       this.hass?.states ?? {},
       t,
       vp,
-      null // overview: no zone focus until Phase 5
+      focusedZoneEntityIds,
     );
-    const sceneTransition = this._animating ? ApartmentViewCard.ZOOM_TRANSITION : 'none';
+
     return html`
       <ha-card>
         <div class="wrapper">
           <div
             class="scene"
-            style="transform: translate(${t.panX}px, ${t.panY}px) scale(${t.scale}); transition: ${sceneTransition};"
+            style="transform: translate(${t.panX}px, ${t.panY}px) scale(${t.scale}); transition: ${ApartmentViewCard.ZOOM_TRANSITION};"
             @pointerdown=${this._onScenePointerDown}
           >
             <!-- base-layer + light-layer come from Phase 2 render functions -->
             ${this._renderScene()}
           </div>
           ${renderMarkerOverlay(views, this._onMarkerPointerDown)}
+        </div>
+        <div class="zone-controls" role="toolbar" aria-label="Zones">
+          ${buildZoneChips(this.config.zones, this._focusedZone).map(
+            (chip) => html`
+              <button
+                class="zone-chip ${chip.kind === 'back' ? 'zone-chip--back' : ''}"
+                @click=${() => this._onZoneChip(chip)}
+              >
+                <ha-icon .icon=${chip.icon}></ha-icon>
+                <span>${chip.label}</span>
+              </button>
+            `,
+          )}
         </div>
       </ha-card>
     `;
