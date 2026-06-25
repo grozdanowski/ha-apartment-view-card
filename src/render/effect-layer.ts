@@ -42,3 +42,64 @@ export const TV_PULSE_KEYFRAMES = `@keyframes tv-pulse {
   50% { opacity: 0.55; }
   100% { opacity: 0.35; }
 }`;
+
+/** §4.5 number of concentric radar arcs. */
+export const RADAR_ARC_COUNT = 5;
+
+/**
+ * §4.5 AC tint: blue cooling, red heating, gray unknown.
+ * hvac_action ('cooling'/'heating') is authoritative; else infer from state mode.
+ * cool/dry -> blue; heat -> red; heat_cool/auto/fan_only/other -> gray.
+ *
+ * DESIGN NOTE: the contract names only cooling/heating/unknown. Mapping the
+ * `dry` (dehumidify) mode to the cooling-blue family is a deliberate v2.0
+ * interpretation (dry runs the compressor like cooling), not a contract rule.
+ */
+export function acRadarColor(state: HassEntity): string {
+  const BLUE = 'rgb(95, 165, 255)';
+  const RED = 'rgb(255, 95, 95)';
+  const GRAY = 'rgb(150, 150, 150)';
+  const action = (state.attributes as Record<string, unknown>).hvac_action;
+  if (action === 'cooling') return BLUE;
+  if (action === 'heating') return RED;
+  switch (state.state) {
+    case 'cool':
+    case 'dry':
+      return BLUE;
+    case 'heat':
+      return RED;
+    default:
+      return GRAY;
+  }
+}
+
+/**
+ * §4.5 radar arc styles for arc index `arcIndex` (0..RADAR_ARC_COUNT-1).
+ * `arc` = the rippling ring (4.5px stroke, 2.4s linear infinite, +480ms/arc stagger).
+ * `container` = wrapper, cone-masked when directional, unmasked (full rings) when omni.
+ */
+export function radarArcsCss(
+  arcIndex: number,
+  colorCss: string,
+  orientation: number | null,
+): { container: Record<string, string>; arc: Record<string, string> } {
+  const container: Record<string, string> = {};
+  if (orientation !== null) {
+    const mask = coneMask(orientation, 34, 14, '50% 50%');
+    container['mask-image'] = mask;
+    container['-webkit-mask-image'] = mask;
+  }
+  const arc: Record<string, string> = {
+    border: `4.5px solid ${colorCss}`,
+    animation: 'radar-ripple 2.4s linear infinite',
+    'animation-delay': `${arcIndex * 480}ms`,
+  };
+  return { container, arc };
+}
+
+/** Injected into the effect layer's <style>. Grow + opacity pulse 0.3..0.7. */
+export const RADAR_KEYFRAMES = `@keyframes radar-ripple {
+  0% { transform: translate(-50%, -50%) scale(0); opacity: 0.7; }
+  50% { opacity: 0.3; }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+}`;
