@@ -152,19 +152,18 @@ describe('renderMarkerOverlay', () => {
     expect(marker.classList.contains('active')).toBe(true);
   });
 
-  it('unfocused markers render at opacity 0.25 and are non-interactive', () => {
+  it('unfocused markers have the dimmed class', () => {
     const host = document.createElement('div');
     render(renderMarkerOverlay([makeView({ focused: false })], () => {}), host);
     const marker = host.querySelector('.marker') as HTMLElement;
-    expect(marker.style.opacity).toBe('0.25');
-    expect(marker.style.pointerEvents).toBe('none');
+    expect(marker.classList.contains('dimmed')).toBe(true);
   });
 
-  it('focused markers do not dim', () => {
+  it('focused markers do not have the dimmed class', () => {
     const host = document.createElement('div');
     render(renderMarkerOverlay([makeView({ focused: true })], () => {}), host);
     const marker = host.querySelector('.marker') as HTMLElement;
-    expect(marker.style.opacity).not.toBe('0.25');
+    expect(marker.classList.contains('dimmed')).toBe(false);
   });
 
   it('fires onPointerDown with the event and view', () => {

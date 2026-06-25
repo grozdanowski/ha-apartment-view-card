@@ -69,14 +69,10 @@ export function renderMarkerOverlay(
           `left:${m.left}px`,
           `top:${m.top}px`,
           `transform:translate(-50%,-50%) scale(${m.iconScale})`,
-          m.focused ? '' : 'opacity:0.25',
-          m.focused ? '' : 'pointer-events:none',
-        ]
-          .filter(Boolean)
-          .join(';');
+        ].join(';');
         return html`
           <button
-            class="marker${m.active ? ' active' : ''}"
+            class="marker${m.active ? ' active' : ''}${m.focused ? '' : ' dimmed'}"
             title=${m.entity.name ?? m.entity.entity}
             style=${style}
             @pointerdown=${(e: PointerEvent) => onPointerDown(e, m)}

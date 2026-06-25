@@ -44,7 +44,7 @@ export class ApartmentViewCard extends LitElement {
   private _lastMove: { x: number; y: number } | null = null;
 
   /** Locked transition string for scene layer and marker left/top/transform. */
-  private static readonly ZOOM_TRANSITION = 'transform 0.6s cubic-bezier(.4,0,.2,1)';
+  static readonly ZOOM_TRANSITION = 'transform 0.6s cubic-bezier(.4,0,.2,1)';
 
   static styles = [
     css`
@@ -102,6 +102,7 @@ export class ApartmentViewCard extends LitElement {
     }
     .marker-overlay .marker.dimmed {
       opacity: 0.25;
+      pointer-events: none;
     }
     .marker-overlay .marker[disabled] {
       cursor: default;
