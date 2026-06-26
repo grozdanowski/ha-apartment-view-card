@@ -40,12 +40,13 @@ describe('apartment-view-card-editor: images + options', () => {
     expect(el.config._legacy).toBe('keep');
   });
 
-  it('renders an ha-picture-upload per image field and a separate options form', async () => {
+  it('renders a text input + file upload per image field, and a separate options form', async () => {
     const el = await mount();
-    const uploads = el.shadowRoot.querySelectorAll('ha-picture-upload');
-    expect(uploads.length).toBe(4);
-    // base upload carries the current image as its .value (so HA shows the preview)
-    const base = el.shadowRoot.querySelector('ha-picture-upload.image-base') as any;
+    // image fields use plain inputs (always render), not a lazy HA component
+    expect(el.shadowRoot.querySelectorAll('.image-url').length).toBe(4);
+    expect(el.shadowRoot.querySelectorAll('.image-upload-btn').length).toBe(4);
+    expect(el.shadowRoot.querySelectorAll('input[type="file"]').length).toBe(4);
+    const base = el.shadowRoot.querySelector('.image-base') as HTMLInputElement;
     expect(base.value).toBe('/local/day.png');
     // options live in their own ha-form (no image fields)
     const form = el.shadowRoot.querySelector('ha-form.options') as any;
@@ -55,20 +56,48 @@ describe('apartment-view-card-editor: images + options', () => {
     expect('base' in form.data).toBe(false);
   });
 
-  it('an ha-picture-upload change updates that image and fires config-changed', async () => {
+  it('typing/pasting a URL in an image field updates that image and fires config-changed', async () => {
     const el = await mount();
     let fired: ApartmentViewConfig | null = null;
     el.addEventListener('config-changed', (e: CustomEvent) => {
       fired = e.detail.config;
     });
-    const base = el.shadowRoot.querySelector('ha-picture-upload.image-base') as any;
-    base.value = '/local/new.png'; // ha-picture-upload sets its own .value, then fires 'change'
-    base.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    const base = el.shadowRoot.querySelector('.image-base') as HTMLInputElement;
+    base.value = '/local/new.png';
+    base.dispatchEvent(new Event('change', { bubbles: true }));
     expect(fired).not.toBeNull();
     expect(fired!.images.base).toBe('/local/new.png');
   });
 
-  it('clearing an optional image (value null) removes that key', async () => {
+  it('uploading a file POSTs to the image API and stores the serve URL', async () => {
+    const el = document.createElement('apartment-view-card-editor') as any;
+    let uploadedTo: string | null = null;
+    el.hass = {
+      states: {},
+      localize: (k: string) => k,
+      fetchWithAuth: async (path: string) => {
+        uploadedTo = path;
+        return { ok: true, status: 200, json: async () => ({ id: 'abc123' }) };
+      },
+    };
+    el.setConfig(baseConfig());
+    document.body.appendChild(el);
+    await el.updateComplete;
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+
+    const row = (el.shadowRoot.querySelector('.image-base') as HTMLElement).closest('.image-row')!;
+    const fileInput = row.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File([new Uint8Array([1, 2, 3])], 'floorplan.png', { type: 'image/png' });
+    Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 20)); // let the async upload resolve
+
+    expect(uploadedTo).toBe('/api/image/upload');
+    expect(fired.images.base).toBe('/api/image/serve/abc123/original');
+  });
+
+  it('clearing an optional image removes that key', async () => {
     const el = document.createElement('apartment-view-card-editor') as any;
     el.hass = { states: {}, localize: (k: string) => k };
     el.setConfig({
@@ -79,9 +108,8 @@ describe('apartment-view-card-editor: images + options', () => {
     await el.updateComplete;
     let fired: any = null;
     el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
-    const all = el.shadowRoot.querySelector('ha-picture-upload.image-allLights') as any;
-    all.value = null;
-    all.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    const row = (el.shadowRoot.querySelector('.image-allLights') as HTMLElement).closest('.image-row')!;
+    (row.querySelector('.image-clear') as HTMLElement).click();
     expect('allLights' in fired.images).toBe(false);
     expect(fired.images.base).toBe('/local/day.png');
   });

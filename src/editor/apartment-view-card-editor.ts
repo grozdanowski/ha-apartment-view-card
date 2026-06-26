@@ -27,6 +27,7 @@ export class ApartmentViewCardEditor extends LitElement {
   @state() private _config!: ApartmentViewConfig;
   @state() private _selectedEntity = -1;
   @state() private _drawingZone = false;
+  @state() private _uploadingKey: ImageFieldKey | null = null;
 
   static styles = css`
     .section {
@@ -69,6 +70,64 @@ export class ApartmentViewCardEditor extends LitElement {
       display: flex;
       gap: 4px;
       margin-left: auto;
+    }
+    .image-field {
+      margin-bottom: 12px;
+    }
+    .image-label {
+      display: block;
+      font-size: 0.9em;
+      color: var(--secondary-text-color);
+      margin-bottom: 4px;
+    }
+    .image-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .image-thumb {
+      width: 48px;
+      height: 36px;
+      object-fit: cover;
+      border-radius: 4px;
+      border: 1px solid var(--divider-color);
+      flex: 0 0 auto;
+      background: var(--secondary-background-color);
+    }
+    .image-thumb--empty {
+      display: grid;
+      place-items: center;
+      font-size: 0.65em;
+      color: var(--disabled-text-color);
+    }
+    .image-url {
+      flex: 1 1 auto;
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid var(--divider-color);
+      border-radius: 4px;
+      background: var(--card-background-color);
+      color: var(--primary-text-color);
+      font: inherit;
+    }
+    .image-upload-btn {
+      flex: 0 0 auto;
+      padding: 8px 12px;
+      border-radius: 4px;
+      background: var(--primary-color);
+      color: var(--text-primary-color);
+      cursor: pointer;
+      white-space: nowrap;
+      font-size: 0.9em;
+    }
+    .image-clear {
+      flex: 0 0 auto;
+      border: none;
+      background: transparent;
+      color: var(--secondary-text-color);
+      cursor: pointer;
+      font-size: 1em;
+      padding: 4px 6px;
     }
   `;
 
@@ -124,6 +183,37 @@ export class ApartmentViewCardEditor extends LitElement {
     const config: ApartmentViewConfig = { ...this._config, images };
     this._config = config;
     fireEvent(this, 'config-changed', { config });
+  }
+
+  /**
+   * Upload a picked file to HA's image store and use its serve URL. Uses only
+   * always-available primitives (file input + hass.fetchWithAuth + the image
+   * integration from default_config) — NOT a lazy HA component that may be
+   * unregistered in a custom-card editor context.
+   */
+  private async _onImageFilePicked(key: ImageFieldKey, ev: Event): Promise<void> {
+    const input = ev.target as HTMLInputElement;
+    const file = input.files && input.files[0];
+    if (!file) return;
+    this._uploadingKey = key;
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const resp = await (
+        this.hass as unknown as {
+          fetchWithAuth: (path: string, init: RequestInit) => Promise<Response>;
+        }
+      ).fetchWithAuth('/api/image/upload', { method: 'POST', body });
+      if (!resp.ok) throw new Error(`upload failed (${resp.status})`);
+      const data = (await resp.json()) as { id: string };
+      this._onImageChanged(key, `/api/image/serve/${data.id}/original`);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('apartment-view-card: image upload failed', err);
+    } finally {
+      this._uploadingKey = null;
+      input.value = '';
+    }
   }
 
   private _commitEntities(entities: EntityConfig[]): void {
@@ -358,24 +448,48 @@ export class ApartmentViewCardEditor extends LitElement {
       ></preview-canvas>
       <div class="section">
         <div class="section-title">Images</div>
-        ${IMAGE_FIELDS.map(
-          (f) => html`
-            <ha-picture-upload
-              class="image-${f.key}"
-              .hass=${this.hass}
-              .value=${this._config.images[f.key] ?? null}
-              .label=${f.label}
-              select-media
-              .original=${true}
-              @change=${(ev: Event) =>
-                this._onImageChanged(
-                  f.key,
-                  (ev.currentTarget as unknown as { value: string | null })
-                    .value ?? null,
-                )}
-            ></ha-picture-upload>
-          `,
-        )}
+        ${IMAGE_FIELDS.map((f) => {
+          const value = this._config.images[f.key];
+          return html`
+            <div class="image-field">
+              <label class="image-label">${f.label}</label>
+              <div class="image-row">
+                ${value
+                  ? html`<img class="image-thumb" src=${value} alt="" />`
+                  : html`<div class="image-thumb image-thumb--empty">no image</div>`}
+                <input
+                  class="image-url image-${f.key}"
+                  type="text"
+                  .value=${value ?? ''}
+                  placeholder="Upload, or paste /local/floorplan.png or a URL"
+                  @change=${(ev: Event) =>
+                    this._onImageChanged(
+                      f.key,
+                      (ev.target as HTMLInputElement).value.trim() || null,
+                    )}
+                />
+                <label class="image-upload-btn">
+                  ${this._uploadingKey === f.key ? 'Uploading…' : 'Upload'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    hidden
+                    @change=${(ev: Event) => this._onImageFilePicked(f.key, ev)}
+                  />
+                </label>
+                ${value && f.key !== 'base'
+                  ? html`<button
+                      class="image-clear"
+                      title="Remove"
+                      @click=${() => this._onImageChanged(f.key, null)}
+                    >
+                      ✕
+                    </button>`
+                  : ''}
+              </div>
+            </div>
+          `;
+        })}
       </div>
       <div class="section">
         <div class="section-title">Options</div>
