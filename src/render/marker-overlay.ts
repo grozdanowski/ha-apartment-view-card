@@ -1,4 +1,5 @@
 import { html, type TemplateResult } from 'lit';
+import { ifDefined } from 'lit/directives/if-defined.js';
 import type { HassEntity } from '../core/ha-types';
 import type { EntityConfig } from '../core/config';
 import { isActive, iconForEntity } from '../core/entity-state';
@@ -16,8 +17,23 @@ export interface MarkerView {
   top: number;
   iconScale: number;
   icon: string;
+  /** Human label: config name -> entity friendly_name -> entity id. */
+  label: string;
   active: boolean;
   focused: boolean;
+}
+
+/** config name -> entity friendly_name -> raw entity id (never the raw id when a friendly name exists). */
+function markerLabel(
+  entity: EntityConfig,
+  state: HassEntity | undefined,
+): string {
+  const friendly = state?.attributes?.friendly_name;
+  return (
+    entity.name ??
+    (typeof friendly === 'string' && friendly.length > 0 ? friendly : undefined) ??
+    entity.entity
+  );
 }
 
 /**
@@ -42,6 +58,7 @@ export function computeMarkerViews(
       top,
       iconScale: clampIconScale(t.scale),
       icon: state ? iconForEntity(state, entity) : (entity.icon ?? 'mdi:checkbox-blank-circle'),
+      label: markerLabel(entity, state),
       active: state ? isActive(state) : false,
       focused:
         focusedZoneEntityIds === null
@@ -60,7 +77,8 @@ export function computeMarkerViews(
  */
 export function renderMarkerOverlay(
   views: MarkerView[],
-  onPointerDown: (e: PointerEvent, m: MarkerView) => void
+  onPointerDown: (e: PointerEvent, m: MarkerView) => void,
+  onActivate: (m: MarkerView) => void
 ): TemplateResult {
   return html`
     <div class="marker-overlay" part="marker-overlay">
@@ -70,12 +88,24 @@ export function renderMarkerOverlay(
           `top:${m.top}px`,
           `transform:translate(-50%,-50%) scale(${m.iconScale})`,
         ].join(';');
+        const ariaLabel = m.state ? `${m.label}, ${m.state.state}` : m.label;
+        // aria-pressed only on toggle markers (a true on/off control).
+        const pressed = m.entity.tap === 'toggle' ? String(m.active) : undefined;
         return html`
           <button
             class="marker${m.active ? ' active' : ''}${m.focused ? '' : ' dimmed'}"
-            title=${m.entity.name ?? m.entity.entity}
+            title=${m.label}
+            aria-label=${ariaLabel}
+            aria-pressed=${ifDefined(pressed)}
+            tabindex=${m.focused ? '0' : '-1'}
+            aria-hidden=${ifDefined(m.focused ? undefined : 'true')}
             style=${style}
             @pointerdown=${(e: PointerEvent) => onPointerDown(e, m)}
+            @click=${(e: MouseEvent) => {
+              // Keyboard (Enter/Space) fires click with detail 0; pointer taps
+              // (detail >= 1) are already handled by the gesture machinery.
+              if (e.detail === 0) onActivate(m);
+            }}
           >
             <ha-icon icon=${m.icon}></ha-icon>
           </button>

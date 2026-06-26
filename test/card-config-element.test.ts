@@ -25,6 +25,13 @@ describe('apartment-view-card config element + stub', () => {
     expect(() => normalizeConfig(stub)).not.toThrow();
   });
 
+  it('getStubConfig uses a self-contained placeholder image, not a path that 404s', () => {
+    const Card = customElements.get('apartment-view-card') as any;
+    const stub = Card.getStubConfig();
+    expect(stub.images.base.startsWith('data:image/svg+xml')).toBe(true);
+    expect(stub.images.base).not.toContain('/local/');
+  });
+
   it('getStubConfig options carry the documented defaults', () => {
     const Card = customElements.get('apartment-view-card') as any;
     const stub = Card.getStubConfig();

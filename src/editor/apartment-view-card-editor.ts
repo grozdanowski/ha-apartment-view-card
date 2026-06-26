@@ -268,16 +268,19 @@ export class ApartmentViewCardEditor extends LitElement {
                 <div class="zone-actions">
                   <ha-icon-button
                     class="zone-up"
+                    .label=${'Move zone up'}
                     .path=${'M7,15L12,10L17,15H7Z'}
                     @click=${() => this._moveZone(i, -1)}
                   ></ha-icon-button>
                   <ha-icon-button
                     class="zone-down"
+                    .label=${'Move zone down'}
                     .path=${'M7,10L12,15L17,10H7Z'}
                     @click=${() => this._moveZone(i, 1)}
                   ></ha-icon-button>
                   <ha-icon-button
                     class="remove-zone"
+                    .label=${'Delete zone'}
                     .path=${'M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z'}
                     @click=${() => this._removeZone(i)}
                   ></ha-icon-button>
@@ -311,6 +314,7 @@ export class ApartmentViewCardEditor extends LitElement {
                 <span class="row-title">${e.name || e.entity || 'New entity'}</span>
                 <ha-icon-button
                   class="remove-entity"
+                  .label=${'Remove entity'}
                   .path=${'M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z'}
                   @click=${(ev: Event) => {
                     ev.stopPropagation();

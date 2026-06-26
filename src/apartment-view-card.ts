@@ -1,8 +1,7 @@
-import { LitElement, html, css, unsafeCSS, type TemplateResult } from 'lit';
+import { LitElement, html, css, unsafeCSS, type TemplateResult, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { fireEvent } from 'custom-card-helpers';
-import type { HomeAssistant } from 'custom-card-helpers';
-import type { HassEntity } from './core/ha-types';
+import type { HassLike } from './core/ha-types';
 import { normalizeConfig, type ApartmentViewConfig, type EntityConfig, type ZoneConfig } from './core/config';
 import './editor/apartment-view-card-editor';
 import { renderBaseLayer } from './render/base-layer';
@@ -19,19 +18,13 @@ import { zoomToZone, type Viewport, type ZoomTransform } from './core/geometry';
 import { buildZoneChips, type ZoneChip } from './render/zone-controls';
 import { entityInFocusedZone } from './render/zone-focus';
 
-interface MinimalHass {
-  states: Record<string, HassEntity>;
-  // Needed by Phase 3 dispatchTapAction (tap:toggle -> homeassistant.toggle).
-  callService(domain: string, service: string, data?: any): Promise<void>;
-}
-
 @customElement('apartment-view-card')
 export class ApartmentViewCard extends LitElement {
   // MIGRATION (v1 -> v2): v1 used ad-hoc `_scale` (clamped 0.5..3) + `_position`
   // with mouse-anchored wheel zoom and no zone awareness (old src/ApartmentViewCard.ts).
   // v2 unifies this into a single `_transform: ZoomTransform`. Free pan/zoom (Phase 3)
   // drives `_transform` directly; zone focus (Phase 5) drives it via geometry.zoomToZone.
-  @property({ attribute: false }) public hass?: MinimalHass;
+  @property({ attribute: false }) public hass?: HassLike;
   @property({ attribute: false }) public config!: ApartmentViewConfig;
   @state() private _cardWidth = 600;
   @state() private _transform: ZoomTransform = { scale: 1, panX: 0, panY: 0 };
@@ -47,9 +40,7 @@ export class ApartmentViewCard extends LitElement {
   private _pinchStartDist = 0;
   private _pinchStartScale = 1;
   private _lastMove: { x: number; y: number } | null = null;
-
-  /** Locked transition string for scene layer and marker left/top/transform. */
-  static readonly ZOOM_TRANSITION = 'transform 0.6s cubic-bezier(.4,0,.2,1)';
+  private _aspectListenerSrc?: string;
 
   static styles = [
     css`
@@ -59,7 +50,11 @@ export class ApartmentViewCard extends LitElement {
     .wrapper {
       position: relative;
       width: 100%;
-      height: 100%;
+      /* Self-size from the base image's aspect ratio (set by _syncAspect on load)
+         so the card has real height in masonry / vertical-stack / panel / the
+         card-picker preview — not only HA's sections/grid layout. */
+      aspect-ratio: var(--av-aspect, 16 / 9);
+      min-height: 120px;
       overflow: hidden;
       touch-action: none; /* let us own pinch/pan */
     }
@@ -68,6 +63,8 @@ export class ApartmentViewCard extends LitElement {
       inset: 0;
       transform-origin: 0 0;
       will-change: transform;
+      /* Transition lives here (not inline) so prefers-reduced-motion can cancel it. */
+      transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
     }
     .base-image {
       display: block;
@@ -86,6 +83,9 @@ export class ApartmentViewCard extends LitElement {
     }
     .marker-overlay .marker {
       position: absolute;
+      /* >=40px hit area for touch (icon stays ~24px, centered). */
+      min-width: 40px;
+      min-height: 40px;
       transform: translate(-50%, -50%);
       display: grid;
       place-items: center;
@@ -96,10 +96,21 @@ export class ApartmentViewCard extends LitElement {
       pointer-events: auto;
       background: var(--card-background-color);
       color: var(--primary-text-color);
-      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+      --mdc-icon-size: 24px;
+      /* Theme-aware: drop shadow + 1px ring so the marker separates from any
+         floorplan colour on both light and dark themes. The --divider-color
+         fallback is required — an undefined var with no fallback would
+         invalidate the WHOLE box-shadow (it would compute to none). */
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35),
+        0 0 0 1px var(--divider-color, rgba(127, 127, 127, 0.4));
       transition: left 0.6s cubic-bezier(.4,0,.2,1), top 0.6s cubic-bezier(.4,0,.2,1),
         transform 0.6s cubic-bezier(.4,0,.2,1),
         opacity 0.3s ease, background-color 0.3s ease, color 0.3s ease;
+    }
+    .marker-overlay .marker:focus-visible,
+    .zone-chip:focus-visible {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
     }
     .marker-overlay .marker.active {
       background: var(--primary-color);
@@ -135,9 +146,13 @@ export class ApartmentViewCard extends LitElement {
       white-space: nowrap;
       font: inherit;
     }
-    .zone-chip:hover {
-      background: var(--primary-color);
-      color: var(--text-primary-color);
+    /* hover-only so a tap on a touch device doesn't leave the chip stuck
+       in the highlight state (which is identical to the --back state). */
+    @media (hover: hover) {
+      .zone-chip:hover {
+        background: var(--primary-color);
+        color: var(--text-primary-color);
+      }
     }
     .zone-chip--back {
       background: var(--primary-color);
@@ -148,6 +163,14 @@ export class ApartmentViewCard extends LitElement {
     }
     :host(.is-focused) .wrapper {
       /* free pan/zoom is suppressed in JS; this is a styling hook only */
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .scene {
+        transition: none;
+      }
+      .marker-overlay .marker {
+        transition: opacity 0.3s ease, background-color 0.3s ease, color 0.3s ease;
+      }
     }
   `,
     unsafeCSS(EFFECT_STYLES),
@@ -170,10 +193,16 @@ export class ApartmentViewCard extends LitElement {
     return document.createElement('apartment-view-card-editor');
   }
 
+  // Self-contained placeholder so the card-picker preview shows a clean
+  // "configure me" panel instead of a 404 to a path that does not exist yet.
+  static readonly STUB_BASE_IMAGE =
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='200'%3E%3Crect width='320' height='200' fill='%23263238'/%3E%3Crect x='24' y='24' width='272' height='152' rx='8' fill='none' stroke='%2390a4ae' stroke-width='2' stroke-dasharray='8 6'/%3E%3Ctext x='160' y='106' fill='%2390a4ae' font-family='sans-serif' font-size='14' text-anchor='middle'%3ESet images.base to your floorplan%3C/text%3E%3C/svg%3E";
+
+  // HA calls getStubConfig(hass, entities); params accepted for future seeding.
   static getStubConfig(): ApartmentViewConfig {
     return normalizeConfig({
       type: 'custom:apartment-view-card',
-      images: { base: '/local/apartment/day.png' },
+      images: { base: ApartmentViewCard.STUB_BASE_IMAGE },
       entities: [],
       zones: [],
       options: {
@@ -216,19 +245,61 @@ export class ApartmentViewCard extends LitElement {
     this._ro = undefined;
   }
 
+  /**
+   * Perf gate: HA replaces the whole `hass` object on every state change across
+   * the entire dashboard. Without this, the card would rebuild all light/effect
+   * layers on every unrelated tick. Re-render only when an entity we draw (or
+   * sun.sun, for time-of-day) actually changed — or when any other reactive
+   * property (config, transform, focus, width) changed.
+   */
+  protected shouldUpdate(changed: PropertyValues): boolean {
+    if (changed.size > 1 || !changed.has('hass')) return true;
+    const prev = changed.get('hass') as HassLike | undefined;
+    return this._relevantStateChanged(prev, this.hass);
+  }
+
+  private _relevantStateChanged(prev?: HassLike, next?: HassLike): boolean {
+    if (!prev || !next) return true;
+    const ids = ['sun.sun', ...(this.config?.entities?.map((e) => e.entity) ?? [])];
+    return ids.some((id) => prev.states?.[id] !== next.states?.[id]);
+  }
+
   protected firstUpdated(): void {
     const wrapper = this.renderRoot.querySelector('.wrapper');
-    if (wrapper) {
-      const w = wrapper.getBoundingClientRect().width;
-      if (w) this._cardWidth = w;
-      this._ro?.observe(wrapper);
-    }
+    // Let the ResizeObserver deliver the first width asynchronously. Setting the
+    // reactive _cardWidth synchronously here would schedule a second update inside
+    // the just-finished one (Lit "scheduled an update after an update completed").
+    if (wrapper) this._ro?.observe(wrapper);
+    this._syncAspect();
   }
 
   protected updated(): void {
     // Sync focus class on host so `:host(.is-focused)` CSS selector works.
     this.classList.toggle('is-focused', this._focusedZone !== null);
+    this._syncAspect();
   }
+
+  /**
+   * Drive `--av-aspect` from the base image's natural dimensions so the card
+   * self-sizes (see `.wrapper { aspect-ratio }`). Falls back to 16/9 until the
+   * image loads. Uses a direct style mutation (not reactive state) so it never
+   * re-enters the update cycle.
+   */
+  private _syncAspect = (): void => {
+    const img = this.renderRoot?.querySelector('.base-image') as HTMLImageElement | null;
+    if (!img) return;
+    const apply = (): void => {
+      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+        this.style.setProperty('--av-aspect', `${img.naturalWidth} / ${img.naturalHeight}`);
+      }
+    };
+    if (img.complete && img.naturalWidth > 0) {
+      apply();
+    } else if (img.src !== this._aspectListenerSrc) {
+      this._aspectListenerSrc = img.src;
+      img.addEventListener('load', apply, { once: true });
+    }
+  };
 
   // ---------------------------------------------------------------------------
   // Viewport + PanZoom configuration
@@ -328,6 +399,15 @@ export class ApartmentViewCard extends LitElement {
     this._beginGesture(e);
   };
 
+  /**
+   * Keyboard activation (Enter/Space) on a focused marker. Pointer taps run
+   * through the gesture machinery above; the marker template guards this on
+   * `detail === 0` so it fires for keyboard only (no double-action on click).
+   */
+  private _onMarkerActivate = (m: MarkerView): void => {
+    if (this.hass) dispatchTapAction({ hass: this.hass }, m.entity, this);
+  };
+
   private _beginGesture(e: PointerEvent) {
     this._tapHold.start(e.clientX, e.clientY, performance.now());
     this._holdFired = false;
@@ -386,7 +466,7 @@ export class ApartmentViewCard extends LitElement {
     const outcome = this._tapHold.end(performance.now());
     this._cancelHold();
     if (outcome === 'tap' && this._activeMarker && this.hass) {
-      dispatchTapAction(this as unknown as { hass: HomeAssistant }, this._activeMarker.entity, this);
+      dispatchTapAction({ hass: this.hass }, this._activeMarker.entity, this);
     } else if (outcome === 'hold' && this._activeMarker && !this._holdFired) {
       // hold timer didn't fire (e.g. test/no-timer path) but release is late
       dispatchHoldAction(this._activeMarker.entity, this);
@@ -457,13 +537,13 @@ export class ApartmentViewCard extends LitElement {
         <div class="wrapper">
           <div
             class="scene"
-            style="transform: translate(${t.panX}px, ${t.panY}px) scale(${t.scale}); transition: ${ApartmentViewCard.ZOOM_TRANSITION};"
+            style="transform: translate(${t.panX}px, ${t.panY}px) scale(${t.scale});"
             @pointerdown=${this._onScenePointerDown}
           >
             <!-- base-layer + light-layer come from Phase 2 render functions -->
             ${this._renderScene()}
           </div>
-          ${renderMarkerOverlay(views, this._onMarkerPointerDown)}
+          ${renderMarkerOverlay(views, this._onMarkerPointerDown, this._onMarkerActivate)}
         </div>
         <div class="zone-controls" role="toolbar" aria-label="Zones">
           ${buildZoneChips(this.config.zones, this._focusedZone).map(
@@ -492,7 +572,7 @@ export class ApartmentViewCard extends LitElement {
  * dialog via fireEvent(el,'hass-more-info'); none -> no-op.
  */
 export function dispatchTapAction(
-  card: { hass: HomeAssistant },
+  card: { hass: HassLike },
   entity: EntityConfig,
   el: HTMLElement
 ): void {
@@ -517,21 +597,27 @@ export function dispatchHoldAction(entity: EntityConfig, el: HTMLElement): void 
 }
 
 // --- Registration ---------------------------------------------------------
-if (!(window as any).customCards) {
-  (window as any).customCards = [];
+interface CustomCardEntry {
+  type: string;
+  name: string;
+  description?: string;
+  preview?: boolean;
+  documentationURL?: string;
 }
-if (
-  !(window as any).customCards.find(
-    (c: any) => c.type === 'apartment-view-card',
-  )
-) {
-  (window as any).customCards.push({
+declare global {
+  interface Window {
+    customCards?: CustomCardEntry[];
+  }
+}
+
+window.customCards = window.customCards ?? [];
+if (!window.customCards.find((c) => c.type === 'apartment-view-card')) {
+  window.customCards.push({
     type: 'apartment-view-card',
     name: 'Apartment View Card',
     description:
       'Interactive, state-aware device markers and lighting over a floorplan render.',
     preview: true,
-    documentationURL:
-      'https://github.com/grozdanowski/ha-apartment-view-card',
+    documentationURL: 'https://github.com/grozdanowski/ha-apartment-view-card',
   });
 }

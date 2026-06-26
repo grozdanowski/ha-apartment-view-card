@@ -115,17 +115,20 @@ function makeView(over: Partial<MarkerView> = {}): MarkerView {
     top: 150,
     iconScale: 1.5,
     icon: 'mdi:lightbulb',
+    label: 'Lamp',
     active: true,
     focused: true,
     ...over,
   };
 }
 
+const noop = (): void => {};
+
 describe('renderMarkerOverlay', () => {
   it('positions each marker with left/top and transform scale', () => {
     const host = document.createElement('div');
     const view = makeView({ left: 300, top: 250, iconScale: 1.2 });
-    render(renderMarkerOverlay([view], () => {}), host);
+    render(renderMarkerOverlay([view], noop, noop), host);
 
     const marker = host.querySelector('.marker') as HTMLElement;
     expect(marker).toBeTruthy();
@@ -138,7 +141,7 @@ describe('renderMarkerOverlay', () => {
   it('passes icon attribute to ha-icon', () => {
     const host = document.createElement('div');
     const view = makeView({ icon: 'mdi:fan' });
-    render(renderMarkerOverlay([view], () => {}), host);
+    render(renderMarkerOverlay([view], noop, noop), host);
 
     const haIcon = host.querySelector('ha-icon');
     expect(haIcon).toBeTruthy();
@@ -147,21 +150,21 @@ describe('renderMarkerOverlay', () => {
 
   it('active markers get active class', () => {
     const host = document.createElement('div');
-    render(renderMarkerOverlay([makeView({ active: true })], () => {}), host);
+    render(renderMarkerOverlay([makeView({ active: true })], noop, noop), host);
     const marker = host.querySelector('.marker') as HTMLElement;
     expect(marker.classList.contains('active')).toBe(true);
   });
 
   it('unfocused markers have the dimmed class', () => {
     const host = document.createElement('div');
-    render(renderMarkerOverlay([makeView({ focused: false })], () => {}), host);
+    render(renderMarkerOverlay([makeView({ focused: false })], noop, noop), host);
     const marker = host.querySelector('.marker') as HTMLElement;
     expect(marker.classList.contains('dimmed')).toBe(true);
   });
 
   it('focused markers do not have the dimmed class', () => {
     const host = document.createElement('div');
-    render(renderMarkerOverlay([makeView({ focused: true })], () => {}), host);
+    render(renderMarkerOverlay([makeView({ focused: true })], noop, noop), host);
     const marker = host.querySelector('.marker') as HTMLElement;
     expect(marker.classList.contains('dimmed')).toBe(false);
   });
@@ -170,12 +173,88 @@ describe('renderMarkerOverlay', () => {
     const host = document.createElement('div');
     const calls: Array<[PointerEvent, MarkerView]> = [];
     const view = makeView();
-    render(renderMarkerOverlay([view], (e, m) => calls.push([e, m])), host);
+    render(renderMarkerOverlay([view], (e, m) => calls.push([e, m]), noop), host);
 
     const marker = host.querySelector('.marker') as HTMLElement;
     const evt = new PointerEvent('pointerdown');
     marker.dispatchEvent(evt);
     expect(calls).toHaveLength(1);
     expect(calls[0][1]).toBe(view);
+  });
+});
+
+describe('renderMarkerOverlay accessibility', () => {
+  it('labels the button with the human label (not the raw entity id) for title and aria-label', () => {
+    const host = document.createElement('div');
+    const view = makeView({ label: 'Kitchen ceiling', state: lightState(true) });
+    render(renderMarkerOverlay([view], noop, noop), host);
+    const marker = host.querySelector('.marker') as HTMLElement;
+    expect(marker.getAttribute('title')).toBe('Kitchen ceiling');
+    // aria-label includes the state for screen readers.
+    expect(marker.getAttribute('aria-label')).toBe('Kitchen ceiling, on');
+  });
+
+  it('sets aria-pressed on toggle markers and omits it on non-toggle markers', () => {
+    const host = document.createElement('div');
+    render(
+      renderMarkerOverlay(
+        [
+          makeView({ entity: ent({ entity: 'a', tap: 'toggle' }), active: true }),
+          makeView({ entity: ent({ entity: 'b', tap: 'more-info' }), active: true }),
+        ],
+        noop,
+        noop,
+      ),
+      host,
+    );
+    const markers = host.querySelectorAll('.marker');
+    expect(markers[0].getAttribute('aria-pressed')).toBe('true');
+    expect(markers[1].hasAttribute('aria-pressed')).toBe(false);
+  });
+
+  it('removes dimmed markers from the tab order and hides them from the a11y tree', () => {
+    const host = document.createElement('div');
+    render(
+      renderMarkerOverlay(
+        [makeView({ focused: true }), makeView({ focused: false })],
+        noop,
+        noop,
+      ),
+      host,
+    );
+    const markers = host.querySelectorAll('.marker');
+    expect(markers[0].getAttribute('tabindex')).toBe('0');
+    expect(markers[0].hasAttribute('aria-hidden')).toBe(false);
+    expect(markers[1].getAttribute('tabindex')).toBe('-1');
+    expect(markers[1].getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('keyboard activation (click with detail 0) calls onActivate; a pointer click (detail>0) does not', () => {
+    const host = document.createElement('div');
+    const activated: MarkerView[] = [];
+    const view = makeView();
+    render(renderMarkerOverlay([view], noop, (m) => activated.push(m)), host);
+    const marker = host.querySelector('.marker') as HTMLElement;
+
+    marker.dispatchEvent(new MouseEvent('click', { detail: 0 }));
+    expect(activated).toHaveLength(1);
+    expect(activated[0]).toBe(view);
+
+    marker.dispatchEvent(new MouseEvent('click', { detail: 1 }));
+    expect(activated).toHaveLength(1); // pointer click ignored here (gesture machinery owns it)
+  });
+});
+
+describe('computeMarkerViews label', () => {
+  it('prefers config name, then friendly_name, then the raw entity id', () => {
+    const named = computeMarkerViews([ent({ entity: 'light.x', name: 'My Lamp' })], { 'light.x': lightState(true) }, t, vp, null);
+    expect(named[0].label).toBe('My Lamp');
+
+    const friendly: HassEntity = { entity_id: 'light.x', state: 'on', attributes: { friendly_name: 'Hallway' } };
+    const fromFriendly = computeMarkerViews([ent({ entity: 'light.x' })], { 'light.x': friendly }, t, vp, null);
+    expect(fromFriendly[0].label).toBe('Hallway'); // friendly_name wins over the raw id
+
+    const fallback = computeMarkerViews([ent({ entity: 'light.raw' })], {}, t, vp, null);
+    expect(fallback[0].label).toBe('light.raw');
   });
 });

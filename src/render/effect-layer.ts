@@ -192,6 +192,17 @@ ${RADAR_KEYFRAMES}
   border-radius: 50%;
   box-sizing: border-box;
   transform: translate(-50%, -50%) scale(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .device-beam {
+    animation: none;
+    opacity: 0.5;
+  }
+  .radar-arc {
+    animation: none;
+    transform: translate(-50%, -50%) scale(0.6);
+    opacity: 0.4;
+  }
 }`;
 
 /**
@@ -225,19 +236,19 @@ export function renderEffect(
     `;
   }
 
-  // speaker-radar or ac-radar
-  const arcs = Array.from({ length: model.arcCount }, (_, i) => {
-    const { container, arc } = radarArcsCss(i, model.color, model.orientation);
-    // container mask (if any) is identical across arcs → apply to the overlay wrapper
-    return { container, arc };
-  });
-  const containerStyle = arcs.length > 0 ? arcs[0].container : {};
+  // speaker-radar or ac-radar. The container mask is identical across arcs, so
+  // compute it once for the overlay wrapper; each arc only varies by stagger delay.
+  const { container } = radarArcsCss(0, model.color, model.orientation);
+  const arcs = Array.from(
+    { length: model.arcCount },
+    (_, i) => radarArcsCss(i, model.color, model.orientation).arc,
+  );
   return html`
     <div
       class="effect-overlay"
-      style=${styleMap({ ...containerStyle, left: `${cfg.x}%`, top: `${cfg.y}%`, width: `${sidePx}px`, height: `${sidePx}px`, opacity: '1' })}
+      style=${styleMap({ ...container, left: `${cfg.x}%`, top: `${cfg.y}%`, width: `${sidePx}px`, height: `${sidePx}px`, opacity: '1' })}
     >
-      ${arcs.map((a) => html`<div class="radar-arc" style=${styleMap(a.arc)}></div>`)}
+      ${arcs.map((arc) => html`<div class="radar-arc" style=${styleMap(arc)}></div>`)}
     </div>
   `;
 }

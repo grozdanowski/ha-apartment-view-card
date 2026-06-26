@@ -44,6 +44,48 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
+// shouldUpdate perf gate: don't rebuild layers on unrelated dashboard ticks
+// ---------------------------------------------------------------------------
+
+describe('card-component: shouldUpdate perf gate', () => {
+  const lightOn = () => ({ entity_id: 'light.kitchen_ceiling', state: 'on', attributes: {} });
+  const hassWith = (kitchen: unknown, extra: Record<string, unknown> = {}) =>
+    ({ states: { 'light.kitchen_ceiling': kitchen, ...extra }, callService: () => Promise.resolve() });
+
+  it('skips re-render when only an unrelated entity changed', async () => {
+    const card = await mountCard();
+    const sharedKitchen = lightOn(); // SAME object reference in prev + next
+    const prev = hassWith(sharedKitchen, { 'sensor.x': { entity_id: 'sensor.x', state: '1', attributes: {} } });
+    const next = hassWith(sharedKitchen, { 'sensor.x': { entity_id: 'sensor.x', state: '2', attributes: {} } });
+    card.hass = next as any;
+    expect((card as any).shouldUpdate(new Map<PropertyKey, unknown>([['hass', prev]]))).toBe(false);
+  });
+
+  it('re-renders when a drawn entity state object changed', async () => {
+    const card = await mountCard();
+    const prev = hassWith(lightOn());
+    const next = hassWith({ entity_id: 'light.kitchen_ceiling', state: 'off', attributes: {} });
+    card.hass = next as any;
+    expect((card as any).shouldUpdate(new Map<PropertyKey, unknown>([['hass', prev]]))).toBe(true);
+  });
+
+  it('re-renders when sun.sun changed (time-of-day)', async () => {
+    const card = await mountCard();
+    const k = lightOn();
+    const prev = hassWith(k, { 'sun.sun': { entity_id: 'sun.sun', state: 'above_horizon', attributes: {} } });
+    const next = hassWith(k, { 'sun.sun': { entity_id: 'sun.sun', state: 'below_horizon', attributes: {} } });
+    card.hass = next as any;
+    expect((card as any).shouldUpdate(new Map<PropertyKey, unknown>([['hass', prev]]))).toBe(true);
+  });
+
+  it('always re-renders when a non-hass reactive property changed', async () => {
+    const card = await mountCard();
+    expect((card as any).shouldUpdate(new Map<PropertyKey, unknown>([['_transform', {}]]))).toBe(true);
+    expect((card as any).shouldUpdate(new Map<PropertyKey, unknown>([['config', {}], ['hass', card.hass]]))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Test 1: Markers render – one per entity
 // ---------------------------------------------------------------------------
 
