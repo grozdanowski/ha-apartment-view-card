@@ -1,9 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  pointToPercent,
-  percentToPoint,
-  rectFromDrag,
-} from '../src/editor/preview-geometry';
+import { pointToPercent, rectFromDrag } from '../src/editor/preview-geometry';
 
 const rect = { left: 100, top: 50, width: 400, height: 200 };
 
@@ -16,18 +12,6 @@ describe('pointToPercent', () => {
   });
   it('clamps past the far edge to 100', () => {
     expect(pointToPercent(9999, 9999, rect)).toEqual({ x: 100, y: 100 });
-  });
-});
-
-describe('percentToPoint', () => {
-  it('maps percentages back to px relative to the rect origin', () => {
-    expect(percentToPoint(50, 50, rect)).toEqual({ x: 200, y: 100 });
-  });
-  it('round-trips with pointToPercent at the center', () => {
-    const p = percentToPoint(25, 75, rect);
-    const back = pointToPercent(p.x + rect.left, p.y + rect.top, rect);
-    expect(back.x).toBeCloseTo(25);
-    expect(back.y).toBeCloseTo(75);
   });
 });
 

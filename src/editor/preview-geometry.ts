@@ -19,17 +19,6 @@ export function pointToPercent(
   return { x: clamp(x, 0, 100), y: clamp(y, 0, 100) };
 }
 
-export function percentToPoint(
-  xPct: number,
-  yPct: number,
-  rect: PreviewRect
-): { x: number; y: number } {
-  return {
-    x: (xPct / 100) * rect.width,
-    y: (yPct / 100) * rect.height,
-  };
-}
-
 export function rectFromDrag(
   startXPct: number,
   startYPct: number,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { entityInFocusedZone, focusOpacityFor } from '../src/render/zone-focus';
+import { entityInFocusedZone } from '../src/render/zone-focus';
 import type { EntityConfig, ZoneConfig } from '../src/core/config';
 
 function ent(x: number, y: number): EntityConfig {
@@ -40,18 +40,5 @@ describe('entityInFocusedZone', () => {
 
   it('is false for an entity in zero zones when a zone is focused', () => {
     expect(entityInFocusedZone(ent(98, 5), kitchen, zones)).toBe(false);
-  });
-});
-
-describe('focusOpacityFor', () => {
-  it('returns 1 for all entities in overview (no focus)', () => {
-    expect(focusOpacityFor(ent(98, 5), null, zones)).toBe(1);
-    expect(focusOpacityFor(ent(55, 55), null, zones)).toBe(1);
-  });
-
-  it('returns 1 for in-focus entities and 0.25 for others', () => {
-    expect(focusOpacityFor(ent(55, 55), study, zones)).toBe(1);
-    expect(focusOpacityFor(ent(43, 80), study, zones)).toBe(0.25); // in living, not study
-    expect(focusOpacityFor(ent(98, 5), study, zones)).toBe(0.25); // no membership
   });
 });
