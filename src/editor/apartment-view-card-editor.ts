@@ -8,7 +8,9 @@ import {
   type ZoneConfig,
 } from '../core/config';
 import {
-  imagesOptionsSchema,
+  optionsSchema,
+  IMAGE_FIELDS,
+  type ImageFieldKey,
   entitySchema,
   entityToForm,
   formToEntity,
@@ -79,17 +81,8 @@ export class ApartmentViewCardEditor extends LitElement {
     this._config = normalizeConfig(config);
   }
 
-  /** Flatten images + options into a single ha-form data object. */
-  private _imagesOptionsData(): Record<string, unknown> {
-    return { ...this._config.images, ...this._config.options };
-  }
-
-  private _imagesOptionsLabel = (schema: { name: string }): string => {
+  private _optionsLabel = (schema: { name: string }): string => {
     const labels: Record<string, string> = {
-      base: 'Base render (required)',
-      allLights: 'All-lights render (enables "reveal")',
-      night: 'Night render (optional)',
-      duskDawn: 'Dusk/Dawn render (optional)',
       view: 'Time-of-day view',
       lightStyle: 'Light style',
       freePanZoom: 'Free pan / zoom',
@@ -99,28 +92,36 @@ export class ApartmentViewCardEditor extends LitElement {
     return labels[schema.name] ?? schema.name;
   };
 
-  private _onImagesOptionsChanged(ev: CustomEvent): void {
+  private _onOptionsChanged(ev: CustomEvent): void {
     ev.stopPropagation();
     const v = ev.detail.value as Record<string, any>;
-    const images = {
-      base: v.base,
-      allLights: v.allLights || undefined,
-      night: v.night || undefined,
-      duskDawn: v.duskDawn || undefined,
-    };
-    const options = {
-      view: v.view,
-      lightStyle: v.lightStyle,
-      freePanZoom: v.freePanZoom,
-      zoomMax: v.zoomMax,
-      duskDawnOffsetMinutes: v.duskDawnOffsetMinutes,
-    };
-    // Spread _config first so entities/zones/unknown keys survive.
+    // Spread _config first so images/entities/zones/unknown keys survive.
     const config: ApartmentViewConfig = {
       ...this._config,
-      images: { ...this._config.images, ...images },
-      options: { ...this._config.options, ...options },
+      options: {
+        ...this._config.options,
+        view: v.view,
+        lightStyle: v.lightStyle,
+        freePanZoom: v.freePanZoom,
+        zoomMax: v.zoomMax,
+        duskDawnOffsetMinutes: v.duskDawnOffsetMinutes,
+      },
     };
+    this._config = config;
+    fireEvent(this, 'config-changed', { config });
+  }
+
+  /** <ha-picture-upload> emits a `change` event; its `.value` is the new URL (or null when cleared). */
+  private _onImageChanged(key: ImageFieldKey, value: string | null): void {
+    const images = { ...this._config.images };
+    if (value) {
+      images[key] = value;
+    } else if (key === 'base') {
+      images.base = ''; // required: cleared -> empty so the preview shows the "configure" warning
+    } else {
+      delete (images as Record<string, unknown>)[key];
+    }
+    const config: ApartmentViewConfig = { ...this._config, images };
     this._config = config;
     fireEvent(this, 'config-changed', { config });
   }
@@ -356,14 +357,35 @@ export class ApartmentViewCardEditor extends LitElement {
         @preview-zone-draw-cancelled=${this._onZoneDrawCancelled}
       ></preview-canvas>
       <div class="section">
-        <div class="section-title">Images &amp; options</div>
+        <div class="section-title">Images</div>
+        ${IMAGE_FIELDS.map(
+          (f) => html`
+            <ha-picture-upload
+              class="image-${f.key}"
+              .hass=${this.hass}
+              .value=${this._config.images[f.key] ?? null}
+              .label=${f.label}
+              select-media
+              .original=${true}
+              @change=${(ev: Event) =>
+                this._onImageChanged(
+                  f.key,
+                  (ev.currentTarget as unknown as { value: string | null })
+                    .value ?? null,
+                )}
+            ></ha-picture-upload>
+          `,
+        )}
+      </div>
+      <div class="section">
+        <div class="section-title">Options</div>
         <ha-form
-          class="images-options"
+          class="options"
           .hass=${this.hass}
-          .data=${this._imagesOptionsData()}
-          .schema=${imagesOptionsSchema()}
-          .computeLabel=${this._imagesOptionsLabel}
-          @value-changed=${this._onImagesOptionsChanged}
+          .data=${this._config.options}
+          .schema=${optionsSchema()}
+          .computeLabel=${this._optionsLabel}
+          @value-changed=${this._onOptionsChanged}
         ></ha-form>
       </div>
       ${this._renderEntities()}

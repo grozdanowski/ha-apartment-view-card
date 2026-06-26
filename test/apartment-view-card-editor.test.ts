@@ -40,30 +40,63 @@ describe('apartment-view-card-editor: images + options', () => {
     expect(el.config._legacy).toBe('keep');
   });
 
-  it('renders an ha-form whose data is the flattened images+options', async () => {
+  it('renders an ha-picture-upload per image field and a separate options form', async () => {
     const el = await mount();
-    const form = el.shadowRoot.querySelector('ha-form.images-options') as any;
+    const uploads = el.shadowRoot.querySelectorAll('ha-picture-upload');
+    expect(uploads.length).toBe(4);
+    // base upload carries the current image as its .value (so HA shows the preview)
+    const base = el.shadowRoot.querySelector('ha-picture-upload.image-base') as any;
+    expect(base.value).toBe('/local/day.png');
+    // options live in their own ha-form (no image fields)
+    const form = el.shadowRoot.querySelector('ha-form.options') as any;
     expect(form).toBeTruthy();
-    expect(form.data.base).toBe('/local/day.png');
     expect(form.data.view).toBe('auto');
     expect(form.data.zoomMax).toBe(1.5);
+    expect('base' in form.data).toBe(false);
   });
 
-  it('a form value-changed re-nests into images/options and fires config-changed', async () => {
+  it('an ha-picture-upload change updates that image and fires config-changed', async () => {
     const el = await mount();
     let fired: ApartmentViewConfig | null = null;
     el.addEventListener('config-changed', (e: CustomEvent) => {
       fired = e.detail.config;
     });
-    const form = el.shadowRoot.querySelector('ha-form.images-options') as any;
+    const base = el.shadowRoot.querySelector('ha-picture-upload.image-base') as any;
+    base.value = '/local/new.png'; // ha-picture-upload sets its own .value, then fires 'change'
+    base.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    expect(fired).not.toBeNull();
+    expect(fired!.images.base).toBe('/local/new.png');
+  });
+
+  it('clearing an optional image (value null) removes that key', async () => {
+    const el = document.createElement('apartment-view-card-editor') as any;
+    el.hass = { states: {}, localize: (k: string) => k };
+    el.setConfig({
+      ...baseConfig(),
+      images: { base: '/local/day.png', allLights: '/local/all.png' },
+    });
+    document.body.appendChild(el);
+    await el.updateComplete;
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const all = el.shadowRoot.querySelector('ha-picture-upload.image-allLights') as any;
+    all.value = null;
+    all.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    expect('allLights' in fired.images).toBe(false);
+    expect(fired.images.base).toBe('/local/day.png');
+  });
+
+  it('an options form value-changed re-nests into options and fires config-changed', async () => {
+    const el = await mount();
+    let fired: ApartmentViewConfig | null = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => {
+      fired = e.detail.config;
+    });
+    const form = el.shadowRoot.querySelector('ha-form.options') as any;
     form.dispatchEvent(
       new CustomEvent('value-changed', {
         detail: {
           value: {
-            base: '/local/new.png',
-            allLights: '/local/all.png',
-            night: undefined,
-            duskDawn: undefined,
             view: 'night',
             lightStyle: 'glow',
             freePanZoom: false,
@@ -76,14 +109,12 @@ describe('apartment-view-card-editor: images + options', () => {
       })
     );
     expect(fired).not.toBeNull();
-    expect(fired!.images.base).toBe('/local/new.png');
-    expect(fired!.images.allLights).toBe('/local/all.png');
     expect(fired!.options.view).toBe('night');
     expect(fired!.options.freePanZoom).toBe(false);
     expect(fired!.options.zoomMax).toBe(2);
   });
 
-  it('config-changed preserves entities, zones, and unknown keys', async () => {
+  it('config-changed preserves entities, zones, images, and unknown keys', async () => {
     const el = document.createElement('apartment-view-card-editor') as any;
     el.hass = { states: {} };
     el.setConfig({
@@ -97,7 +128,7 @@ describe('apartment-view-card-editor: images + options', () => {
     await el.updateComplete;
     let fired: any = null;
     el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
-    const form = el.shadowRoot.querySelector('ha-form.images-options') as any;
+    const form = el.shadowRoot.querySelector('ha-form.options') as any;
     form.dispatchEvent(
       new CustomEvent('value-changed', {
         detail: { value: { ...form.data, view: 'day' } },
@@ -106,6 +137,7 @@ describe('apartment-view-card-editor: images + options', () => {
       })
     );
     expect(fired.entities.length).toBe(1);
+    expect(fired.images.base).toBe('/local/day.png');
     expect(fired._legacy).toBe('keep');
   });
 });

@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   defaultEntity,
   defaultZone,
-  imagesOptionsSchema,
+  optionsSchema,
+  IMAGE_FIELDS,
   entitySchema,
   zoneSchema,
   isDirectional,
@@ -48,17 +49,26 @@ describe('isDirectional', () => {
   });
 });
 
-describe('imagesOptionsSchema', () => {
-  const schema = imagesOptionsSchema();
+describe('IMAGE_FIELDS', () => {
+  it('lists base (required) + the three optional renders, in render order', () => {
+    expect(IMAGE_FIELDS.map((f) => f.key)).toEqual([
+      'base',
+      'allLights',
+      'night',
+      'duskDawn',
+    ]);
+    expect(IMAGE_FIELDS.find((f) => f.key === 'base')!.required).toBe(true);
+    expect(IMAGE_FIELDS.find((f) => f.key === 'allLights')!.required).toBeFalsy();
+  });
+});
+
+describe('optionsSchema', () => {
+  const schema = optionsSchema();
   const names = schema.map((s) => s.name);
 
-  it('includes all image keys and all options keys', () => {
+  it('includes the option keys and NOT the image fields (those use ha-picture-upload)', () => {
     expect(names).toEqual(
       expect.arrayContaining([
-        'base',
-        'allLights',
-        'night',
-        'duskDawn',
         'view',
         'lightStyle',
         'freePanZoom',
@@ -66,11 +76,8 @@ describe('imagesOptionsSchema', () => {
         'duskDawnOffsetMinutes',
       ])
     );
-  });
-
-  it('marks only images.base as required', () => {
-    expect(schema.find((s) => s.name === 'base')!.required).toBe(true);
-    expect(schema.find((s) => s.name === 'allLights')!.required).toBeFalsy();
+    expect(names).not.toContain('base');
+    expect(names).not.toContain('allLights');
   });
 
   it('uses a select selector for view with the four TOD modes', () => {

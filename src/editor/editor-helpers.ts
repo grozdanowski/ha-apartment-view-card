@@ -73,12 +73,27 @@ const TAP_OPTIONS: { value: TapAction; label: string }[] = [
   { value: 'none', label: 'None' },
 ];
 
-export function imagesOptionsSchema(): HaFormSchema[] {
+/**
+ * Image fields are rendered with <ha-picture-upload> (HA's click-to-upload /
+ * "Pick media" widget) rather than a ha-form selector — HA has no `image`
+ * form selector, and a plain text field can't upload. Order = render order.
+ */
+export type ImageFieldKey = 'base' | 'allLights' | 'night' | 'duskDawn';
+export interface ImageFieldDef {
+  key: ImageFieldKey;
+  label: string;
+  required?: boolean;
+}
+export const IMAGE_FIELDS: ImageFieldDef[] = [
+  { key: 'base', label: 'Base render (required)', required: true },
+  { key: 'allLights', label: 'All-lights render (enables "reveal")' },
+  { key: 'night', label: 'Night render (optional)' },
+  { key: 'duskDawn', label: 'Dusk/Dawn render (optional)' },
+];
+
+/** ha-form schema for the non-image card options only. */
+export function optionsSchema(): HaFormSchema[] {
   return [
-    { name: 'base', required: true, selector: { text: {} } },
-    { name: 'allLights', selector: { text: {} } },
-    { name: 'night', selector: { text: {} } },
-    { name: 'duskDawn', selector: { text: {} } },
     {
       name: 'view',
       selector: { select: { mode: 'dropdown', options: VIEW_OPTIONS } },
