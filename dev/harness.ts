@@ -4,7 +4,29 @@ import {
   type MockHass,
 } from './mock-hass';
 import { normalizeConfig, type ApartmentViewConfig } from '../src/core/config';
-// Import the card entry so it self-registers (Phase 1: placeholder module).
+
+// Dev-only <ha-icon> stub so markers render a visible glyph in the harness
+// (real HA provides ha-icon; the mock environment does not). Renders a simple
+// filled glyph in currentColor sized to --mdc-icon-size.
+if (!customElements.get('ha-icon')) {
+  class HaIconStub extends HTMLElement {
+    static get observedAttributes() {
+      return ['icon'];
+    }
+    connectedCallback() {
+      this.style.display = 'inline-grid';
+      this.style.placeItems = 'center';
+      const size = getComputedStyle(this).getPropertyValue('--mdc-icon-size').trim() || '24px';
+      this.style.width = size;
+      this.style.height = size;
+      this.innerHTML =
+        '<svg viewBox="0 0 24 24" width="100%" height="100%" fill="currentColor" aria-hidden="true"><path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2Zm-3 18a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9Z"/></svg>';
+    }
+  }
+  customElements.define('ha-icon', HaIconStub);
+}
+
+// Import the card entry so it self-registers.
 import '../src/apartment-view-card';
 
 // ---- Demo config (v2 schema) -------------------------------------------

@@ -2,7 +2,8 @@ import { html, type TemplateResult } from 'lit';
 import { ifDefined } from 'lit/directives/if-defined.js';
 import type { HassEntity } from '../core/ha-types';
 import type { EntityConfig } from '../core/config';
-import { isActive, iconForEntity } from '../core/entity-state';
+import { isActive, intensity, iconForEntity } from '../core/entity-state';
+import { resolveLightColor, rgbCss } from '../core/light-color';
 import {
   markerScreenPos,
   clampIconScale,
@@ -21,6 +22,14 @@ export interface MarkerView {
   label: string;
   active: boolean;
   focused: boolean;
+  /** Resolved light colour (rgb css) when an active light, else undefined — drives the color-matched glow. */
+  glowColor?: string;
+  /** Brightness 0..1 for active lights (drives the glow strength + brightness ring); 0 otherwise. */
+  brightness: number;
+}
+
+function isLight(entity: EntityConfig, state: HassEntity | undefined): boolean {
+  return (state?.entity_id ?? entity.entity).split('.')[0] === 'light';
 }
 
 /** config name -> entity friendly_name -> raw entity id (never the raw id when a friendly name exists). */
@@ -51,6 +60,9 @@ export function computeMarkerViews(
   return entities.map((entity) => {
     const state = states[entity.entity];
     const { left, top } = markerScreenPos(entity.x, entity.y, t, vp);
+    const active = state ? isActive(state) : false;
+    const light = isLight(entity, state);
+    const brightness = light && state ? intensity(state) : 0;
     return {
       entity,
       state,
@@ -59,11 +71,13 @@ export function computeMarkerViews(
       iconScale: clampIconScale(t.scale),
       icon: state ? iconForEntity(state, entity) : (entity.icon ?? 'mdi:checkbox-blank-circle'),
       label: markerLabel(entity, state),
-      active: state ? isActive(state) : false,
+      active,
       focused:
         focusedZoneEntityIds === null
           ? true
           : focusedZoneEntityIds.has(entity.entity),
+      glowColor: light && active && state ? rgbCss(resolveLightColor(state)) : undefined,
+      brightness,
     };
   });
 }
@@ -87,6 +101,7 @@ export function renderMarkerOverlay(
           `left:${m.left}px`,
           `top:${m.top}px`,
           `transform:translate(-50%,-50%) scale(${m.iconScale})`,
+          ...(m.glowColor ? [`--marker-glow:${m.glowColor}`] : []),
         ].join(';');
         const ariaLabel = m.state ? `${m.label}, ${m.state.state}` : m.label;
         // aria-pressed only on toggle markers (a true on/off control).

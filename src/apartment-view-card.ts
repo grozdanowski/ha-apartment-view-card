@@ -83,7 +83,7 @@ export class ApartmentViewCard extends LitElement {
     }
     .marker-overlay .marker {
       position: absolute;
-      /* >=40px hit area for touch (icon stays ~24px, centered). */
+      /* >=40px hit area for touch (icon stays ~22px, centered). */
       min-width: 40px;
       min-height: 40px;
       transform: translate(-50%, -50%);
@@ -94,18 +94,26 @@ export class ApartmentViewCard extends LitElement {
       padding: 0;
       cursor: pointer;
       pointer-events: auto;
-      background: var(--card-background-color);
       color: var(--primary-text-color);
-      --mdc-icon-size: 24px;
-      /* Theme-aware: drop shadow + 1px ring so the marker separates from any
-         floorplan colour on both light and dark themes. The --divider-color
-         fallback is required — an undefined var with no fallback would
-         invalidate the WHOLE box-shadow (it would compute to none). */
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35),
-        0 0 0 1px var(--divider-color, rgba(127, 127, 127, 0.4));
+      --mdc-icon-size: 22px;
+      /* Frosted, dimensional chip that floats above the floorplan. The
+         translucent fill + backdrop blur read on any image; the inset hairline
+         gives a crisp edge on light and dark themes alike. */
+      background: color-mix(in srgb, var(--card-background-color, #1c1c1e) 68%, transparent);
+      -webkit-backdrop-filter: blur(8px) saturate(1.4);
+      backdrop-filter: blur(8px) saturate(1.4);
+      box-shadow:
+        0 4px 14px rgba(0, 0, 0, 0.42),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.14);
       transition: left 0.6s cubic-bezier(.4,0,.2,1), top 0.6s cubic-bezier(.4,0,.2,1),
         transform 0.6s cubic-bezier(.4,0,.2,1),
-        opacity 0.3s ease, background-color 0.3s ease, color 0.3s ease;
+        scale 0.26s cubic-bezier(.34,1.56,.64,1),
+        box-shadow 0.4s ease, opacity 0.3s ease, color 0.4s ease;
+    }
+    /* press feedback — the individual 'scale' property composes with the
+       positioning transform (translate + icon scale) without clobbering it. */
+    .marker-overlay .marker:active {
+      scale: 0.86;
     }
     .marker-overlay .marker:focus-visible,
     .zone-chip:focus-visible {
@@ -113,8 +121,17 @@ export class ApartmentViewCard extends LitElement {
       outline-offset: 2px;
     }
     .marker-overlay .marker.active {
-      background: var(--primary-color);
-      color: var(--text-primary-color);
+      /* bloom in the light's actual colour (--marker-glow set inline); the icon
+         picks up the colour too so the chip feels lit from within. The concrete
+         #03a9f4 fallback (HA's default primary) is required — an undefined
+         --primary-color would invalidate the whole box-shadow (-> none). */
+      --av-accent: var(--marker-glow, var(--primary-color, #03a9f4));
+      color: var(--av-accent);
+      box-shadow:
+        0 4px 14px rgba(0, 0, 0, 0.42),
+        inset 0 0 0 1px color-mix(in srgb, var(--av-accent) 55%, rgba(255, 255, 255, 0.14)),
+        0 0 18px 1px color-mix(in srgb, var(--av-accent) 72%, transparent),
+        0 0 5px 0 var(--av-accent);
     }
     .marker-overlay .marker.dimmed {
       opacity: 0.25;

@@ -104,6 +104,24 @@ describe('computeMarkerViews', () => {
     );
     expect(views[0].state).toBeUndefined();
     expect(views[0].active).toBe(false);
+    expect(views[0].glowColor).toBeUndefined();
+    expect(views[0].brightness).toBe(0);
+  });
+
+  it('sets glowColor (resolved light colour) + brightness for an active light', () => {
+    const colored: HassEntity = { entity_id: 'light.x', state: 'on', attributes: { rgb_color: [255, 100, 50], brightness: 128 } };
+    const views = computeMarkerViews([ent({ entity: 'light.x' })], { 'light.x': colored }, t, vp, null);
+    expect(views[0].glowColor).toMatch(/^rgb\(\s*255\s*,\s*100\s*,\s*50\s*\)$/);
+    expect(views[0].brightness).toBeCloseTo(128 / 255, 2);
+  });
+
+  it('clears glowColor when the light is off and never sets it for non-lights', () => {
+    const off = computeMarkerViews([ent({ entity: 'light.x' })], { 'light.x': lightState(false) }, t, vp, null);
+    expect(off[0].glowColor).toBeUndefined();
+    const tv: HassEntity = { entity_id: 'media_player.tv', state: 'playing', attributes: {} };
+    const views = computeMarkerViews([ent({ entity: 'media_player.tv', tap: 'more-info' })], { 'media_player.tv': tv }, t, vp, null);
+    expect(views[0].glowColor).toBeUndefined();
+    expect(views[0].brightness).toBe(0);
   });
 });
 
@@ -118,6 +136,7 @@ function makeView(over: Partial<MarkerView> = {}): MarkerView {
     label: 'Lamp',
     active: true,
     focused: true,
+    brightness: 1,
     ...over,
   };
 }
