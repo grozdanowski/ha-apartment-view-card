@@ -192,8 +192,83 @@ export function lockCaps(state: HassEntity | undefined): LockCaps {
   return { openLatch: (f & LOCK_FEATURE.OPEN) !== 0 };
 }
 
+/** VacuumEntityFeature bits (subset). */
+export const VACUUM_FEATURE = {
+  PAUSE: 4,
+  STOP: 8,
+  RETURN_HOME: 16,
+  FAN_SPEED: 32,
+  BATTERY: 64,
+  LOCATE: 512,
+  CLEAN_SPOT: 1024,
+  START: 8192,
+} as const;
+
+export interface VacuumCaps {
+  start: boolean;
+  pause: boolean;
+  stop: boolean;
+  returnHome: boolean;
+  locate: boolean;
+  fanSpeed: boolean;
+  fanSpeeds: string[];
+  battery: boolean;
+}
+
+export function vacuumCaps(state: HassEntity | undefined): VacuumCaps {
+  const a = state?.attributes ?? {};
+  const f = Number(a.supported_features) || 0;
+  const has = (bit: number) => (f & bit) !== 0;
+  return {
+    start: has(VACUUM_FEATURE.START),
+    pause: has(VACUUM_FEATURE.PAUSE),
+    stop: has(VACUUM_FEATURE.STOP),
+    returnHome: has(VACUUM_FEATURE.RETURN_HOME),
+    locate: has(VACUUM_FEATURE.LOCATE),
+    fanSpeed: has(VACUUM_FEATURE.FAN_SPEED),
+    fanSpeeds: Array.isArray(a.fan_speed_list) ? a.fan_speed_list : [],
+    battery: has(VACUUM_FEATURE.BATTERY) || typeof a.battery_level === 'number',
+  };
+}
+
+/** AlarmControlPanelEntityFeature bits. */
+export const ALARM_FEATURE = {
+  ARM_HOME: 1,
+  ARM_AWAY: 2,
+  ARM_NIGHT: 4,
+  TRIGGER: 8,
+  ARM_CUSTOM_BYPASS: 16,
+  ARM_VACATION: 32,
+} as const;
+
+export interface AlarmCaps {
+  armHome: boolean;
+  armAway: boolean;
+  armNight: boolean;
+  armVacation: boolean;
+  armCustom: boolean;
+  /** Truthy when a code is required to arm/disarm. */
+  codeFormat?: string;
+}
+
+export function alarmCaps(state: HassEntity | undefined): AlarmCaps {
+  const a = state?.attributes ?? {};
+  const f = Number(a.supported_features) || 0;
+  const has = (bit: number) => (f & bit) !== 0;
+  return {
+    armHome: has(ALARM_FEATURE.ARM_HOME),
+    armAway: has(ALARM_FEATURE.ARM_AWAY),
+    armNight: has(ALARM_FEATURE.ARM_NIGHT),
+    armVacation: has(ALARM_FEATURE.ARM_VACATION),
+    armCustom: has(ALARM_FEATURE.ARM_CUSTOM_BYPASS),
+    codeFormat: typeof a.code_format === 'string' ? a.code_format : undefined,
+  };
+}
+
 /** Which control-surface body an entity drives. */
-export type ControlKind = 'light' | 'media' | 'climate' | 'cover' | 'fan' | 'lock' | 'none';
+export type ControlKind =
+  | 'light' | 'media' | 'climate' | 'cover' | 'fan' | 'lock'
+  | 'vacuum' | 'number' | 'select' | 'alarm' | 'none';
 
 const DOMAIN_KIND: Record<string, ControlKind> = {
   light: 'light',
@@ -202,6 +277,12 @@ const DOMAIN_KIND: Record<string, ControlKind> = {
   cover: 'cover',
   fan: 'fan',
   lock: 'lock',
+  vacuum: 'vacuum',
+  number: 'number',
+  input_number: 'number',
+  select: 'select',
+  input_select: 'select',
+  alarm_control_panel: 'alarm',
 };
 
 export function controlKind(entityId: string): ControlKind {

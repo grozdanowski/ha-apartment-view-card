@@ -11,6 +11,8 @@ import {
   coverCaps,
   fanCaps,
   lockCaps,
+  vacuumCaps,
+  alarmCaps,
   controlKind,
   type ControlKind,
 } from '../core/entity-capabilities';
@@ -151,11 +153,13 @@ export class AvControlSurface extends LitElement {
 
   protected updated(): void {
     // A <select>'s value can't be set declaratively before its <option>s exist,
-    // so reflect the current media source onto the picker after each render.
+    // so reflect the current value onto the picker after each render. Media uses
+    // attributes.source; a select/input_select uses the entity state.
     const sel = this.renderRoot.querySelector('select.src') as HTMLSelectElement | null;
     if (!sel) return;
-    const src = this._state(this.entityIds[0])?.attributes?.source;
-    if (typeof src === 'string' && sel.value !== src) sel.value = src;
+    const st = this._state(this.entityIds[0]);
+    const want = this._kind === 'select' ? st?.state : st?.attributes?.source;
+    if (typeof want === 'string' && sel.value !== want) sel.value = want;
   }
 
   protected render(): TemplateResult | typeof nothing {
@@ -196,11 +200,11 @@ export class AvControlSurface extends LitElement {
           <div class="h-title">${title}</div>
           <div class="h-sub">${sub}</div>
         </div>
-        ${this._kind === 'cover' || this._kind === 'lock'
-          ? nothing
-          : html`<button class="pwr ${anyOn ? '' : 'off'}" @click=${() => this._call('homeassistant', anyOn ? 'turn_off' : 'turn_on', {})} ?disabled=${disabled}>
+        ${['light', 'media', 'climate', 'fan'].includes(this._kind)
+          ? html`<button class="pwr ${anyOn ? '' : 'off'}" @click=${() => this._call('homeassistant', anyOn ? 'turn_off' : 'turn_on', {})} ?disabled=${disabled}>
               <ha-icon icon="mdi:power"></ha-icon>${multi ? (anyOn ? 'All off' : 'All on') : anyOn ? 'Off' : 'On'}
-            </button>`}
+            </button>`
+          : nothing}
         <button class="close" aria-label="Close" @click=${this._close}><ha-icon icon="mdi:close"></ha-icon></button>
       </div>
     `;
@@ -220,14 +224,26 @@ export class AvControlSurface extends LitElement {
       const p = state.attributes?.percentage;
       return isActive(state) ? (typeof p === 'number' ? `${Math.round(p)}%` : 'On') : 'Off';
     }
-    if (k === 'lock') return state.state.charAt(0).toUpperCase() + state.state.slice(1);
+    if (k === 'lock') return this._humanize(state.state);
+    if (k === 'vacuum') {
+      const bat = state.attributes?.battery_level;
+      return `${this._humanize(state.state)}${typeof bat === 'number' ? ` · ${Math.round(bat)}%` : ''}`;
+    }
+    if (k === 'number') return `${state.state}${typeof state.attributes?.unit_of_measurement === 'string' ? ' ' + state.attributes.unit_of_measurement : ''}`;
+    if (k === 'select') return this._humanize(state.state);
+    if (k === 'alarm') return this._humanize(state.state);
     return isActive(state) ? `${Math.round(intensity(state) * 100)}%` : 'Off';
+  }
+  private _humanize(s: string): string {
+    return s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ') : s;
   }
   private _avatarIcon(id: string): string {
     const k = id ? controlKind(id) : 'light';
     const icons: Record<ControlKind, string> = {
       media: 'mdi:cast', climate: 'mdi:thermostat', cover: 'mdi:window-shutter',
       fan: 'mdi:fan', lock: 'mdi:lock', light: 'mdi:lightbulb', none: 'mdi:lightbulb',
+      vacuum: 'mdi:robot-vacuum', number: 'mdi:tune-vertical', select: 'mdi:format-list-bulleted',
+      alarm: 'mdi:shield-home',
     };
     return icons[k];
   }
@@ -237,6 +253,11 @@ export class AvControlSurface extends LitElement {
     return { color };
   }
 
+  /** Domain of the first controlled entity (for number/select/input_* service routing). */
+  private get _domain(): string {
+    return (this.entityIds[0] || '').split('.')[0];
+  }
+
   private _renderBody(disabled: boolean): TemplateResult {
     const kind = this._kind;
     if (kind === 'media') return this._renderMedia();
@@ -244,6 +265,10 @@ export class AvControlSurface extends LitElement {
     if (kind === 'cover') return this._renderCover();
     if (kind === 'fan') return this._renderFan();
     if (kind === 'lock') return this._renderLock();
+    if (kind === 'vacuum') return this._renderVacuum();
+    if (kind === 'number') return this._renderNumber();
+    if (kind === 'select') return this._renderSelect();
+    if (kind === 'alarm') return this._renderAlarm();
     return this._renderLight(disabled);
   }
 
@@ -488,6 +513,131 @@ export class AvControlSurface extends LitElement {
     if (typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm('Open the lock latch?')) return;
     this._call('lock', 'open', {});
   };
+
+  // ---- Vacuum -----------------------------------------------------------
+  private _renderVacuum(): TemplateResult {
+    const state = this._state(this.entityIds[0]);
+    const c = vacuumCaps(state);
+    const a = state?.attributes ?? {};
+    const cleaning = state?.state === 'cleaning';
+    const fan = a.fan_speed;
+    return html`
+      <div class="body">
+        <div class="row transport" style="justify-content:center">
+          ${c.start
+            ? html`<button class="tbtn play" aria-label=${cleaning ? 'Pause' : 'Start'} @click=${() => this._call('vacuum', cleaning && c.pause ? 'pause' : 'start', {})}><ha-icon icon=${cleaning ? 'mdi:pause' : 'mdi:play'}></ha-icon></button>`
+            : nothing}
+          ${c.stop ? html`<button class="tbtn" aria-label="Stop" @click=${() => this._call('vacuum', 'stop', {})}><ha-icon icon="mdi:stop"></ha-icon></button>` : nothing}
+          ${c.returnHome ? html`<button class="tbtn" aria-label="Return to dock" @click=${() => this._call('vacuum', 'return_to_base', {})}><ha-icon icon="mdi:home-import-outline"></ha-icon></button>` : nothing}
+          ${c.locate ? html`<button class="tbtn" aria-label="Locate" @click=${() => this._call('vacuum', 'locate', {})}><ha-icon icon="mdi:map-marker"></ha-icon></button>` : nothing}
+        </div>
+        ${c.fanSpeed && c.fanSpeeds.length
+          ? html`<div class="row modes">
+              ${c.fanSpeeds.map((fs) => html`<button class="mode ${fan === fs ? 'sel' : ''}" @click=${() => this._call('vacuum', 'set_fan_speed', { fan_speed: fs })}>${fs}</button>`)}
+            </div>`
+          : nothing}
+      </div>
+    `;
+  }
+
+  // ---- Number (number / input_number) -----------------------------------
+  private _numBounds(): { min: number; max: number; step: number } {
+    const a = this._state(this.entityIds[0])?.attributes ?? {};
+    return {
+      min: typeof a.min === 'number' ? a.min : 0,
+      max: typeof a.max === 'number' ? a.max : 100,
+      step: typeof a.step === 'number' && a.step > 0 ? a.step : 1,
+    };
+  }
+  private _renderNumber(): TemplateResult {
+    const state = this._state(this.entityIds[0]);
+    const { min, max } = this._numBounds();
+    const v = Number(state?.state);
+    const cur = Number.isFinite(v) ? v : min;
+    const pct = max > min ? ((cur - min) / (max - min)) * 100 : 0;
+    return html`
+      <div class="body">
+        <div class="row">
+          <span class="ico"><ha-icon icon="mdi:tune-vertical"></ha-icon></span>
+          <div class="track" role="slider" tabindex="0" aria-label="Value" aria-valuenow=${cur}
+            @pointerdown=${this._numDown} @pointermove=${this._numMove} @pointerup=${this._numUp} @keydown=${this._numKey}>
+            <div class="fill" style="width:${Math.max(0, Math.min(100, pct))}%;background:linear-gradient(90deg,#7c9cff,#bcd6ff)"></div>
+            <span class="pct">${cur}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  private _numDrag = false;
+  private _numFromEvent(e: PointerEvent): number {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const { min, max, step } = this._numBounds();
+    const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    return Math.round((min + frac * (max - min)) / step) * step;
+  }
+  private _numDown = (e: PointerEvent): void => { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); this._numDrag = true; this._setNumber(this._numFromEvent(e)); };
+  private _numMove = (e: PointerEvent): void => { if (!this._numDrag) return; const now = Date.now(); if (now - this._lastCall < 120) return; this._lastCall = now; this._setNumber(this._numFromEvent(e)); };
+  private _numUp = (e: PointerEvent): void => { if (!this._numDrag) return; this._numDrag = false; this._setNumber(this._numFromEvent(e)); };
+  private _numKey = (e: KeyboardEvent): void => {
+    const { min, max, step } = this._numBounds();
+    const cur = Number(this._state(this.entityIds[0])?.state) || min;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') this._setNumber(Math.min(max, cur + step));
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') this._setNumber(Math.max(min, cur - step));
+  };
+  private _setNumber(v: number): void {
+    this._call(this._domain, 'set_value', { value: v });
+  }
+
+  // ---- Select (select / input_select) -----------------------------------
+  private _renderSelect(): TemplateResult {
+    const state = this._state(this.entityIds[0]);
+    const options: string[] = Array.isArray(state?.attributes?.options) ? state!.attributes.options : [];
+    const cur = state?.state;
+    if (!options.length) return html`<div class="body"></div>`;
+    if (options.length <= 4) {
+      return html`<div class="body">
+        <div class="row modes">
+          ${options.map((o) => html`<button class="mode ${cur === o ? 'sel' : ''}" @click=${() => this._call(this._domain, 'select_option', { option: o })}>${o}</button>`)}
+        </div>
+      </div>`;
+    }
+    return html`<div class="body">
+      <div class="row">
+        <select class="src" aria-label="Option" @change=${(e: Event) => this._call(this._domain, 'select_option', { option: (e.target as HTMLSelectElement).value })}>
+          ${options.map((o) => html`<option value=${o}>${o}</option>`)}
+        </select>
+      </div>
+    </div>`;
+  }
+
+  // ---- Alarm ------------------------------------------------------------
+  private _renderAlarm(): TemplateResult {
+    const state = this._state(this.entityIds[0]);
+    const c = alarmCaps(state);
+    const s = state?.state ?? 'unknown';
+    const arm = (svc: string) => () => {
+      const data: Record<string, unknown> = {};
+      if (c.codeFormat && typeof window !== 'undefined' && typeof window.prompt === 'function') {
+        const v = window.prompt('Enter alarm code');
+        if (v == null) return;
+        data.code = v;
+      }
+      this._call('alarm_control_panel', svc, data);
+    };
+    return html`
+      <div class="body">
+        <div class="row modes">
+          ${c.armHome ? html`<button class="mode ${s === 'armed_home' ? 'sel' : ''}" @click=${arm('alarm_arm_home')}><ha-icon icon="mdi:home"></ha-icon> Home</button>` : nothing}
+          ${c.armAway ? html`<button class="mode ${s === 'armed_away' ? 'sel' : ''}" @click=${arm('alarm_arm_away')}><ha-icon icon="mdi:shield-lock"></ha-icon> Away</button>` : nothing}
+          ${c.armNight ? html`<button class="mode ${s === 'armed_night' ? 'sel' : ''}" @click=${arm('alarm_arm_night')}><ha-icon icon="mdi:weather-night"></ha-icon> Night</button>` : nothing}
+          ${c.armVacation ? html`<button class="mode ${s === 'armed_vacation' ? 'sel' : ''}" @click=${arm('alarm_arm_vacation')}><ha-icon icon="mdi:airplane"></ha-icon> Vacation</button>` : nothing}
+        </div>
+        <div class="row">
+          <button class="mode ${s === 'disarmed' ? 'sel' : ''}" @click=${arm('alarm_disarm')}><ha-icon icon="mdi:shield-off"></ha-icon> Disarm</button>
+        </div>
+      </div>
+    `;
+  }
 
   // ---- Climate ----------------------------------------------------------
   private _displayTemp(state: HassEntity): number | string {

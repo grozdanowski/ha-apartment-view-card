@@ -146,3 +146,32 @@ describe('group resolution', () => {
     expect(controlTarget('light.a', states)).toEqual({ kind: 'light', ids: ['light.a'] });
   });
 });
+
+import { vacuumCaps, alarmCaps, VACUUM_FEATURE, ALARM_FEATURE } from '../src/core/entity-capabilities';
+
+describe('controlKind (vacuum/number/select/alarm)', () => {
+  it('maps the new domains', () => {
+    expect(controlKind('vacuum.robot')).toBe('vacuum');
+    expect(controlKind('number.x')).toBe('number');
+    expect(controlKind('input_number.x')).toBe('number');
+    expect(controlKind('select.x')).toBe('select');
+    expect(controlKind('input_select.x')).toBe('select');
+    expect(controlKind('alarm_control_panel.home')).toBe('alarm');
+  });
+});
+
+describe('vacuumCaps', () => {
+  it('reads start/pause/stop/return/locate/fanSpeed + battery', () => {
+    const f = VACUUM_FEATURE.START | VACUUM_FEATURE.PAUSE | VACUUM_FEATURE.STOP | VACUUM_FEATURE.RETURN_HOME | VACUUM_FEATURE.LOCATE | VACUUM_FEATURE.FAN_SPEED;
+    expect(vacuumCaps(ent('vacuum.r', { supported_features: f, fan_speed_list: ['quiet', 'turbo'], battery_level: 80 })))
+      .toMatchObject({ start: true, pause: true, stop: true, returnHome: true, locate: true, fanSpeed: true, fanSpeeds: ['quiet', 'turbo'], battery: true });
+  });
+});
+
+describe('alarmCaps', () => {
+  it('reads arm modes + code format', () => {
+    const f = ALARM_FEATURE.ARM_HOME | ALARM_FEATURE.ARM_AWAY | ALARM_FEATURE.ARM_NIGHT;
+    expect(alarmCaps(ent('alarm_control_panel.a', { supported_features: f, code_format: 'number' })))
+      .toMatchObject({ armHome: true, armAway: true, armNight: true, armVacation: false, codeFormat: 'number' });
+  });
+});

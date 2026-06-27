@@ -232,3 +232,64 @@ describe('control-surface: homogeneous group', () => {
     expect(sr.querySelector('[aria-label="Brightness"]')).toBeNull();
   });
 });
+
+import { VACUUM_FEATURE, ALARM_FEATURE } from '../src/core/entity-capabilities';
+
+describe('control-surface: vacuum', () => {
+  it('start button calls vacuum.start; cleaning shows pause; fan speed chips set_fan_speed', async () => {
+    const f = VACUUM_FEATURE.START | VACUUM_FEATURE.STOP | VACUUM_FEATURE.RETURN_HOME | VACUUM_FEATURE.FAN_SPEED;
+    const { sr, hass } = await mount(['vacuum.robot'], { 'vacuum.robot': ent('vacuum.robot', 'docked', { supported_features: f, fan_speed_list: ['quiet', 'turbo'], fan_speed: 'quiet', battery_level: 90 }) });
+    (sr.querySelector('[aria-label="Start"]') as HTMLElement).click();
+    expect(hass.calls.at(-1)).toMatchObject({ domain: 'vacuum', service: 'start' });
+    const chips = Array.from(sr.querySelectorAll('.mode')).filter((b) => /quiet|turbo/.test(b.textContent || ''));
+    expect(chips.length).toBe(2);
+    (chips[1] as HTMLElement).click();
+    expect(hass.calls.at(-1)).toMatchObject({ domain: 'vacuum', service: 'set_fan_speed' });
+    expect(hass.calls.at(-1)!.data.fan_speed).toBe('turbo');
+  });
+  it('a cleaning vacuum shows Pause', async () => {
+    const { sr } = await mount(['vacuum.r'], { 'vacuum.r': ent('vacuum.r', 'cleaning', { supported_features: VACUUM_FEATURE.START | VACUUM_FEATURE.PAUSE }) });
+    expect(sr.querySelector('[aria-label="Pause"]')).toBeTruthy();
+  });
+});
+
+describe('control-surface: number', () => {
+  it('keyboard on the slider calls set_value on the entity domain (input_number)', async () => {
+    const { sr, hass } = await mount(['input_number.bright'], { 'input_number.bright': ent('input_number.bright', '5', { min: 0, max: 10, step: 1 }) });
+    (sr.querySelector('[aria-label="Value"]') as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+    expect(hass.calls.at(-1)).toMatchObject({ domain: 'input_number', service: 'set_value' });
+    expect(hass.calls.at(-1)!.data.value).toBe(6);
+  });
+});
+
+describe('control-surface: select', () => {
+  it('<=4 options render chips; clicking calls select_option', async () => {
+    const { sr, hass } = await mount(['input_select.mode'], { 'input_select.mode': ent('input_select.mode', 'Day', { options: ['Day', 'Night'] }) });
+    const chips = Array.from(sr.querySelectorAll('.mode'));
+    expect(chips.length).toBe(2);
+    (chips[1] as HTMLElement).click();
+    expect(hass.calls.at(-1)).toMatchObject({ domain: 'input_select', service: 'select_option' });
+    expect(hass.calls.at(-1)!.data.option).toBe('Night');
+  });
+  it('>4 options render a dropdown synced to the current state', async () => {
+    const opts = ['a', 'b', 'c', 'd', 'e'];
+    const { sr } = await mount(['select.x'], { 'select.x': ent('select.x', 'c', { options: opts }) });
+    const dd = sr.querySelector('select.src') as HTMLSelectElement;
+    expect(dd).toBeTruthy();
+    expect(dd.value).toBe('c');
+  });
+});
+
+describe('control-surface: alarm', () => {
+  it('arm-home + disarm call the alarm services; no header power', async () => {
+    const f = ALARM_FEATURE.ARM_HOME | ALARM_FEATURE.ARM_AWAY;
+    const { sr, hass } = await mount(['alarm_control_panel.home'], { 'alarm_control_panel.home': ent('alarm_control_panel.home', 'disarmed', { supported_features: f }) });
+    expect(sr.querySelector('.pwr')).toBeNull();
+    const home = Array.from(sr.querySelectorAll('.mode')).find((b) => /home/i.test(b.textContent || '')) as HTMLElement;
+    home.click();
+    expect(hass.calls.at(-1)).toMatchObject({ domain: 'alarm_control_panel', service: 'alarm_arm_home' });
+    const disarm = Array.from(sr.querySelectorAll('.mode')).find((b) => /disarm/i.test(b.textContent || '')) as HTMLElement;
+    disarm.click();
+    expect(hass.calls.at(-1)).toMatchObject({ domain: 'alarm_control_panel', service: 'alarm_disarm' });
+  });
+});
