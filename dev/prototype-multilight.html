@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Floorplan controls — interaction prototype</title>
+<style>
+  :root { --spring: cubic-bezier(.34,1.56,.64,1); --out: cubic-bezier(.4,0,.2,1); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; min-height: 100vh; background: #0a0c10; color: #f5f5f7; display: grid; place-items: center; padding: 24px; }
+  .frame { width: min(560px, 96vw); }
+  .title { font-size: 13px; color: #8a8f98; margin: 0 0 10px 2px; }
+
+  .stage { position: relative; width: 100%; aspect-ratio: 1166 / 730; border-radius: 18px; overflow: hidden; background: #11151c;
+           box-shadow: 0 18px 50px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.06); touch-action: none; perspective: 1000px; perspective-origin: 50% 50%; }
+  .tilt { position: absolute; inset: 0; transform-origin: 50% 50%; transform-style: preserve-3d; transition: transform .62s var(--out); }
+  .scene { position: absolute; inset: 0; transform-origin: 0 0; transition: transform .62s var(--out); will-change: transform; }
+  .floor { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  .glows { position: absolute; inset: 0; pointer-events: none; }
+  .glow { position: absolute; inset: 0; mix-blend-mode: soft-light; transition: opacity .4s var(--out), background-color .35s var(--out); }
+
+  .topbar { position: absolute; top: 12px; right: 12px; z-index: 6; }
+  .pill { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 14px; border-radius: 17px; border: none; cursor: pointer; font: inherit;
+          font-size: 13px; font-weight: 500; color: #f5f5f7; background: rgba(28,30,36,.6); -webkit-backdrop-filter: blur(14px) saturate(1.5); backdrop-filter: blur(14px) saturate(1.5);
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,.14), 0 4px 14px rgba(0,0,0,.35); transition: transform .2s var(--spring), background-color .2s var(--out); }
+  .pill:active { transform: scale(.95); }
+  .pill.on { background: rgba(10,132,255,.9); box-shadow: inset 0 0 0 1px rgba(255,255,255,.25), 0 4px 16px rgba(10,132,255,.4); }
+  .pill svg { width: 16px; height: 16px; }
+  .banner { position: absolute; top: 12px; left: 12px; z-index: 6; display: none; align-items: center; gap: 8px; height: 34px; padding: 0 6px 0 14px; border-radius: 17px;
+            font-size: 13px; color: #f5f5f7; background: rgba(28,30,36,.6); -webkit-backdrop-filter: blur(14px) saturate(1.5); backdrop-filter: blur(14px) saturate(1.5); box-shadow: inset 0 0 0 1px rgba(255,255,255,.14), 0 4px 14px rgba(0,0,0,.35); }
+  .banner .count { color: #c7cad1; }
+  .banner button { all: unset; cursor: pointer; padding: 6px 12px; border-radius: 13px; background: rgba(255,255,255,.14); font-size: 13px; font-weight: 500; }
+  body.selecting .banner { display: flex; }
+
+  .mwrap { position: absolute; transform: translate(-50%,-50%); z-index: 4; transition: opacity .4s var(--out); }
+  .marker { width: 44px; height: 44px; border: none; padding: 0; border-radius: 50%; cursor: pointer; color: #e9ebf0; display: grid; place-items: center;
+            background: rgba(22,24,30,.55); -webkit-backdrop-filter: blur(10px) saturate(1.4); backdrop-filter: blur(10px) saturate(1.4);
+            box-shadow: 0 5px 16px rgba(0,0,0,.45), inset 0 0 0 1px rgba(255,255,255,.16); transition: box-shadow .35s var(--out), color .35s var(--out), scale .24s var(--spring); }
+  .marker:active { scale: .86; } .marker svg { width: 22px; height: 22px; }
+  .marker.on { color: var(--c, #ffd9a0); box-shadow: 0 5px 16px rgba(0,0,0,.45), inset 0 0 0 1px color-mix(in srgb, var(--c) 55%, rgba(255,255,255,.16)), 0 0 22px 1px color-mix(in srgb, var(--c) 72%, transparent), 0 0 6px 0 var(--c); }
+  .marker.open { box-shadow: 0 5px 16px rgba(0,0,0,.45), inset 0 0 0 2px #fff; }
+  .check { position: absolute; right: -4px; top: -4px; width: 19px; height: 19px; border-radius: 50%; display: none; place-items: center; background: rgba(15,17,22,.92); color: transparent;
+           box-shadow: 0 0 0 2px #0a0c10, inset 0 0 0 1.5px rgba(255,255,255,.55); transition: background .18s, color .18s, box-shadow .18s; }
+  .check svg { width: 12px; height: 12px; }
+  body.selecting .mwrap.selectable .check, body.selecting .mwrap.selected .check { display: grid; }
+  .mwrap.selected .check { background: #0a84ff; color: #fff; box-shadow: 0 0 0 2px #0a0c10, inset 0 0 0 1.5px #0a84ff; }
+  .mwrap.outzone { opacity: .22; pointer-events: none; }
+  body.selecting .mwrap.dim { opacity: .24; pointer-events: none; filter: grayscale(.6); }
+  body.selecting .mwrap.selectable .marker { box-shadow: 0 5px 16px rgba(0,0,0,.45), inset 0 0 0 1.5px rgba(255,255,255,.34); }
+  .mwrap.selected .marker { scale: 1.04; }
+
+  .zonebar { display: flex; gap: 8px; overflow-x: auto; padding: 10px 2px; scrollbar-width: none; } .zonebar::-webkit-scrollbar { display: none; }
+  .chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 17px; border: none; cursor: pointer; font: inherit;
+          font-size: 13px; font-weight: 500; color: #e9ebf0; background: #1a1d24; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); white-space: nowrap; transition: transform .18s var(--spring), background-color .2s; }
+  .chip:active { transform: scale(.96); } .chip.sel { background: rgba(10,132,255,.9); } .chip.back { background: #23262e; } .chip svg { width: 15px; height: 15px; }
+
+  .panel { margin-top: 4px; border-radius: 14px; overflow: hidden; background: #14161c; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); max-height: 0; opacity: 0; transition: max-height .42s var(--spring), opacity .28s var(--out); }
+  .panel.show { max-height: 280px; opacity: 1; } .panel-inner { padding: 14px 18px 18px; }
+  .panel.disabled .body { opacity: .36; pointer-events: none; filter: saturate(.4); }
+  .head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .avatars { display: flex; } .av { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; margin-left: -8px; background: #2a2d34; box-shadow: 0 0 0 2px #14161c; color: var(--c, #ffd9a0); }
+  .av:first-child { margin-left: 0; } .av svg { width: 16px; height: 16px; }
+  .h-title { font-size: 16px; font-weight: 500; } .h-sub { font-size: 12px; color: #8a8f98; }
+  .pwr { all: unset; cursor: pointer; margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 13px; font-size: 12px; font-weight: 500; background: rgba(255,255,255,.12); }
+  .pwr.off { background: rgba(255,255,255,.06); color: #8a8f98; } .pwr svg { width: 14px; height: 14px; }
+  .close { all: unset; cursor: pointer; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: rgba(255,255,255,.1); } .close:active { background: rgba(255,255,255,.18); } .close svg { width: 14px; height: 14px; }
+
+  .body { display: none; } .body.active { display: block; }
+  .row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; } .row:last-child { margin-bottom: 0; }
+  .ico { color: #c7cad1; display: grid; place-items: center; } .ico svg { width: 18px; height: 18px; }
+  .track { position: relative; flex: 1; height: 40px; border-radius: 12px; overflow: hidden; background: rgba(255,255,255,.1); cursor: pointer; touch-action: none; }
+  .fill { position: absolute; left: 0; top: 0; bottom: 0; width: 60%; transition: width .1s linear, background .3s; }
+  .fill.bri { background: linear-gradient(90deg,#ffcaa0,#fff0d8); } .fill.vol { background: linear-gradient(90deg,#5b9bff,#bcd6ff); }
+  .track .pct { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 13px; font-weight: 500; color: #1a1a1a; mix-blend-mode: overlay; }
+  .swatches { display: flex; gap: 10px; align-items: center; } .swatches .lbl { font-size: 12px; color: #8a8f98; margin-right: 2px; }
+  .sw { width: 30px; height: 30px; border-radius: 50%; cursor: pointer; border: none; padding: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); transition: transform .18s var(--spring); }
+  .sw:active { transform: scale(.9); } .sw.sel { box-shadow: inset 0 0 0 1px rgba(255,255,255,.18), 0 0 0 2px #fff, 0 0 0 4px rgba(0,0,0,.4); }
+  .transport { display: flex; align-items: center; gap: 16px; }
+  .tbtn { all: unset; cursor: pointer; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: #e9ebf0; background: rgba(255,255,255,.08); }
+  .tbtn.play { width: 48px; height: 48px; background: rgba(255,255,255,.16); } .tbtn svg { width: 20px; height: 20px; } .tbtn.play svg { width: 24px; height: 24px; }
+  .nowplaying { font-size: 13px; color: #c7cad1; flex: 1; } .nowplaying b { font-weight: 500; color: #f5f5f7; }
+  .temp { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+  .tval { font-size: 34px; font-weight: 500; min-width: 86px; } .tval span { font-size: 16px; color: #8a8f98; }
+  .stepper { display: flex; flex-direction: column; gap: 6px; } .step { all: unset; cursor: pointer; width: 38px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: rgba(255,255,255,.1); color: #e9ebf0; } .step svg { width: 16px; height: 16px; }
+  .modes { display: flex; gap: 8px; } .mode { all: unset; cursor: pointer; flex: 1; text-align: center; padding: 9px 0; border-radius: 11px; font-size: 13px; font-weight: 500; background: rgba(255,255,255,.08); color: #b9bdc6; }
+  .mode.sel { color: #fff; } .mode.cool.sel { background: rgba(91,155,255,.85); } .mode.heat.sel { background: rgba(255,120,90,.85); } .mode.auto.sel { background: rgba(120,200,160,.8); color:#06281c; }
+
+  .hint { margin: 12px 2px 0; font-size: 12px; color: #6f747c; line-height: 1.5; }
+  kbd { background: #1c1f26; border-radius: 5px; padding: 1px 6px; font: inherit; font-size: 11px; color: #c7cad1; box-shadow: inset 0 0 0 1px rgba(255,255,255,.1); }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <p class="title">Floorplan controls — interactive prototype (tap things)</p>
+    <div class="stage" id="stage">
+      <div class="tilt" id="tilt">
+        <div class="scene" id="scene">
+          <img class="floor" src="/day.png" alt="floorplan" />
+          <div class="glows" id="glows"></div>
+          <div id="markers"></div>
+        </div>
+      </div>
+      <div class="topbar">
+        <button class="pill" id="multiBtn" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2.4" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="2.4" fill="currentColor" stroke="none"/><circle cx="8" cy="18" r="2.4" fill="currentColor" stroke="none"/></svg>
+          Lights control
+        </button>
+      </div>
+      <div class="banner" id="banner"><span class="count" id="selCount">Select lights</span><button id="doneBtn">Done</button></div>
+    </div>
+
+    <div class="zonebar" id="zonebar"></div>
+
+    <div class="panel" id="panel"><div class="panel-inner">
+      <div class="head">
+        <div class="avatars" id="avatars"></div>
+        <div><div class="h-title" id="hTitle">Light</div><div class="h-sub" id="hSub"></div></div>
+        <button class="pwr" id="pwrBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v8"/><path d="M7 7a7 7 0 1 0 10 0"/></svg><span id="pwrLbl">On</span></button>
+        <button class="close" id="closeBtn" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="body body-light">
+        <div class="row"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6L19 19M19 5l-1.4 1.4M6.4 17.6L5 19"/></svg></span>
+          <div class="track" id="briTrack"><div class="fill bri" id="briFill"></div><span class="pct" id="briPct"></span></div></div>
+        <div class="row swatches" id="swatches"><span class="lbl">Color</span></div>
+      </div>
+      <div class="body body-media">
+        <div class="row"><span class="nowplaying" id="nowPlaying"></span></div>
+        <div class="row transport">
+          <button class="tbtn" id="prevBtn" aria-label="Previous"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zM20 6v12l-9-6z"/></svg></button>
+          <button class="tbtn play" id="playBtn" aria-label="Play/pause"></button>
+          <button class="tbtn" id="nextBtn" aria-label="Next"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 6h2v12h-2zM4 6l9 6-9 6z"/></svg></button>
+          <span class="ico" style="margin-left:6px"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 9h4l5-4v14l-5-4H4z"/></svg></span>
+          <div class="track" id="volTrack" style="height:34px"><div class="fill vol" id="volFill"></div></div>
+        </div>
+      </div>
+      <div class="body body-climate">
+        <div class="temp">
+          <div class="tval"><span id="tCur"></span></div>
+          <div class="tval" id="tTarget">21<span>°</span></div>
+          <div class="stepper"><button class="step" id="tUp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 14l6-6 6 6"/></svg></button><button class="step" id="tDown"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 10l6 6 6-6"/></svg></button></div>
+        </div>
+        <div class="row modes"><button class="mode cool" data-mode="cool">Cool</button><button class="mode heat" data-mode="heat">Heat</button><button class="mode auto" data-mode="auto">Auto</button></div>
+      </div>
+    </div></div>
+
+    <p class="hint">Tap any device → its controls open below (light → brightness + colour, TV → transport + volume, A/C → temperature + mode). Tap a <kbd>zone</kbd> → zoom + focus. Tap <kbd>Lights control</kbd> → lights get checkboxes (others dim); the panel stays inert until you check a light, then drives them as a group. <kbd>Esc</kbd> resets.</p>
+  </div>
+
+<script>
+(function () {
+  const ICON = {
+    bulb:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2Zm-3 18a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9Z"/></svg>',
+    tv:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Zm5 15h8v1.6H8z"/></svg>',
+    ac:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5h18a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Zm3 11h2v2H6zm5 0h2v3h-2zm5 0h2v2h-2z"/></svg>',
+    sofa:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 9V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a3 3 0 0 0-1 5.8V17H3v-2.2A3 3 0 0 0 4 9Z"/></svg>',
+    fork:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 2v7a2 2 0 0 1-2 2 2 2 0 0 1-2-2V2h1.4v6h.6V2h1.4v6h.6V2H7Zm11 0c-1.7 0-3 2.2-3 5 0 2.2.8 4 2 4.7V22h2V11.7c1.2-.7 2-2.5 2-4.7 0-2.8-1.3-5-3-5Z"/></svg>',
+    bed:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 7h11a4 4 0 0 1 4 4v3H3V7Zm-1 8h20v4h-2v-2H4v2H2v-6Z"/></svg>',
+    play:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5l13 7-13 7z"/></svg>',
+    pause:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>'
+  };
+  const SWATCHES = [{name:'Warm',c:'#ffb259'},{name:'Soft',c:'#ffe7c2'},{name:'White',c:'#fdfdff'},{name:'Cool',c:'#aaccff'},{name:'Blue',c:'#5b9bff'},{name:'Teal',c:'#46e0c0'},{name:'Pink',c:'#ff7ab8'},{name:'Red',c:'#ff5a5a'}];
+  const devices = [
+    { id:'kitchen', name:'Kitchen', kind:'light', x:34, y:22, on:true, bri:0.9, c:'#ffe7c2' },
+    { id:'living', name:'Living lamp', kind:'light', x:62, y:52, on:true, bri:0.7, c:'#ffb259' },
+    { id:'desk', name:'Desk lamp', kind:'light', x:82, y:34, on:true, bri:0.5, c:'#5b9bff' },
+    { id:'bedroom', name:'Bedroom', kind:'light', x:18, y:70, on:false, bri:0.6, c:'#aaccff' },
+    { id:'tv', name:'Living room TV', kind:'media', x:70, y:40, on:true, playing:true, volume:0.4, title:'Severance', meta:'S1 · E5' },
+    { id:'ac', name:'Bedroom A/C', kind:'climate', x:14, y:44, on:true, target:21, cur:24, mode:'cool' }
+  ];
+  const zones = [ { name:'Kitchen', icon:'fork', x:16, y:6, w:38, h:36 }, { name:'Living', icon:'sofa', x:50, y:24, w:48, h:62 }, { name:'Bedroom', icon:'bed', x:4, y:52, w:42, h:44 } ];
+  const isLight = d => d.kind === 'light';
+  const bodyKind = d => d.kind === 'climate' ? 'climate' : (d.kind === 'media' ? 'media' : 'light');
+  const mIcon = d => ICON[{ light: 'bulb', media: 'tv', climate: 'ac' }[d.kind]] || ICON.bulb;
+  const lights = () => devices.filter(isLight);
+  const inZone = (d, z) => d.x >= z.x && d.x <= z.x + z.w && d.y >= z.y && d.y <= z.y + z.h;
+  const zoneLights = z => lights().filter(d => inZone(d, z));
+
+  let mode = 'normal', focused = null;
+  const controlled = new Set();
+  const stage = document.getElementById('stage'), scene = document.getElementById('scene'), tilt = document.getElementById('tilt'), glows = document.getElementById('glows'), markersEl = document.getElementById('markers'),
+        panel = document.getElementById('panel'), multiBtn = document.getElementById('multiBtn'), selCount = document.getElementById('selCount'), zonebar = document.getElementById('zonebar'), swWrap = document.getElementById('swatches');
+  const mwraps = {}, markerEls = {}, glowEls = {};
+
+  for (const d of devices) {
+    if (isLight(d)) { const g = document.createElement('div'); g.className = 'glow'; glows.appendChild(g); glowEls[d.id] = g; }
+    const wrap = document.createElement('div'); wrap.className = 'mwrap'; wrap.style.left = d.x + '%'; wrap.style.top = d.y + '%';
+    const b = document.createElement('button'); b.className = 'marker'; b.setAttribute('aria-label', d.name);
+    b.innerHTML = mIcon(d) + '<span class="check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l4 4 10-10"/></svg></span>';
+    b.addEventListener('click', () => onMarker(d)); wrap.appendChild(b);
+    markersEl.appendChild(wrap); mwraps[d.id] = wrap; markerEls[d.id] = b;
+  }
+  for (const s of SWATCHES) { const el = document.createElement('button'); el.className = 'sw'; el.style.background = s.c; el.setAttribute('aria-label', s.name); el.addEventListener('click', () => setColor(s.c)); swWrap.appendChild(el); }
+
+  function applyZoom() { if (!focused) { scene.style.transform = 'none'; tilt.style.transform = 'none'; return; }
+    const W = stage.clientWidth, H = stage.clientHeight, z = focused, s = Math.min(1.5, Math.min(100 / z.w, 100 / z.h) * 0.82);
+    const cx = (z.x + z.w / 2) / 100 * W, cy = (z.y + z.h / 2) / 100 * H;
+    scene.style.transform = `translate(${W/2 - cx*s}px, ${H/2 - cy*s}px) scale(${s})`;
+    tilt.style.transform = 'rotateX(14deg)'; }
+  function renderGlows() { const w = stage.clientWidth; for (const d of lights()) { const g = glowEls[d.id], on = d.on && d.bri > 0, r = (0.16 + 0.16 * d.bri) * w * 1.6;
+    g.style.background = d.c; g.style.opacity = on ? (0.5 + 0.45 * d.bri) : 0; const m = `radial-gradient(circle ${r}px at ${d.x}% ${d.y}%, black 0%, rgba(0,0,0,.5) 42%, transparent 100%)`; g.style.webkitMaskImage = m; g.style.maskImage = m; } }
+  function renderMarkers() { for (const d of devices) { const b = markerEls[d.id], wrap = mwraps[d.id], on = isLight(d) ? (d.on && d.bri > 0) : d.on;
+    b.classList.toggle('on', on); if (isLight(d) && on) b.style.setProperty('--c', d.c); else b.style.removeProperty('--c');
+    b.classList.toggle('open', mode === 'normal' && controlled.has(d.id));
+    const out = focused && !inZone(d, focused);
+    wrap.classList.toggle('outzone', mode === 'normal' && out);
+    wrap.classList.toggle('dim', mode === 'selecting' && (!isLight(d) || out));
+    wrap.classList.toggle('selectable', mode === 'selecting' && isLight(d) && !out && !controlled.has(d.id));
+    wrap.classList.toggle('selected', mode === 'selecting' && controlled.has(d.id)); } }
+  function renderZones() { zonebar.innerHTML = '';
+    if (focused) { const back = document.createElement('button'); back.className = 'chip back'; back.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg> Back to All'; back.onclick = exitZone; zonebar.appendChild(back); }
+    for (const z of zones) { const c = document.createElement('button'); c.className = 'chip ' + (z === focused ? 'sel' : ''); c.innerHTML = (ICON[z.icon] || '') + ' ' + z.name; c.onclick = () => focusZone(z); zonebar.appendChild(c); } }
+
+  function showBody(kind) { for (const el of panel.querySelectorAll('.body')) el.classList.toggle('active', el.classList.contains('body-' + kind)); }
+  function renderPanel() {
+    const ctl = [...controlled].map(id => devices.find(d => d.id === id)).filter(Boolean);
+    const advEmpty = mode === 'selecting' && ctl.length === 0;
+    if (!ctl.length && !advEmpty) { panel.classList.remove('show', 'disabled'); return; }
+    panel.classList.add('show'); panel.classList.toggle('disabled', advEmpty);
+    const kind = advEmpty || ctl.length > 1 ? 'light' : bodyKind(ctl[0]); showBody(kind);
+    const av = document.getElementById('avatars'); av.innerHTML = '';
+    const pwr = document.getElementById('pwrBtn'), pwrLbl = document.getElementById('pwrLbl');
+    if (advEmpty) { const a = document.createElement('div'); a.className = 'av'; a.style.setProperty('--c', '#6b7079'); a.innerHTML = ICON.bulb; av.appendChild(a);
+      document.getElementById('hTitle').textContent = 'Light control'; document.getElementById('hSub').textContent = 'Select lights to control';
+      document.getElementById('briFill').style.width = '0%'; document.getElementById('briPct').textContent = '';
+      [...swWrap.querySelectorAll('.sw')].forEach(el => el.classList.remove('sel')); pwr.classList.add('off'); pwrLbl.textContent = 'On'; pwr.onclick = null; return; }
+    for (const d of ctl.slice(0, 4)) { const a = document.createElement('div'); a.className = 'av'; a.style.setProperty('--c', (isLight(d) ? (d.on ? d.c : '#6b7079') : '#9aa0a8')); a.innerHTML = mIcon(d); av.appendChild(a); }
+    const one = ctl.length === 1 ? ctl[0] : null;
+    document.getElementById('hTitle').textContent = one ? one.name : ctl.length + ' lights';
+    const anyOn = ctl.some(d => d.on);
+    document.getElementById('hSub').textContent = one ? (one.kind === 'climate' ? (one.on ? one.mode[0].toUpperCase()+one.mode.slice(1)+' · target '+one.target+'°' : 'Off') : one.kind === 'media' ? (one.on ? (one.playing ? 'Playing' : 'Paused') : 'Off') : (one.on ? Math.round(one.bri*100)+'%' : 'Off')) : ctl.filter(d=>d.on).length + ' on';
+    pwr.classList.toggle('off', !anyOn); pwrLbl.textContent = anyOn ? (ctl.length > 1 ? 'All off' : 'Off') : (ctl.length > 1 ? 'All on' : 'On');
+    pwr.onclick = () => { ctl.forEach(d => d.on = !anyOn); renderAll(); };
+    if (kind === 'light') { const avg = ctl.reduce((s,d)=>s+(d.on?d.bri:0),0)/ctl.length, f = document.getElementById('briFill');
+      f.style.width = Math.round(avg*100)+'%'; f.style.background = `linear-gradient(90deg, ${ctl[0].c}, #fff0d8)`; document.getElementById('briPct').textContent = Math.round(avg*100)+'%';
+      [...swWrap.querySelectorAll('.sw')].forEach((el,i)=>el.classList.toggle('sel', !!one && SWATCHES[i].c.toLowerCase()===one.c.toLowerCase())); }
+    else if (kind === 'media') { document.getElementById('nowPlaying').innerHTML = '<b>'+one.title+'</b> &nbsp; '+one.meta;
+      document.getElementById('playBtn').innerHTML = one.playing ? ICON.pause : ICON.play; document.getElementById('volFill').style.width = Math.round(one.volume*100)+'%'; }
+    else if (kind === 'climate') { document.getElementById('tCur').innerHTML = 'now '+one.cur+'°'; document.getElementById('tTarget').innerHTML = one.target+'<span>°</span>';
+      [...panel.querySelectorAll('.mode')].forEach(m => m.classList.toggle('sel', m.dataset.mode === one.mode)); }
+  }
+  function renderAll() { applyZoom(); renderGlows(); renderMarkers(); renderZones(); renderPanel(); selCount.textContent = controlled.size ? (controlled.size + ' selected') : 'Select lights'; }
+
+  function onMarker(d) {
+    if (mode === 'selecting') { if (!isLight(d) || (focused && !inZone(d, focused))) return; controlled.has(d.id) ? controlled.delete(d.id) : controlled.add(d.id); renderAll(); }
+    else { controlled.clear(); controlled.add(d.id); renderAll(); }
+  }
+  function setBrightness(p) { p = Math.max(0, Math.min(1, p)); for (const id of controlled) { const d = devices.find(x=>x.id===id); if (isLight(d)) { d.bri = p; d.on = p > 0.02; } } renderAll(); }
+  function setColor(c) { for (const id of controlled) { const d = devices.find(x=>x.id===id); if (isLight(d)) { d.c = c; d.on = true; } } renderAll(); }
+  function focusZone(z) { focused = z; if (mode === 'selecting') { controlled.clear(); zoneLights(z).forEach(d => controlled.add(d.id)); } renderAll(); }
+  function exitZone() { focused = null; if (mode === 'selecting') controlled.clear(); renderAll(); }
+
+  const drag = (trackId, fn) => { const t = document.getElementById(trackId); let on = false; const at = e => { const r = t.getBoundingClientRect(); return ((e.touches?e.touches[0].clientX:e.clientX)-r.left)/r.width; };
+    t.addEventListener('pointerdown', e => { on = true; fn(at(e)); e.preventDefault(); }); window.addEventListener('pointermove', e => { if (on) fn(at(e)); }); window.addEventListener('pointerup', () => on = false); };
+  drag('briTrack', p => { if (controlled.size) setBrightness(p); });
+  drag('volTrack', p => { const d = [...controlled].map(id => devices.find(x=>x.id===id))[0]; if (d && d.kind === 'media') { d.volume = Math.max(0,Math.min(1,p)); renderAll(); } });
+  document.getElementById('playBtn').addEventListener('click', () => { const d = [...controlled].map(id=>devices.find(x=>x.id===id))[0]; if (d) { d.playing = !d.playing; d.on = true; renderAll(); } });
+  document.getElementById('tUp').addEventListener('click', () => { const d = [...controlled].map(id=>devices.find(x=>x.id===id))[0]; if (d&&d.kind==='climate'){ d.target=Math.min(30,d.target+1); d.on=true; renderAll(); } });
+  document.getElementById('tDown').addEventListener('click', () => { const d = [...controlled].map(id=>devices.find(x=>x.id===id))[0]; if (d&&d.kind==='climate'){ d.target=Math.max(16,d.target-1); d.on=true; renderAll(); } });
+  for (const m of document.querySelectorAll('.mode')) m.addEventListener('click', () => { const d = [...controlled].map(id=>devices.find(x=>x.id===id))[0]; if (d&&d.kind==='climate'){ d.mode=m.dataset.mode; d.on=true; renderAll(); } });
+
+  multiBtn.addEventListener('click', () => { if (mode === 'selecting') return exitSelect();
+    mode = 'selecting'; document.body.classList.add('selecting'); multiBtn.classList.add('on'); multiBtn.setAttribute('aria-pressed','true');
+    controlled.clear(); if (focused) zoneLights(focused).forEach(d => controlled.add(d.id)); renderAll(); });
+  function exitSelect() { mode = 'normal'; document.body.classList.remove('selecting'); multiBtn.classList.remove('on'); multiBtn.setAttribute('aria-pressed','false'); renderAll(); }
+  document.getElementById('doneBtn').addEventListener('click', exitSelect);
+  document.getElementById('closeBtn').addEventListener('click', () => { controlled.clear(); if (mode === 'selecting') exitSelect(); else renderAll(); });
+  window.addEventListener('keydown', e => { if (e.key === 'Escape') { controlled.clear(); focused = null; exitSelect(); } });
+  window.addEventListener('resize', () => { applyZoom(); renderGlows(); });
+  const floorImg = scene.querySelector('.floor');
+  const syncAspect = () => { if (floorImg.naturalWidth) { stage.style.aspectRatio = floorImg.naturalWidth + ' / ' + floorImg.naturalHeight; applyZoom(); renderGlows(); } };
+  if (floorImg.complete) syncAspect(); else floorImg.addEventListener('load', syncAspect);
+  renderAll();
+})();
+</script>
+</body>
+</html>

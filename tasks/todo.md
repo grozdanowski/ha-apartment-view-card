@@ -20,13 +20,22 @@ Docker HA; keep logic test-backed. Ship as 2.1.0. (Includes the verified 2.0.2 u
 - [ ] Zone zoom: spring easing + vignette dim of surroundings + breadcrumb
 - [ ] Tests for ring geometry / state formatting
 
-## Increment C — On-floorplan light control (the killer feature)
-- [ ] `light-control` popover component: brightness slider + color swatches + on/off
-- [ ] Anchor popover to the tapped marker (screen-space geometry, stays on-screen)
-- [ ] Live service calls (brightness_pct, rgb_color, toggle); room glow updates live
-- [ ] Open on press/hold for controllable lights; dismiss on outside tap/Esc
-- [ ] Tests for popover placement geometry + the control→service mapping
-- [ ] a11y: focus trap, keyboard, aria
+## Increment C — On-floorplan control surface (validated via prototype-multilight.html)
+Interaction model (signed off via the interactive prototype):
+- Tap any device -> its control panel opens BELOW the floorplan (never overlays markers); close on the right.
+- Panel is KIND-AWARE + CAPABILITY-DRIVEN (must work with real models, not happy path):
+  - light: brightness only if supported; color swatches only if rgb/hs/xy; color-temp slider if color_temp; on/off-only -> just toggle.
+  - media_player: transport buttons gated per supported_features bit; volume only if VOLUME_SET; now-playing from media_title/artist; source if SELECT_SOURCE.
+  - climate: target temp clamped to min/max/step; modes from real hvac_modes (not hardcoded); show current_temperature; target_temp_high/low for ranges.
+- "Lights control" pill -> multi-LIGHT select: lights get checkboxes, non-lights dim/unclickable; panel opens but DISABLED until >=1 checked; group brightness/color (color only if all support it).
+- Zone focus pre-checks that zone's lights; selection scoped to focused zone.
+- Zone zoom gets a slight animated PERSPECTIVE tilt (rotateX ~6deg + perspective); markers stay flat in the real card (separate overlay).
+- [ ] control-surface component (light/media/climate bodies) + capability detection
+- [ ] selection mode (checkboxes, disabled-until-selected, dim non-lights)
+- [ ] live service calls per domain; room glow updates live
+- [ ] dismiss on close/Esc; a11y (focus, keyboard, aria)
+- [ ] tests: capability gating, control->service mapping, selection scoping
+- [ ] VERIFY each panel against varied real demo entities in Docker HA
 
 ## Wrap
 - [ ] Full suite green, lint, build; README + screenshots refresh
