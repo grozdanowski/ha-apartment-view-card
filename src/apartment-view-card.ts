@@ -1,4 +1,4 @@
-import { LitElement, html, css, unsafeCSS, type TemplateResult, type PropertyValues } from 'lit';
+import { LitElement, html, css, unsafeCSS, nothing, type TemplateResult, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { fireEvent } from 'custom-card-helpers';
 import type { HassLike } from './core/ha-types';
@@ -17,6 +17,8 @@ import {
 import { zoomToZone, type Viewport, type ZoomTransform } from './core/geometry';
 import { buildZoneChips, type ZoneChip } from './render/zone-controls';
 import { entityInFocusedZone } from './render/zone-focus';
+import './render/control-surface';
+import { controlKind } from './core/entity-capabilities';
 
 @customElement('apartment-view-card')
 export class ApartmentViewCard extends LitElement {
@@ -29,6 +31,10 @@ export class ApartmentViewCard extends LitElement {
   @state() private _cardWidth = 600;
   @state() private _transform: ZoomTransform = { scale: 1, panX: 0, panY: 0 };
   @state() private _focusedZone: ZoneConfig | null = null;
+  /** Entities currently driven by the control surface (empty = closed). */
+  @state() private _controlled: string[] = [];
+  /** "Lights control" multi-select mode. */
+  @state() private _selectMode = false;
 
   private _ro?: ResizeObserver;
   private _panZoom = new PanZoomController({ zoomMax: 1.5 });
@@ -148,6 +154,10 @@ export class ApartmentViewCard extends LitElement {
       overflow-x: auto;
       padding: 8px;
       scrollbar-width: thin;
+    }
+    .control-surface {
+      display: block;
+      padding: 0 8px 8px;
     }
     .zone-chip {
       display: inline-flex;
@@ -422,7 +432,27 @@ export class ApartmentViewCard extends LitElement {
    * `detail === 0` so it fires for keyboard only (no double-action on click).
    */
   private _onMarkerActivate = (m: MarkerView): void => {
-    if (this.hass) dispatchTapAction({ hass: this.hass }, m.entity, this);
+    this._activateEntity(m.entity);
+  };
+
+  /**
+   * A tap on a marker. Controllable entities (light/media_player/climate) open
+   * the on-floorplan control surface; everything else keeps its configured tap
+   * action (toggle / more-info / none).
+   */
+  private _activateEntity(entity: EntityConfig): void {
+    if (!this.hass) return;
+    if (controlKind(entity.entity) !== 'none') {
+      this._selectMode = false;
+      this._controlled = [entity.entity];
+    } else {
+      dispatchTapAction({ hass: this.hass }, entity, this);
+    }
+  }
+
+  private _closeControl = (): void => {
+    this._controlled = [];
+    this._selectMode = false;
   };
 
   private _beginGesture(e: PointerEvent) {
@@ -483,7 +513,7 @@ export class ApartmentViewCard extends LitElement {
     const outcome = this._tapHold.end(performance.now());
     this._cancelHold();
     if (outcome === 'tap' && this._activeMarker && this.hass) {
-      dispatchTapAction({ hass: this.hass }, this._activeMarker.entity, this);
+      this._activateEntity(this._activeMarker.entity);
     } else if (outcome === 'hold' && this._activeMarker && !this._holdFired) {
       // hold timer didn't fire (e.g. test/no-timer path) but release is late
       dispatchHoldAction(this._activeMarker.entity, this);
@@ -575,8 +605,20 @@ export class ApartmentViewCard extends LitElement {
             `,
           )}
         </div>
+        ${this._renderControlSurface()}
       </ha-card>
     `;
+  }
+
+  private _renderControlSurface(): TemplateResult | typeof nothing {
+    if (!this._controlled.length && !this._selectMode) return nothing;
+    return html`<av-control-surface
+      class="control-surface"
+      .hass=${this.hass}
+      .entityIds=${this._controlled}
+      .selectMode=${this._selectMode}
+      @surface-close=${this._closeControl}
+    ></av-control-surface>`;
   }
 }
 

@@ -159,52 +159,35 @@ describe('card-component: marker screen position', () => {
 // Test 3: Tapping a marker fires homeassistant.toggle
 // ---------------------------------------------------------------------------
 
-describe('card-component: tap → homeassistant.toggle', () => {
-  it('fires homeassistant.toggle for the tapped entity (pointer gesture path)', async () => {
+describe('card-component: tap → opens control surface', () => {
+  async function tapMarker(card: Card, index: number, coords: { clientX: number; clientY: number; pointerId: number }) {
+    const markers = Array.from(card.shadowRoot!.querySelectorAll('.marker-overlay .marker')) as HTMLElement[];
+    const marker = markers[index];
+    const c = { ...coords, button: 0, pointerType: 'mouse' };
+    marker.dispatchEvent(new PointerEvent('pointerdown', { ...c, bubbles: true }));
+    window.dispatchEvent(new PointerEvent('pointerup', { ...c, bubbles: true }));
+    await (card as any).updateComplete;
+  }
+
+  it('opens the control surface for the tapped light (not a direct toggle)', async () => {
     const hass = createMockHass();
     const card = await mountCard(BASE_CONFIG, hass);
+    await tapMarker(card, 0, { clientX: 50, clientY: 50, pointerId: 1 });
 
-    const markers = Array.from(
-      card.shadowRoot!.querySelectorAll('.marker-overlay .marker'),
-    ) as HTMLElement[];
-
-    // Tap the first marker (light.kitchen_ceiling tap:'toggle').
-    const marker = markers[0];
-    expect(marker).toBeTruthy();
-
-    // Simulate a clean pointer down + up at the same coordinates (no move → tap).
-    const coords = { clientX: 50, clientY: 50, pointerId: 1, button: 0, pointerType: 'mouse' };
-    marker.dispatchEvent(new PointerEvent('pointerdown', { ...coords, bubbles: true }));
-    // The card listens for pointerup on window, mimicking how the browser routes events.
-    window.dispatchEvent(new PointerEvent('pointerup', { ...coords, bubbles: true }));
-
-    // Give the microtask queue a chance to settle.
-    await Promise.resolve();
-
-    expect(hass.serviceCalls.length).toBe(1);
-    expect(hass.serviceCalls[0]).toEqual({
-      domain: 'homeassistant',
-      service: 'toggle',
-      data: { entity_id: 'light.kitchen_ceiling' },
-    });
+    const surface = card.shadowRoot!.querySelector('av-control-surface') as any;
+    expect(surface).toBeTruthy();
+    expect(surface.entityIds).toEqual(['light.kitchen_ceiling']);
+    // tap no longer fires a direct toggle — control happens inside the surface
+    expect(hass.serviceCalls.length).toBe(0);
   });
 
-  it('fires toggle for the SECOND marker when that is tapped', async () => {
+  it('opens the surface for the SECOND marker when that is tapped', async () => {
     const hass = createMockHass();
     const card = await mountCard(BASE_CONFIG, hass);
+    await tapMarker(card, 1, { clientX: 80, clientY: 80, pointerId: 2 });
 
-    const markers = Array.from(
-      card.shadowRoot!.querySelectorAll('.marker-overlay .marker'),
-    ) as HTMLElement[];
-
-    const second = markers[1];
-    const coords = { clientX: 80, clientY: 80, pointerId: 2, button: 0, pointerType: 'mouse' };
-    second.dispatchEvent(new PointerEvent('pointerdown', { ...coords, bubbles: true }));
-    window.dispatchEvent(new PointerEvent('pointerup', { ...coords, bubbles: true }));
-    await Promise.resolve();
-
-    expect(hass.serviceCalls.length).toBe(1);
-    expect(hass.serviceCalls[0].data.entity_id).toBe('light.living_lamp');
+    const surface = card.shadowRoot!.querySelector('av-control-surface') as any;
+    expect(surface.entityIds).toEqual(['light.living_lamp']);
   });
 
   it('does NOT call service when pointer is dragged before release (>8px move)', async () => {
