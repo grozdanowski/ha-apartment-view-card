@@ -242,3 +242,23 @@ describe('normalizeConfig weatherEntity', () => {
     expect('weatherEntity' in normalizeConfig({ images: { base: '/b.png' } }).options).toBe(false);
   });
 });
+
+describe('normalizeConfig floors (multi-floor)', () => {
+  it('normalizes floors; top-level mirrors floor 0', () => {
+    const cfg = normalizeConfig({ images: { base: '/ignored.png' }, floors: [
+      { name: 'Ground', icon: 'mdi:home', images: { base: '/g.png' }, entities: [{ entity: 'light.a', x: 1, y: 2 }] },
+      { name: 'Upstairs', images: { base: '/u.png' }, entities: [{ entity: 'light.b', x: 3, y: 4 }], zones: [{ name: 'Bed', x: 0, y: 0, width: 10, height: 10 }] },
+    ] });
+    expect(cfg.floors).toHaveLength(2);
+    expect(cfg.floors![0]).toMatchObject({ name: 'Ground', icon: 'mdi:home', images: { base: '/g.png' } });
+    expect(cfg.floors![1].zones).toHaveLength(1);
+    expect(cfg.images.base).toBe('/g.png');      // top-level mirrors floor 0
+    expect(cfg.entities[0].entity).toBe('light.a');
+  });
+  it('single-floor config has floors: []', () => {
+    expect(normalizeConfig({ images: { base: '/b.png' } }).floors).toEqual([]);
+  });
+  it('a floor without a base throws', () => {
+    expect(() => normalizeConfig({ floors: [{ name: 'X', images: {} }] })).toThrow(/images\.base/);
+  });
+});

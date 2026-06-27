@@ -56,6 +56,14 @@ export interface QuickAction {
   data?: Record<string, unknown>;
 }
 
+export interface FloorConfig {
+  name: string;
+  icon?: string;
+  images: ImagesConfig;
+  entities: EntityConfig[];
+  zones: ZoneConfig[];
+}
+
 export interface ApartmentViewConfig {
   type: string;
   images: ImagesConfig;
@@ -63,6 +71,9 @@ export interface ApartmentViewConfig {
   zones: ZoneConfig[];
   options: CardOptions;
   quickActions: QuickAction[];
+  /** Optional multi-floor. When non-empty, each floor has its own images/entities/zones;
+   *  the top-level images/entities/zones mirror floor 0 for backward-compatible reads. */
+  floors?: FloorConfig[];
 }
 
 const CARD_TYPE = 'custom:apartment-view-card';
@@ -219,6 +230,17 @@ function normalizeOptions(raw: any): CardOptions {
   };
 }
 
+function normalizeFloor(raw: any): FloorConfig {
+  const floor: FloorConfig = {
+    name: typeof raw?.name === 'string' && raw.name.length ? raw.name : 'Floor',
+    images: normalizeImages(raw),
+    entities: (Array.isArray(raw?.entities) ? raw.entities : []).map(normalizeEntity),
+    zones: (Array.isArray(raw?.zones) ? raw.zones : []).map(normalizeZone),
+  };
+  if (typeof raw?.icon === 'string' && raw.icon.length) floor.icon = raw.icon;
+  return floor;
+}
+
 /**
  * Normalize raw Lovelace config: fill defaults, migrate legacy keys, and
  * PRESERVE unknown top-level keys (v1 silently dropped columns/rows/zones).
@@ -244,16 +266,25 @@ export function normalizeConfig(raw: any): ApartmentViewConfig {
     ...rest
   } = source;
 
+  const rawFloors: any[] = Array.isArray(source.floors) ? source.floors : [];
+  const floors = rawFloors.map(normalizeFloor);
+  // Multi-floor: the top-level images/entities/zones mirror floor 0 so the base
+  // guard and all single-floor read paths keep working unchanged.
+  const base = floors.length
+    ? { images: floors[0].images, entities: floors[0].entities, zones: floors[0].zones }
+    : { images: normalizeImages(source), entities: rawEntities.map(normalizeEntity), zones: rawZones.map(normalizeZone) };
+
   return {
     ...rest,
     type: typeof source.type === 'string' ? source.type : CARD_TYPE,
-    images: normalizeImages(source),
-    entities: rawEntities.map(normalizeEntity),
-    zones: rawZones.map(normalizeZone),
+    images: base.images,
+    entities: base.entities,
+    zones: base.zones,
     options: normalizeOptions(source),
     quickActions: (Array.isArray(source.quickActions) ? source.quickActions : [])
       .map(normalizeQuickAction)
       .filter((q: QuickAction | null): q is QuickAction => q !== null),
+    floors,
   };
 }
 

@@ -3,7 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { fireEvent } from 'custom-card-helpers';
 import type { HassLike } from './core/ha-types';
-import { normalizeConfig, type ApartmentViewConfig, type EntityConfig, type ZoneConfig, type QuickAction } from './core/config';
+import { normalizeConfig, type ApartmentViewConfig, type EntityConfig, type ZoneConfig, type QuickAction, type ImagesConfig } from './core/config';
 import './editor/apartment-view-card-editor';
 import { renderBaseLayer, weatherTint } from './render/base-layer';
 import { renderLightLayer } from './render/light-layer';
@@ -41,6 +41,10 @@ export class ApartmentViewCard extends LitElement {
   private _pulseTimer?: ReturnType<typeof setTimeout>;
   /** Radial quick-actions menu open state. */
   @state() private _quickOpen = false;
+  /** Active floor index (multi-floor) + a transient cross-fade flag. */
+  @state() private _floor = 0;
+  @state() private _floorFading = false;
+  private _floorFadeTimer?: ReturnType<typeof setTimeout>;
   /** Transient motion ripples (presence sensors firing), capped + auto-decaying. */
   @state() private _ripples: Array<{ key: number; left: number; top: number }> = [];
   private _rippleSeq = 0;
@@ -105,6 +109,40 @@ export class ApartmentViewCard extends LitElement {
       pointer-events: none;
       mix-blend-mode: soft-light;
       transition: background 1.2s ease;
+    }
+    /* multi-floor switcher + cross-fade */
+    .floors {
+      display: flex;
+      gap: 4px;
+      padding: 8px 8px 0;
+      flex-wrap: wrap;
+    }
+    .floor-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 14px;
+      border: none;
+      border-radius: 16px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--secondary-text-color);
+      background: color-mix(in srgb, var(--primary-text-color, #fff) 6%, transparent);
+      --mdc-icon-size: 16px;
+      transition: background-color 0.2s ease, color 0.2s ease;
+    }
+    .floor-tab.active {
+      background: var(--primary-color, #03a9f4);
+      color: var(--text-primary-color, #fff);
+    }
+    .scene.floor-fade {
+      animation: av-floor-fade 0.42s ease;
+    }
+    @keyframes av-floor-fade {
+      from { opacity: 0.25; }
+      to { opacity: 1; }
     }
     .warning {
       padding: 16px;
@@ -464,6 +502,9 @@ export class ApartmentViewCard extends LitElement {
       .quick-fab {
         transition: none;
       }
+      .scene.floor-fade {
+        animation: none;
+      }
       .tilt {
         transition: none;
         transform: none !important;
@@ -541,6 +582,7 @@ export class ApartmentViewCard extends LitElement {
     window.removeEventListener('pointercancel', this._onWindowPointerUp);
     window.removeEventListener('keydown', this._handleKeyDown);
     clearTimeout(this._pulseTimer);
+    clearTimeout(this._floorFadeTimer);
     this._cancelHold();
     this._ro?.disconnect();
     this._ro = undefined;
@@ -565,7 +607,7 @@ export class ApartmentViewCard extends LitElement {
     const ids = [
       'sun.sun',
       ...(weather ? [weather] : []),
-      ...(this.config?.entities?.map((e) => e.entity) ?? []),
+      ...(this.config ? this._floorData.entities.map((e) => e.entity) : []),
     ];
     return ids.some((id) => prev.states?.[id] !== next.states?.[id]);
   }
@@ -587,7 +629,7 @@ export class ApartmentViewCard extends LitElement {
   /** Emit a ripple where a presence sensor just transitioned off->on. */
   private _detectMotion(prev?: HassLike): void {
     if (!prev || !this.hass || this._reducedMotion()) return; // no ripple on first paint
-    for (const e of this.config?.entities ?? []) {
+    for (const e of this.config ? this._floorData.entities : []) {
       if (!this._isMotion(e)) continue;
       const now = this.hass.states[e.entity];
       if (!now || now.state !== 'on') continue;
@@ -770,7 +812,7 @@ export class ApartmentViewCard extends LitElement {
     if (this._selectMode) {
       // Only lights are selectable, scoped to the focused zone if any.
       if (controlKind(entity.entity) !== 'light') return;
-      if (this._focusedZone && !entityInFocusedZone(entity, this._focusedZone, this.config.zones)) return;
+      if (this._focusedZone && !entityInFocusedZone(entity, this._focusedZone, this._floorData.zones)) return;
       this._controlled = this._controlled.includes(entity.entity)
         ? this._controlled.filter((id) => id !== entity.entity)
         : [...this._controlled, entity.entity];
@@ -822,6 +864,26 @@ export class ApartmentViewCard extends LitElement {
     return list;
   }
 
+  /** The active floor's images/entities/zones (or the top-level config when single-floor). */
+  private get _floorData(): { images: ImagesConfig; entities: EntityConfig[]; zones: ZoneConfig[] } {
+    const f = this.config.floors;
+    if (f && f.length) return f[Math.min(this._floor, f.length - 1)];
+    return this.config;
+  }
+
+  private _switchFloor(i: number): void {
+    if (i === this._floor) return;
+    this._exitFocus();
+    this._controlled = [];
+    this._selectMode = false;
+    this._floor = i;
+    this._floorFading = true;
+    clearTimeout(this._floorFadeTimer);
+    this._floorFadeTimer = setTimeout(() => {
+      this._floorFading = false;
+    }, 420);
+  }
+
   private _runQuickAction(qa: QuickAction): void {
     if (this.hass) {
       if (qa.service) {
@@ -846,13 +908,13 @@ export class ApartmentViewCard extends LitElement {
   };
 
   private _lightsInZone(zone: ZoneConfig): string[] {
-    return this.config.entities
-      .filter((e) => controlKind(e.entity) === 'light' && entityInFocusedZone(e, zone, this.config.zones))
+    return this._floorData.entities
+      .filter((e) => controlKind(e.entity) === 'light' && entityInFocusedZone(e, zone, this._floorData.zones))
       .map((e) => e.entity);
   }
 
   private _hasLights(): boolean {
-    return this.config.entities.some((e) => controlKind(e.entity) === 'light');
+    return this._floorData.entities.some((e) => controlKind(e.entity) === 'light');
   }
 
   private _beginGesture(e: PointerEvent) {
@@ -939,7 +1001,8 @@ export class ApartmentViewCard extends LitElement {
    * image-box width threaded everywhere — see Phase 5 `_viewport()`).
    */
   private _renderScene(): TemplateResult {
-    const { images, options, entities } = this.config;
+    const { options } = this.config;
+    const { images, entities } = this._floorData;
     const sun = this.hass?.states?.['sun.sun'];
     const tint = options.weatherEntity
       ? weatherTint(this.hass?.states?.[options.weatherEntity])
@@ -968,15 +1031,15 @@ export class ApartmentViewCard extends LitElement {
       this._focusedZone === null
         ? null
         : new Set(
-            this.config.entities
+            this._floorData.entities
               .filter((e) =>
-                entityInFocusedZone(e, this._focusedZone, this.config.zones),
+                entityInFocusedZone(e, this._focusedZone, this._floorData.zones),
               )
               .map((e) => e.entity),
           );
 
     const views = computeMarkerViews(
-      this.config.entities,
+      this._floorData.entities,
       this.hass?.states ?? {},
       t,
       vp,
@@ -988,15 +1051,31 @@ export class ApartmentViewCard extends LitElement {
     );
     const attentionCount = views.filter((v) => v.attention).length;
 
+    const floors = this.config.floors ?? [];
+
     return html`
       <ha-card>
+        ${floors.length > 1
+          ? html`<div class="floors" role="tablist" aria-label="Floors">
+              ${floors.map(
+                (fl, i) => html`<button
+                  role="tab"
+                  class="floor-tab ${i === this._floor ? 'active' : ''}"
+                  aria-selected=${i === this._floor ? 'true' : 'false'}
+                  @click=${() => this._switchFloor(i)}
+                >
+                  ${fl.icon ? html`<ha-icon icon=${fl.icon}></ha-icon>` : nothing}<span>${fl.name}</span>
+                </button>`,
+              )}
+            </div>`
+          : nothing}
         <div class="wrapper">
           <div
             class="tilt"
             style="transform: ${this._focusedZone ? 'rotateX(11deg)' : 'none'};"
           >
             <div
-              class="scene"
+              class="scene ${this._floorFading ? 'floor-fade' : ''}"
               style="transform: translate(${t.panX}px, ${t.panY}px) scale(${t.scale});"
               @pointerdown=${this._onScenePointerDown}
             >
@@ -1037,7 +1116,7 @@ export class ApartmentViewCard extends LitElement {
           ${this._renderQuickActions()}
         </div>
         <div class="zone-controls" role="toolbar" aria-label="Zones">
-          ${buildZoneChips(this.config.zones, this._focusedZone).map(
+          ${buildZoneChips(this._floorData.zones, this._focusedZone).map(
             (chip) => html`
               <button
                 class="zone-chip ${chip.kind === 'back' ? 'zone-chip--back' : ''}"

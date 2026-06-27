@@ -421,3 +421,30 @@ describe('card-component: quick actions', () => {
     expect(card.shadowRoot!.querySelector('.quick-fab')).toBeNull();
   });
 });
+
+describe('card-component: multi-floor', () => {
+  it('renders floor tabs and switching changes the markers', async () => {
+    const cfg = {
+      type: 'custom:apartment-view-card', images: { base: '/g.png' }, entities: [],
+      floors: [
+        { name: 'Ground', images: { base: '/g.png' }, entities: [{ entity: 'light.kitchen_ceiling', x: 30, y: 40, size: 'small', tap: 'toggle' }] },
+        { name: 'Upstairs', images: { base: '/u.png' }, entities: [
+          { entity: 'light.living_lamp', x: 50, y: 50, size: 'small', tap: 'toggle' },
+          { entity: 'light.living_lamp2', x: 60, y: 60, size: 'small', tap: 'toggle' },
+        ] },
+      ],
+    };
+    const card = await mountCard(cfg);
+    const tabs = card.shadowRoot!.querySelectorAll('.floor-tab');
+    expect(tabs.length).toBe(2);
+    expect(card.shadowRoot!.querySelectorAll('.marker-overlay .marker').length).toBe(1); // Ground
+    (tabs[1] as HTMLElement).click();
+    await (card as any).updateComplete;
+    expect(card.shadowRoot!.querySelectorAll('.marker-overlay .marker').length).toBe(2); // Upstairs
+    expect(card.shadowRoot!.querySelector('.floor-tab.active span')!.textContent).toBe('Upstairs');
+  });
+  it('no floor tabs for a single-floor config', async () => {
+    const card = await mountCard();
+    expect(card.shadowRoot!.querySelector('.floors')).toBeNull();
+  });
+});
