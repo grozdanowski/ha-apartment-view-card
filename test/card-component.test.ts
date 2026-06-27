@@ -398,3 +398,26 @@ describe('card-component: motion ripple', () => {
     expect(card.shadowRoot!.querySelectorAll('.motion-ripple').length).toBeGreaterThan(0);
   });
 });
+
+describe('card-component: quick actions', () => {
+  it('a FAB opens the radial menu and an action runs its service, then closes', async () => {
+    const cfg = { ...BASE_CONFIG, quickActions: [{ name: 'Movie', service: 'scene.turn_on', data: { entity_id: 'scene.movie' } }] };
+    const card = await mountCard(cfg);
+    const fab = card.shadowRoot!.querySelector('.quick-fab') as HTMLElement;
+    expect(fab).toBeTruthy();
+    expect(card.shadowRoot!.querySelector('.quick.open')).toBeNull();
+    fab.click();
+    await (card as any).updateComplete;
+    expect(card.shadowRoot!.querySelector('.quick.open')).toBeTruthy();
+    (card.shadowRoot!.querySelector('.quick-action') as HTMLElement).click();
+    await (card as any).updateComplete;
+    const calls = (card.hass as any).serviceCalls ?? [];
+    expect(calls.at(-1)).toMatchObject({ domain: 'scene', service: 'turn_on' });
+    expect(calls.at(-1).data).toMatchObject({ entity_id: 'scene.movie' });
+    expect(card.shadowRoot!.querySelector('.quick.open')).toBeNull();
+  });
+  it('no FAB when no quick actions are configured', async () => {
+    const card = await mountCard();
+    expect(card.shadowRoot!.querySelector('.quick-fab')).toBeNull();
+  });
+});

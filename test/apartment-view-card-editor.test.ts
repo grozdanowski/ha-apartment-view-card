@@ -17,6 +17,7 @@ function baseConfig(): ApartmentViewConfig {
       duskDawnOffsetMinutes: 60,
       labels: { source: 'none', visibility: 'auto', densityCap: 14 },
     },
+    quickActions: [],
   };
 }
 

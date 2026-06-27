@@ -3,7 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { fireEvent } from 'custom-card-helpers';
 import type { HassLike } from './core/ha-types';
-import { normalizeConfig, type ApartmentViewConfig, type EntityConfig, type ZoneConfig } from './core/config';
+import { normalizeConfig, type ApartmentViewConfig, type EntityConfig, type ZoneConfig, type QuickAction } from './core/config';
 import './editor/apartment-view-card-editor';
 import { renderBaseLayer } from './render/base-layer';
 import { renderLightLayer } from './render/light-layer';
@@ -39,6 +39,8 @@ export class ApartmentViewCard extends LitElement {
   /** Transient: pulse the attention markers to help locate them. */
   @state() private _pulse = false;
   private _pulseTimer?: ReturnType<typeof setTimeout>;
+  /** Radial quick-actions menu open state. */
+  @state() private _quickOpen = false;
   /** Transient motion ripples (presence sensors firing), capped + auto-decaying. */
   @state() private _ripples: Array<{ key: number; left: number; top: number }> = [];
   private _rippleSeq = 0;
@@ -341,6 +343,61 @@ export class ApartmentViewCard extends LitElement {
     .lights-control:active {
       scale: 0.96;
     }
+    /* radial quick-actions menu */
+    .quick {
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      z-index: 7;
+      pointer-events: none;
+    }
+    .quick-fab {
+      position: relative;
+      z-index: 2;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      pointer-events: auto;
+      display: grid;
+      place-items: center;
+      color: var(--text-primary-color, #fff);
+      background: var(--primary-color, #03a9f4);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.42);
+      --mdc-icon-size: 24px;
+      transition: transform 0.25s cubic-bezier(.34, 1.56, .64, 1);
+    }
+    .quick.open .quick-fab {
+      transform: rotate(135deg);
+    }
+    .quick-action {
+      position: absolute;
+      right: 4px;
+      bottom: 4px;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      pointer-events: auto;
+      display: grid;
+      place-items: center;
+      color: var(--primary-text-color);
+      background: color-mix(in srgb, var(--card-background-color, #1c1e24) 78%, transparent);
+      -webkit-backdrop-filter: blur(12px) saturate(1.4);
+      backdrop-filter: blur(12px) saturate(1.4);
+      box-shadow: inset 0 0 0 1px var(--divider-color, rgba(255, 255, 255, 0.16)), 0 4px 12px rgba(0, 0, 0, 0.4);
+      --mdc-icon-size: 20px;
+      transform: translate(0, 0) scale(0.3);
+      opacity: 0;
+      transition: transform 0.3s cubic-bezier(.34, 1.56, .64, 1), opacity 0.2s ease;
+      transition-delay: var(--qd, 0s);
+    }
+    .quick.open .quick-action {
+      transform: translate(var(--qx, 0), var(--qy, 0)) scale(1);
+      opacity: 1;
+    }
     .zone-controls {
       display: flex;
       flex-direction: row;
@@ -394,6 +451,10 @@ export class ApartmentViewCard extends LitElement {
       }
       .marker-overlay.pulse .marker.has-attention {
         animation: none;
+      }
+      .quick-action,
+      .quick-fab {
+        transition: none;
       }
       .tilt {
         transition: none;
@@ -623,6 +684,11 @@ export class ApartmentViewCard extends LitElement {
 
   private _handleKeyDown = (e: KeyboardEvent): void => {
     if (e.key !== 'Escape') return;
+    if (this._quickOpen) {
+      e.preventDefault();
+      this._quickOpen = false;
+      return;
+    }
     if (this._controlled.length || this._selectMode) {
       e.preventDefault();
       this._closeControl();
@@ -725,6 +791,35 @@ export class ApartmentViewCard extends LitElement {
       this._pulse = false;
     }, 1400);
   };
+
+  /** Configured quick actions, plus a contextual "turn off this room" while a zone is focused. */
+  private _quickActionList(): QuickAction[] {
+    const list = [...(this.config.quickActions ?? [])];
+    if (this._focusedZone) {
+      const lights = this._lightsInZone(this._focusedZone);
+      if (lights.length) {
+        list.unshift({
+          name: `Turn off ${this._focusedZone.name}`,
+          icon: 'mdi:lightbulb-off',
+          service: 'light.turn_off',
+          data: { entity_id: lights },
+        });
+      }
+    }
+    return list;
+  }
+
+  private _runQuickAction(qa: QuickAction): void {
+    if (this.hass) {
+      if (qa.service) {
+        const dot = qa.service.indexOf('.');
+        this.hass.callService(qa.service.slice(0, dot), qa.service.slice(dot + 1), qa.data ?? {});
+      } else if (qa.entity) {
+        this.hass.callService('homeassistant', 'turn_on', { entity_id: qa.entity });
+      }
+    }
+    this._quickOpen = false;
+  }
 
   /** "Lights control" toggle: enter multi-select (pre-checking the focused zone's lights) or exit. */
   private _toggleSelectMode = (): void => {
@@ -922,6 +1017,7 @@ export class ApartmentViewCard extends LitElement {
                 <span>${this._selectMode ? 'Done' : 'Lights control'}</span>
               </button>`
             : nothing}
+          ${this._renderQuickActions()}
         </div>
         <div class="zone-controls" role="toolbar" aria-label="Zones">
           ${buildZoneChips(this.config.zones, this._focusedZone).map(
@@ -938,6 +1034,40 @@ export class ApartmentViewCard extends LitElement {
         </div>
         ${this._renderControlSurface()}
       </ha-card>
+    `;
+  }
+
+  private _renderQuickActions(): TemplateResult | typeof nothing {
+    const actions = this._quickActionList();
+    if (!actions.length || this._selectMode) return nothing;
+    const R = 80;
+    return html`
+      <div class="quick ${this._quickOpen ? 'open' : ''}">
+        ${actions.map((qa, i) => {
+          const t = actions.length === 1 ? 0.5 : i / (actions.length - 1);
+          const ang = Math.PI + t * (Math.PI / 2); // 180° (left) -> 270° (up)
+          const dx = Math.cos(ang) * R;
+          const dy = Math.sin(ang) * R;
+          return html`<button
+            class="quick-action"
+            style="--qx:${dx.toFixed(1)}px;--qy:${dy.toFixed(1)}px;--qd:${(i * 0.03).toFixed(2)}s"
+            title=${qa.name}
+            aria-label=${qa.name}
+            tabindex=${this._quickOpen ? '0' : '-1'}
+            @click=${() => this._runQuickAction(qa)}
+          ><ha-icon icon=${qa.icon ?? 'mdi:flash'}></ha-icon></button>`;
+        })}
+        <button
+          class="quick-fab"
+          aria-label="Quick actions"
+          aria-expanded=${this._quickOpen}
+          @click=${() => {
+            this._quickOpen = !this._quickOpen;
+          }}
+        >
+          <ha-icon icon=${this._quickOpen ? 'mdi:close' : 'mdi:flash'}></ha-icon>
+        </button>
+      </div>
     `;
   }
 

@@ -216,3 +216,22 @@ describe('zoneForPoint', () => {
     expect(zoneForPoint(50, 50, [])).toBeNull();
   });
 });
+
+describe('normalizeConfig quickActions', () => {
+  it('normalizes valid actions and drops invalid ones', () => {
+    const cfg = normalizeConfig({ images: { base: '/b.png' }, quickActions: [
+      { name: 'Movie', entity: 'scene.movie', icon: 'mdi:movie' },
+      { name: 'All off', service: 'light.turn_off', data: { entity_id: 'all' } },
+      { name: 'Bad' },        // no entity/service -> dropped
+      { entity: 'scene.x' },  // no name -> dropped
+      'nope',                 // not an object -> dropped
+    ] });
+    expect(cfg.quickActions).toEqual([
+      { name: 'Movie', icon: 'mdi:movie', entity: 'scene.movie' },
+      { name: 'All off', service: 'light.turn_off', data: { entity_id: 'all' } },
+    ]);
+  });
+  it('defaults quickActions to []', () => {
+    expect(normalizeConfig({ images: { base: '/b.png' } }).quickActions).toEqual([]);
+  });
+});

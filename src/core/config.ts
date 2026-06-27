@@ -43,12 +43,24 @@ export interface CardOptions {
   labels: LabelDefaults;
 }
 
+export interface QuickAction {
+  name: string;
+  icon?: string;
+  /** A scene/script/etc. to activate (homeassistant.turn_on), when no explicit service. */
+  entity?: string;
+  /** An explicit "domain.service" call. */
+  service?: string;
+  /** Service data / target for `service`. */
+  data?: Record<string, unknown>;
+}
+
 export interface ApartmentViewConfig {
   type: string;
   images: ImagesConfig;
   entities: EntityConfig[];
   zones: ZoneConfig[];
   options: CardOptions;
+  quickActions: QuickAction[];
 }
 
 const CARD_TYPE = 'custom:apartment-view-card';
@@ -162,6 +174,19 @@ function normalizeEntity(raw: any): EntityConfig {
   return entity;
 }
 
+function normalizeQuickAction(raw: any): QuickAction | null {
+  const name = typeof raw?.name === 'string' && raw.name.length ? raw.name : undefined;
+  const entity = typeof raw?.entity === 'string' ? raw.entity : undefined;
+  const service = typeof raw?.service === 'string' ? raw.service : undefined;
+  if (!name || (!entity && !service)) return null;
+  const qa: QuickAction = { name };
+  if (typeof raw.icon === 'string') qa.icon = raw.icon;
+  if (entity) qa.entity = entity;
+  if (service) qa.service = service;
+  if (raw.data && typeof raw.data === 'object') qa.data = raw.data;
+  return qa;
+}
+
 function normalizeZone(raw: any): ZoneConfig {
   const zone: ZoneConfig = {
     name: typeof raw?.name === 'string' && raw.name.length > 0 ? raw.name : 'Zone',
@@ -221,6 +246,9 @@ export function normalizeConfig(raw: any): ApartmentViewConfig {
     entities: rawEntities.map(normalizeEntity),
     zones: rawZones.map(normalizeZone),
     options: normalizeOptions(source),
+    quickActions: (Array.isArray(source.quickActions) ? source.quickActions : [])
+      .map(normalizeQuickAction)
+      .filter((q: QuickAction | null): q is QuickAction => q !== null),
   };
 }
 
