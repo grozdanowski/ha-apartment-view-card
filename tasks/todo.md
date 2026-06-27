@@ -14,11 +14,11 @@ Approach: sequential increments, each TDD + green gate + real-HA verify (fronten
 - [ ] A5 presence/motion pulse (capped ~3, decaying, reduced-motion). Tests + verify.
 
 ## Track B — controls (independent; control-surface + entity-capabilities)
-- [ ] B1 entity-capabilities: extend ControlKind (cover/fan/lock + switch/toggle); coverCaps/
+- [x] B1 entity-capabilities: extend ControlKind (cover/fan/lock + switch/toggle); coverCaps/
       fanCaps/lockCaps; group resolution (group.*/light.all_* -> members). Tests.
-- [ ] B2 control-surface bodies: cover (open/stop/close + position), fan (speed/preset/oscillate),
+- [x] B2 control-surface bodies: cover (open/stop/close + position), fan (speed/preset/oscillate),
       lock (lock/unlock + jammed, confirm guard). Tests + harness + real-HA.
-- [ ] B3 tap disambiguation (honor tap: more-info on controllable) + invisible >=44px hit target. Tests.
+- [x] B3 tap disambiguation (honor tap: more-info on controllable) + invisible >=44px hit target. Tests.
 
 ## Track C — editor (sequential; editor files; real-HA verify each)
 - [ ] C1 4-tab shell (Floorplan/Devices/Lighting/Zones) over pinned preview; native ha-form only.

@@ -163,3 +163,72 @@ describe('control-surface: panel states', () => {
     expect(hass.calls.at(-1)).toMatchObject({ domain: 'homeassistant', service: 'turn_off' });
   });
 });
+
+import { COVER_FEATURE, FAN_FEATURE } from '../src/core/entity-capabilities';
+
+describe('control-surface: cover', () => {
+  it('full cover shows open/stop/close + position slider; open calls cover.open_cover', async () => {
+    const f = COVER_FEATURE.OPEN | COVER_FEATURE.CLOSE | COVER_FEATURE.STOP | COVER_FEATURE.SET_POSITION;
+    const { sr, hass } = await mount(['cover.blind'], { 'cover.blind': ent('cover.blind', 'open', { supported_features: f, current_position: 40 }) });
+    expect(sr.querySelectorAll('.tbtn').length).toBe(3);
+    expect(sr.querySelector('[aria-label="Position"]')).toBeTruthy();
+    (sr.querySelector('[aria-label="Open"]') as HTMLElement).click();
+    expect(hass.calls.at(-1)).toMatchObject({ domain: 'cover', service: 'open_cover' });
+  });
+  it('position keyboard calls set_cover_position relative to current', async () => {
+    const { sr, hass } = await mount(['cover.blind'], { 'cover.blind': ent('cover.blind', 'open', { supported_features: COVER_FEATURE.SET_POSITION, current_position: 40 }) });
+    (sr.querySelector('[aria-label="Position"]') as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+    expect(hass.calls.at(-1)).toMatchObject({ domain: 'cover', service: 'set_cover_position' });
+    expect(hass.calls.at(-1)!.data.position).toBe(45);
+  });
+  it('garage (no SET_POSITION) shows buttons but no position slider', async () => {
+    const f = COVER_FEATURE.OPEN | COVER_FEATURE.CLOSE | COVER_FEATURE.STOP;
+    const { sr } = await mount(['cover.garage'], { 'cover.garage': ent('cover.garage', 'closed', { supported_features: f, device_class: 'garage' }) });
+    expect(sr.querySelector('[aria-label="Position"]')).toBeNull();
+    expect(sr.querySelector('.pwr')).toBeNull(); // cover hides the header power button
+  });
+});
+
+describe('control-surface: fan', () => {
+  it('shows speed slider + preset chips + oscillate; preset click calls set_preset_mode', async () => {
+    const f = FAN_FEATURE.SET_SPEED | FAN_FEATURE.OSCILLATE | FAN_FEATURE.PRESET_MODE;
+    const { sr, hass } = await mount(['fan.bedroom'], { 'fan.bedroom': ent('fan.bedroom', 'on', { supported_features: f, percentage: 60, preset_modes: ['auto', 'sleep'], oscillating: false }) });
+    expect(sr.querySelector('[aria-label="Speed"]')).toBeTruthy();
+    const presets = Array.from(sr.querySelectorAll('.mode')).filter((b) => /auto|sleep/i.test(b.textContent || ''));
+    expect(presets.length).toBe(2);
+    (presets[0] as HTMLElement).click();
+    expect(hass.calls.at(-1)).toMatchObject({ domain: 'fan', service: 'set_preset_mode' });
+    expect(hass.calls.at(-1)!.data.preset_mode).toBe('auto');
+  });
+  it('speed keyboard calls set_percentage', async () => {
+    const { sr, hass } = await mount(['fan.x'], { 'fan.x': ent('fan.x', 'on', { supported_features: FAN_FEATURE.SET_SPEED, percentage: 50 }) });
+    (sr.querySelector('[aria-label="Speed"]') as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' }));
+    expect(hass.calls.at(-1)).toMatchObject({ domain: 'fan', service: 'set_percentage' });
+    expect(hass.calls.at(-1)!.data.percentage).toBe(60);
+  });
+});
+
+describe('control-surface: lock', () => {
+  it('lock/unlock buttons call the lock services; no header power', async () => {
+    const { sr, hass } = await mount(['lock.front'], { 'lock.front': ent('lock.front', 'locked', { supported_features: 0 }) });
+    expect(sr.querySelector('.pwr')).toBeNull();
+    const unlock = Array.from(sr.querySelectorAll('.mode')).find((b) => /unlock/i.test(b.textContent || '')) as HTMLElement;
+    unlock.click();
+    expect(hass.calls.at(-1)).toMatchObject({ domain: 'lock', service: 'unlock' });
+  });
+  it('jammed state surfaces a warning', async () => {
+    const { sr } = await mount(['lock.x'], { 'lock.x': ent('lock.x', 'jammed', {}) });
+    expect((sr.textContent || '').toLowerCase()).toContain('jammed');
+  });
+});
+
+describe('control-surface: homogeneous group', () => {
+  it('a group of covers renders the cover body (not a light group)', async () => {
+    const { sr } = await mount(['cover.a', 'cover.b'], {
+      'cover.a': ent('cover.a', 'open', { supported_features: COVER_FEATURE.OPEN | COVER_FEATURE.CLOSE }),
+      'cover.b': ent('cover.b', 'open', { supported_features: COVER_FEATURE.OPEN | COVER_FEATURE.CLOSE }),
+    });
+    expect(sr.querySelector('[aria-label="Open"]')).toBeTruthy(); // cover body, not brightness
+    expect(sr.querySelector('[aria-label="Brightness"]')).toBeNull();
+  });
+});

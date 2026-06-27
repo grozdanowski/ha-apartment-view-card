@@ -18,7 +18,7 @@ import { zoomToZone, type Viewport, type ZoomTransform } from './core/geometry';
 import { buildZoneChips, type ZoneChip } from './render/zone-controls';
 import { entityInFocusedZone } from './render/zone-focus';
 import './render/control-surface';
-import { controlKind } from './core/entity-capabilities';
+import { controlKind, controlTarget } from './core/entity-capabilities';
 
 @customElement('apartment-view-card')
 export class ApartmentViewCard extends LitElement {
@@ -101,9 +101,9 @@ export class ApartmentViewCard extends LitElement {
     }
     .marker-overlay .marker {
       position: absolute;
-      /* >=40px hit area for touch (icon stays ~22px, centered). */
-      min-width: 40px;
-      min-height: 40px;
+      /* >=44px hit area for touch (icon stays ~22px, centered). */
+      min-width: 44px;
+      min-height: 44px;
       transform: translate(-50%, -50%);
       display: grid;
       place-items: center;
@@ -577,8 +577,16 @@ export class ApartmentViewCard extends LitElement {
         : [...this._controlled, entity.entity];
       return;
     }
-    if (controlKind(entity.entity) !== 'none') {
-      this._controlled = [entity.entity];
+    // Explicit tap overrides win on controllable entities (e.g. a light that
+    // should open more-info instead of the control surface).
+    if (entity.tap === 'more-info') {
+      dispatchTapAction({ hass: this.hass }, entity, this);
+      return;
+    }
+    if (entity.tap === 'none') return;
+    const { kind, ids } = controlTarget(entity.entity, this.hass.states);
+    if (kind !== 'none') {
+      this._controlled = ids;
     } else {
       dispatchTapAction({ hass: this.hass }, entity, this);
     }

@@ -113,13 +113,131 @@ export function climateCaps(state: HassEntity | undefined): ClimateCaps {
   };
 }
 
+/** CoverEntityFeature bits. */
+export const COVER_FEATURE = {
+  OPEN: 1,
+  CLOSE: 2,
+  SET_POSITION: 4,
+  STOP: 8,
+  OPEN_TILT: 16,
+  CLOSE_TILT: 32,
+  STOP_TILT: 64,
+  SET_TILT_POSITION: 128,
+} as const;
+
+export interface CoverCaps {
+  open: boolean;
+  close: boolean;
+  stop: boolean;
+  position: boolean;
+  tilt: boolean;
+  setTilt: boolean;
+  deviceClass?: string;
+}
+
+export function coverCaps(state: HassEntity | undefined): CoverCaps {
+  const a = state?.attributes ?? {};
+  const f = Number(a.supported_features) || 0;
+  const has = (bit: number) => (f & bit) !== 0;
+  return {
+    open: has(COVER_FEATURE.OPEN),
+    close: has(COVER_FEATURE.CLOSE),
+    stop: has(COVER_FEATURE.STOP),
+    position: has(COVER_FEATURE.SET_POSITION),
+    tilt: has(COVER_FEATURE.OPEN_TILT) || has(COVER_FEATURE.CLOSE_TILT),
+    setTilt: has(COVER_FEATURE.SET_TILT_POSITION),
+    deviceClass: typeof a.device_class === 'string' ? a.device_class : undefined,
+  };
+}
+
+/** FanEntityFeature bits. */
+export const FAN_FEATURE = {
+  SET_SPEED: 1,
+  OSCILLATE: 2,
+  DIRECTION: 4,
+  PRESET_MODE: 8,
+} as const;
+
+export interface FanCaps {
+  speed: boolean;
+  oscillate: boolean;
+  direction: boolean;
+  preset: boolean;
+  presetModes: string[];
+}
+
+export function fanCaps(state: HassEntity | undefined): FanCaps {
+  const a = state?.attributes ?? {};
+  const f = Number(a.supported_features) || 0;
+  const has = (bit: number) => (f & bit) !== 0;
+  return {
+    speed: has(FAN_FEATURE.SET_SPEED),
+    oscillate: has(FAN_FEATURE.OSCILLATE),
+    direction: has(FAN_FEATURE.DIRECTION),
+    preset: has(FAN_FEATURE.PRESET_MODE),
+    presetModes: Array.isArray(a.preset_modes) ? a.preset_modes : [],
+  };
+}
+
+/** LockEntityFeature bits. */
+export const LOCK_FEATURE = { OPEN: 1 } as const;
+
+export interface LockCaps {
+  /** Supports a separate "open latch" action beyond lock/unlock. */
+  openLatch: boolean;
+}
+
+export function lockCaps(state: HassEntity | undefined): LockCaps {
+  const f = Number(state?.attributes?.supported_features) || 0;
+  return { openLatch: (f & LOCK_FEATURE.OPEN) !== 0 };
+}
+
 /** Which control-surface body an entity drives. */
-export type ControlKind = 'light' | 'media' | 'climate' | 'none';
+export type ControlKind = 'light' | 'media' | 'climate' | 'cover' | 'fan' | 'lock' | 'none';
+
+const DOMAIN_KIND: Record<string, ControlKind> = {
+  light: 'light',
+  media_player: 'media',
+  climate: 'climate',
+  cover: 'cover',
+  fan: 'fan',
+  lock: 'lock',
+};
 
 export function controlKind(entityId: string): ControlKind {
-  const domain = entityId.split('.')[0];
-  if (domain === 'light') return 'light';
-  if (domain === 'media_player') return 'media';
-  if (domain === 'climate') return 'climate';
-  return 'none';
+  return DOMAIN_KIND[entityId.split('.')[0]] ?? 'none';
+}
+
+/**
+ * Resolve a marker entity to the entity ids the control surface should drive.
+ * A group (a `group.*` helper, or any entity exposing an `attributes.entity_id`
+ * member list) expands to its members so the surface controls the whole group
+ * instead of silently vanishing. Everything else resolves to itself.
+ */
+export function resolveControlEntities(
+  entityId: string,
+  states: Record<string, HassEntity>,
+): string[] {
+  const members = states[entityId]?.attributes?.entity_id;
+  if (entityId.split('.')[0] === 'group' && Array.isArray(members) && members.length) {
+    return members.filter((m): m is string => typeof m === 'string');
+  }
+  return [entityId];
+}
+
+/**
+ * The control target for a tapped marker: the kind of surface to show and the
+ * entity ids it drives. Returns kind 'none' when nothing is controllable.
+ * Homogeneous groups (e.g. a group of lights) take their members' kind.
+ */
+export function controlTarget(
+  entityId: string,
+  states: Record<string, HassEntity>,
+): { kind: ControlKind; ids: string[] } {
+  const ids = resolveControlEntities(entityId, states);
+  if (ids.length === 1) return { kind: controlKind(ids[0]), ids };
+  // group: use the members' common kind, else 'none'
+  const kinds = new Set(ids.map((id) => controlKind(id)));
+  const kind = kinds.size === 1 ? [...kinds][0] : 'none';
+  return { kind, ids };
 }

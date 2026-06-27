@@ -335,3 +335,33 @@ describe('card-component: Lights control (multi-select)', () => {
     expect(card.shadowRoot!.querySelector('av-control-surface')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tap disambiguation + group resolution
+// ---------------------------------------------------------------------------
+
+describe('card-component: tap disambiguation + groups', () => {
+  const click = (el: Element) => el.dispatchEvent(new MouseEvent('click', { detail: 0, bubbles: true }));
+
+  it('tap: more-info on a controllable entity opens more-info, NOT the surface', async () => {
+    const cfg = { ...BASE_CONFIG, entities: [{ entity: 'light.kitchen_ceiling', x: 30, y: 40, size: 'small', tap: 'more-info' }] };
+    const card = await mountCard(cfg);
+    let moreInfo = false;
+    card.addEventListener('hass-more-info', () => (moreInfo = true));
+    click(card.shadowRoot!.querySelector('.marker')!);
+    await (card as any).updateComplete;
+    expect(card.shadowRoot!.querySelector('av-control-surface')).toBeNull();
+    expect(moreInfo).toBe(true);
+  });
+
+  it('a group marker opens a surface that drives its members', async () => {
+    const cfg = { ...BASE_CONFIG, entities: [{ entity: 'group.lights', x: 50, y: 50, size: 'small', tap: 'toggle' }] };
+    const hass = createMockHass();
+    (hass.states as any)['group.lights'] = { entity_id: 'group.lights', state: 'on', attributes: { entity_id: ['light.kitchen_ceiling', 'light.living_lamp'] } };
+    const card = await mountCard(cfg, hass);
+    click(card.shadowRoot!.querySelector('.marker')!);
+    await (card as any).updateComplete;
+    const surf = card.shadowRoot!.querySelector('av-control-surface') as any;
+    expect(surf.entityIds).toEqual(['light.kitchen_ceiling', 'light.living_lamp']);
+  });
+});

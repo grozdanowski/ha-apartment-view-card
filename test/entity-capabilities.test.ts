@@ -84,3 +84,65 @@ describe('controlKind', () => {
     expect(controlKind('switch.x')).toBe('none');
   });
 });
+
+import { coverCaps, fanCaps, lockCaps, resolveControlEntities, controlTarget, COVER_FEATURE, FAN_FEATURE } from '../src/core/entity-capabilities';
+
+describe('controlKind (extended domains)', () => {
+  it('maps cover/fan/lock to their kinds; switch/sensor -> none', () => {
+    expect(controlKind('cover.garage')).toBe('cover');
+    expect(controlKind('fan.bedroom')).toBe('fan');
+    expect(controlKind('lock.front')).toBe('lock');
+    expect(controlKind('switch.x')).toBe('none');
+    expect(controlKind('sensor.x')).toBe('none');
+  });
+});
+
+describe('coverCaps', () => {
+  it('reads open/close/stop/position + tilt from supported_features', () => {
+    const f = COVER_FEATURE.OPEN | COVER_FEATURE.CLOSE | COVER_FEATURE.STOP | COVER_FEATURE.SET_POSITION;
+    expect(coverCaps(ent('cover.blind', { supported_features: f, device_class: 'blind' }))).toMatchObject({ open: true, close: true, stop: true, position: true, tilt: false, deviceClass: 'blind' });
+  });
+  it('detects tilt support', () => {
+    const f = COVER_FEATURE.OPEN_TILT | COVER_FEATURE.SET_TILT_POSITION;
+    expect(coverCaps(ent('cover.shade', { supported_features: f }))).toMatchObject({ tilt: true, setTilt: true });
+  });
+  it('garage with only open/close/stop has no position slider', () => {
+    const f = COVER_FEATURE.OPEN | COVER_FEATURE.CLOSE | COVER_FEATURE.STOP;
+    expect(coverCaps(ent('cover.garage', { supported_features: f, device_class: 'garage' })).position).toBe(false);
+  });
+});
+
+describe('fanCaps', () => {
+  it('reads speed/oscillate/direction/preset + preset list', () => {
+    const f = FAN_FEATURE.SET_SPEED | FAN_FEATURE.OSCILLATE | FAN_FEATURE.PRESET_MODE;
+    expect(fanCaps(ent('fan.bedroom', { supported_features: f, preset_modes: ['auto', 'sleep'] }))).toMatchObject({ speed: true, oscillate: true, direction: false, preset: true, presetModes: ['auto', 'sleep'] });
+  });
+});
+
+describe('lockCaps', () => {
+  it('detects the open-latch feature', () => {
+    expect(lockCaps(ent('lock.a', { supported_features: 1 })).openLatch).toBe(true);
+    expect(lockCaps(ent('lock.b', { supported_features: 0 })).openLatch).toBe(false);
+  });
+});
+
+describe('group resolution', () => {
+  const states: Record<string, HassEntity> = {
+    'group.lights': ent('group.lights', { entity_id: ['light.a', 'light.b'] }),
+    'group.mixed': ent('group.mixed', { entity_id: ['light.a', 'switch.x'] }),
+    'light.a': ent('light.a'),
+  };
+  it('resolveControlEntities expands a group to its members, else self', () => {
+    expect(resolveControlEntities('group.lights', states)).toEqual(['light.a', 'light.b']);
+    expect(resolveControlEntities('light.a', states)).toEqual(['light.a']);
+  });
+  it('controlTarget gives a homogeneous group its members kind', () => {
+    expect(controlTarget('group.lights', states)).toEqual({ kind: 'light', ids: ['light.a', 'light.b'] });
+  });
+  it('controlTarget is none for a heterogeneous group', () => {
+    expect(controlTarget('group.mixed', states).kind).toBe('none');
+  });
+  it('controlTarget for a single controllable entity', () => {
+    expect(controlTarget('light.a', states)).toEqual({ kind: 'light', ids: ['light.a'] });
+  });
+});

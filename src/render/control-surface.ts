@@ -8,6 +8,9 @@ import {
   lightCaps,
   mediaCaps,
   climateCaps,
+  coverCaps,
+  fanCaps,
+  lockCaps,
   controlKind,
   type ControlKind,
 } from '../core/entity-capabilities';
@@ -115,7 +118,9 @@ export class AvControlSurface extends LitElement {
     .modes { display: flex; gap: 8px; flex-wrap: wrap; }
     .mode {
       cursor: pointer; border: none; padding: 9px 14px; border-radius: 11px; font: inherit; font-size: 13px; font-weight: 500;
+      display: inline-flex; align-items: center; gap: 6px;
       background: color-mix(in srgb, var(--primary-text-color, #fff) 8%, transparent); color: var(--secondary-text-color, #b9bdc6); text-transform: capitalize;
+      --mdc-icon-size: 16px;
     }
     .mode.sel { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
     button { font: inherit; }
@@ -128,10 +133,14 @@ export class AvControlSurface extends LitElement {
   private get _entities(): { id: string; state: HassEntity | undefined }[] {
     return this.entityIds.map((id) => ({ id, state: this._state(id) }));
   }
-  /** When >1 entity, the surface is always a light group; else the single entity's kind. */
+  /** A homogeneous group takes its members' kind; a mixed selection is a light group. */
   private get _kind(): ControlKind {
-    if (this.entityIds.length > 1) return 'light';
-    return this.entityIds.length === 1 ? controlKind(this.entityIds[0]) : 'light';
+    if (this.entityIds.length === 0) return 'light';
+    const kinds = new Set(this.entityIds.map((id) => controlKind(id)));
+    return kinds.size === 1 ? [...kinds][0] : 'light';
+  }
+  private get _kindNoun(): string {
+    return ({ light: 'lights', cover: 'covers', fan: 'fans', lock: 'locks', media: 'media players', climate: 'thermostats' } as Record<ControlKind, string>)[this._kind] ?? 'devices';
   }
   private _call(domain: string, service: string, data: Record<string, unknown>): void {
     this.hass?.callService(domain, service, { entity_id: this.entityIds, ...data });
@@ -169,7 +178,7 @@ export class AvControlSurface extends LitElement {
     let sub = 'Select lights to control';
     if (!disabled) {
       if (multi) {
-        title = `${this.entityIds.length} lights`;
+        title = `${this.entityIds.length} ${this._kindNoun}`;
         sub = `${ents.filter((e) => e.state && isActive(e.state)).length} on`;
       } else {
         const e = ents[0];
@@ -187,9 +196,11 @@ export class AvControlSurface extends LitElement {
           <div class="h-title">${title}</div>
           <div class="h-sub">${sub}</div>
         </div>
-        <button class="pwr ${anyOn ? '' : 'off'}" @click=${() => this._call('homeassistant', anyOn ? 'turn_off' : 'turn_on', {})} ?disabled=${disabled}>
-          <ha-icon icon="mdi:power"></ha-icon>${multi ? (anyOn ? 'All off' : 'All on') : anyOn ? 'Off' : 'On'}
-        </button>
+        ${this._kind === 'cover' || this._kind === 'lock'
+          ? nothing
+          : html`<button class="pwr ${anyOn ? '' : 'off'}" @click=${() => this._call('homeassistant', anyOn ? 'turn_off' : 'turn_on', {})} ?disabled=${disabled}>
+              <ha-icon icon="mdi:power"></ha-icon>${multi ? (anyOn ? 'All off' : 'All on') : anyOn ? 'Off' : 'On'}
+            </button>`}
         <button class="close" aria-label="Close" @click=${this._close}><ha-icon icon="mdi:close"></ha-icon></button>
       </div>
     `;
@@ -200,11 +211,25 @@ export class AvControlSurface extends LitElement {
     const k = controlKind(state.entity_id);
     if (k === 'climate') return isActive(state) ? `${state.state} · ${this._displayTemp(state)}°` : 'Off';
     if (k === 'media') return isActive(state) ? (state.state === 'playing' ? 'Playing' : 'Paused') : 'Off';
+    if (k === 'cover') {
+      const p = state.attributes?.current_position;
+      if (typeof p === 'number') return p <= 0 ? 'Closed' : p >= 100 ? 'Open' : `${Math.round(p)}% open`;
+      return state.state === 'open' ? 'Open' : state.state === 'closed' ? 'Closed' : state.state;
+    }
+    if (k === 'fan') {
+      const p = state.attributes?.percentage;
+      return isActive(state) ? (typeof p === 'number' ? `${Math.round(p)}%` : 'On') : 'Off';
+    }
+    if (k === 'lock') return state.state.charAt(0).toUpperCase() + state.state.slice(1);
     return isActive(state) ? `${Math.round(intensity(state) * 100)}%` : 'Off';
   }
   private _avatarIcon(id: string): string {
     const k = id ? controlKind(id) : 'light';
-    return k === 'media' ? 'mdi:cast' : k === 'climate' ? 'mdi:thermostat' : 'mdi:lightbulb';
+    const icons: Record<ControlKind, string> = {
+      media: 'mdi:cast', climate: 'mdi:thermostat', cover: 'mdi:window-shutter',
+      fan: 'mdi:fan', lock: 'mdi:lock', light: 'mdi:lightbulb', none: 'mdi:lightbulb',
+    };
+    return icons[k];
   }
   private _avatarStyle(state: HassEntity | undefined): Record<string, string> {
     const on = state ? isActive(state) : false;
@@ -216,6 +241,9 @@ export class AvControlSurface extends LitElement {
     const kind = this._kind;
     if (kind === 'media') return this._renderMedia();
     if (kind === 'climate') return this._renderClimate();
+    if (kind === 'cover') return this._renderCover();
+    if (kind === 'fan') return this._renderFan();
+    if (kind === 'lock') return this._renderLock();
     return this._renderLight(disabled);
   }
 
@@ -358,6 +386,107 @@ export class AvControlSurface extends LitElement {
       : 0;
     if (e.key === 'ArrowRight' || e.key === 'ArrowUp') this._call('media_player', 'volume_set', { volume_level: Math.min(1, cur + 0.05) });
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') this._call('media_player', 'volume_set', { volume_level: Math.max(0, cur - 0.05) });
+  };
+
+  // ---- Cover ------------------------------------------------------------
+  private _renderCover(): TemplateResult {
+    const state = this._state(this.entityIds[0]);
+    const c = coverCaps(state);
+    const pos = typeof state?.attributes?.current_position === 'number' ? state.attributes.current_position : null;
+    return html`
+      <div class="body">
+        <div class="row transport" style="justify-content:center">
+          ${c.open ? html`<button class="tbtn" aria-label="Open" @click=${() => this._call('cover', 'open_cover', {})}><ha-icon icon="mdi:arrow-up"></ha-icon></button>` : nothing}
+          ${c.stop ? html`<button class="tbtn" aria-label="Stop" @click=${() => this._call('cover', 'stop_cover', {})}><ha-icon icon="mdi:stop"></ha-icon></button>` : nothing}
+          ${c.close ? html`<button class="tbtn" aria-label="Close" @click=${() => this._call('cover', 'close_cover', {})}><ha-icon icon="mdi:arrow-down"></ha-icon></button>` : nothing}
+        </div>
+        ${c.position && pos !== null
+          ? html`<div class="row">
+              <span class="ico"><ha-icon icon="mdi:arrow-up-down"></ha-icon></span>
+              <div class="track" role="slider" tabindex="0" aria-label="Position" aria-valuenow=${Math.round(pos)}
+                @pointerdown=${this._coverDown} @pointermove=${this._coverMove} @pointerup=${this._coverUp} @keydown=${this._coverKey}>
+                <div class="fill" style="width:${Math.round(pos)}%;background:linear-gradient(90deg,#8a8f98,#d8dbe0)"></div>
+              </div>
+            </div>`
+          : nothing}
+      </div>
+    `;
+  }
+  private _coverDrag = false;
+  private _pctFromEvent(e: PointerEvent): number {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    return Math.max(0, Math.min(100, Math.round(((e.clientX - r.left) / r.width) * 100)));
+  }
+  private _coverDown = (e: PointerEvent): void => { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); this._coverDrag = true; this._call('cover', 'set_cover_position', { position: this._pctFromEvent(e) }); };
+  private _coverMove = (e: PointerEvent): void => { if (!this._coverDrag) return; const now = Date.now(); if (now - this._lastCall < 120) return; this._lastCall = now; this._call('cover', 'set_cover_position', { position: this._pctFromEvent(e) }); };
+  private _coverUp = (e: PointerEvent): void => { if (!this._coverDrag) return; this._coverDrag = false; this._call('cover', 'set_cover_position', { position: this._pctFromEvent(e) }); };
+  private _coverKey = (e: KeyboardEvent): void => {
+    const cur = Number(this._state(this.entityIds[0])?.attributes?.current_position) || 0;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') this._call('cover', 'set_cover_position', { position: Math.min(100, cur + 5) });
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') this._call('cover', 'set_cover_position', { position: Math.max(0, cur - 5) });
+  };
+
+  // ---- Fan --------------------------------------------------------------
+  private _renderFan(): TemplateResult {
+    const state = this._state(this.entityIds[0]);
+    const c = fanCaps(state);
+    const pct = typeof state?.attributes?.percentage === 'number' ? state.attributes.percentage : 0;
+    const preset = state?.attributes?.preset_mode;
+    const osc = state?.attributes?.oscillating === true;
+    return html`
+      <div class="body">
+        ${c.speed
+          ? html`<div class="row">
+              <span class="ico"><ha-icon icon="mdi:fan"></ha-icon></span>
+              <div class="track" role="slider" tabindex="0" aria-label="Speed" aria-valuenow=${Math.round(pct)}
+                @pointerdown=${this._fanDown} @pointermove=${this._fanMove} @pointerup=${this._fanUp} @keydown=${this._fanKey}>
+                <div class="fill" style="width:${Math.round(pct)}%;background:linear-gradient(90deg,#5b9bff,#bcd6ff)"></div>
+              </div>
+            </div>`
+          : nothing}
+        ${c.preset && c.presetModes.length
+          ? html`<div class="row modes">
+              ${c.presetModes.map((m) => html`<button class="mode ${preset === m ? 'sel' : ''}" @click=${() => this._call('fan', 'set_preset_mode', { preset_mode: m })}>${m}</button>`)}
+            </div>`
+          : nothing}
+        ${c.oscillate
+          ? html`<div class="row">
+              <button class="mode ${osc ? 'sel' : ''}" @click=${() => this._call('fan', 'oscillate', { oscillating: !osc })}><ha-icon icon="mdi:arrow-left-right"></ha-icon> Oscillate</button>
+            </div>`
+          : nothing}
+      </div>
+    `;
+  }
+  private _fanDrag = false;
+  private _fanDown = (e: PointerEvent): void => { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); this._fanDrag = true; this._call('fan', 'set_percentage', { percentage: this._pctFromEvent(e) }); };
+  private _fanMove = (e: PointerEvent): void => { if (!this._fanDrag) return; const now = Date.now(); if (now - this._lastCall < 120) return; this._lastCall = now; this._call('fan', 'set_percentage', { percentage: this._pctFromEvent(e) }); };
+  private _fanUp = (e: PointerEvent): void => { if (!this._fanDrag) return; this._fanDrag = false; this._call('fan', 'set_percentage', { percentage: this._pctFromEvent(e) }); };
+  private _fanKey = (e: KeyboardEvent): void => {
+    const cur = Number(this._state(this.entityIds[0])?.attributes?.percentage) || 0;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') this._call('fan', 'set_percentage', { percentage: Math.min(100, cur + 10) });
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') this._call('fan', 'set_percentage', { percentage: Math.max(0, cur - 10) });
+  };
+
+  // ---- Lock -------------------------------------------------------------
+  private _renderLock(): TemplateResult {
+    const state = this._state(this.entityIds[0]);
+    const c = lockCaps(state);
+    const s = state?.state ?? 'unknown';
+    return html`
+      <div class="body">
+        <div class="row modes">
+          <button class="mode ${s === 'locked' ? 'sel' : ''}" @click=${() => this._call('lock', 'lock', {})}><ha-icon icon="mdi:lock"></ha-icon> Lock</button>
+          <button class="mode ${s === 'unlocked' ? 'sel' : ''}" @click=${() => this._call('lock', 'unlock', {})}><ha-icon icon="mdi:lock-open-variant"></ha-icon> Unlock</button>
+        </div>
+        ${s === 'jammed' ? html`<div class="row"><span class="h-sub" style="color:var(--error-color,#db4437)">⚠ Jammed</span></div>` : nothing}
+        ${c.openLatch ? html`<div class="row"><button class="mode" @click=${this._confirmOpenLatch}><ha-icon icon="mdi:door-open"></ha-icon> Open latch</button></div>` : nothing}
+      </div>
+    `;
+  }
+  private _confirmOpenLatch = (): void => {
+    // Confirm guard on the irreversible latch release.
+    if (typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm('Open the lock latch?')) return;
+    this._call('lock', 'open', {});
   };
 
   // ---- Climate ----------------------------------------------------------
