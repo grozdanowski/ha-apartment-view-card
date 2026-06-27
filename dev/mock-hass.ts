@@ -63,6 +63,13 @@ function seedStates(): Record<string, MockHassEntity> {
     'media_player.tv': makeEntity('media_player.tv', 'playing', {
       friendly_name: 'Living room TV',
       device_class: 'tv',
+      // PLAY|PAUSE|NEXT|PREVIOUS|VOLUME_SET|SELECT_SOURCE|TURN_ON|TURN_OFF
+      supported_features: 18869,
+      volume_level: 0.35,
+      media_title: 'The Grand Budapest Hotel',
+      media_artist: 'Netflix',
+      source: 'Netflix',
+      source_list: ['HDMI 1', 'HDMI 2', 'Netflix', 'Apple TV', 'Antenna'],
     }),
     'media_player.kitchen_speaker': makeEntity(
       'media_player.kitchen_speaker',
@@ -70,6 +77,11 @@ function seedStates(): Record<string, MockHassEntity> {
       {
         friendly_name: 'Kitchen speaker',
         device_class: 'speaker',
+        // PLAY|PAUSE|NEXT|PREVIOUS|VOLUME_SET (no source select)
+        supported_features: 16437,
+        volume_level: 0.6,
+        media_title: 'Midnight City',
+        media_artist: 'M83',
       },
     ),
     'climate.bedroom_ac': makeEntity('climate.bedroom_ac', 'cool', {

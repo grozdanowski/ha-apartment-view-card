@@ -88,6 +88,38 @@ describe('control-surface: media capability gating', () => {
     const { sr } = await mount(['media_player.spk'], { 'media_player.spk': ent('media_player.spk', 'idle', { supported_features: MEDIA_FEATURE.PLAY }) });
     expect(sr.querySelector('[aria-label="Volume"]')).toBeNull();
   });
+  it('keyboard arrow on the volume slider calls volume_set (relative to current)', async () => {
+    const { sr, hass } = await mount(['media_player.tv'], { 'media_player.tv': ent('media_player.tv', 'playing', { supported_features: MEDIA_FEATURE.VOLUME_SET, volume_level: 0.4 }) });
+    (sr.querySelector('[aria-label="Volume"]') as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+    const c = hass.calls.at(-1)!;
+    expect(c).toMatchObject({ domain: 'media_player', service: 'volume_set' });
+    expect(c.data.volume_level).toBeCloseTo(0.45, 5);
+  });
+  it('SELECT_SOURCE + source_list renders a source picker with the current source selected', async () => {
+    const f = MEDIA_FEATURE.SELECT_SOURCE | MEDIA_FEATURE.PLAY;
+    const { sr } = await mount(['media_player.av'], { 'media_player.av': ent('media_player.av', 'on', { supported_features: f, source: 'HDMI 2', source_list: ['TV', 'HDMI 1', 'HDMI 2'] }) });
+    const select = sr.querySelector('select.src') as HTMLSelectElement;
+    expect(select).toBeTruthy();
+    const opts = Array.from(select.options);
+    expect(opts.map((o) => o.value)).toEqual(['TV', 'HDMI 1', 'HDMI 2']);
+    // updated() reflects the current source onto the picker value
+    expect(select.value).toBe('HDMI 2');
+  });
+  it('changing the source picker calls media_player.select_source', async () => {
+    const f = MEDIA_FEATURE.SELECT_SOURCE;
+    const { sr, hass } = await mount(['media_player.av'], { 'media_player.av': ent('media_player.av', 'on', { supported_features: f, source: 'TV', source_list: ['TV', 'HDMI 1'] }) });
+    const select = sr.querySelector('select.src') as HTMLSelectElement;
+    select.value = 'HDMI 1';
+    select.dispatchEvent(new Event('change'));
+    expect(hass.calls.at(-1)).toMatchObject({ domain: 'media_player', service: 'select_source' });
+    expect(hass.calls.at(-1)!.data.source).toBe('HDMI 1');
+  });
+  it('no SELECT_SOURCE -> no source picker; SELECT_SOURCE but empty source_list -> none', async () => {
+    const { sr: noFeat } = await mount(['media_player.x'], { 'media_player.x': ent('media_player.x', 'on', { supported_features: MEDIA_FEATURE.PLAY }) });
+    expect(noFeat.querySelector('select.src')).toBeNull();
+    const { sr: noList } = await mount(['media_player.y'], { 'media_player.y': ent('media_player.y', 'on', { supported_features: MEDIA_FEATURE.SELECT_SOURCE, source_list: [] }) });
+    expect(noList.querySelector('select.src')).toBeNull();
+  });
 });
 
 describe('control-surface: climate capability gating', () => {

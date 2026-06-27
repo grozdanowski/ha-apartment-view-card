@@ -1,4 +1,4 @@
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { fireEvent, type HomeAssistant } from 'custom-card-helpers';
 import {
@@ -51,6 +51,24 @@ export class ApartmentViewCardEditor extends LitElement {
       align-items: center;
       gap: 8px;
       cursor: pointer;
+    }
+    .row-header:focus-visible {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+    .chevron {
+      flex: 0 0 auto;
+      --mdc-icon-size: 18px;
+      color: var(--secondary-text-color);
+      transition: transform 0.15s ease;
+    }
+    .chevron.open {
+      transform: rotate(90deg);
+    }
+    .entity-form {
+      display: block;
+      margin-top: 10px;
     }
     .row-title {
       flex: 1;
@@ -237,6 +255,14 @@ export class ApartmentViewCardEditor extends LitElement {
     this._selectedEntity = this._selectedEntity === index ? -1 : index;
   }
 
+  /** Keyboard support for the collapsible entity header (Enter/Space toggles). */
+  private _onRowKey(ev: KeyboardEvent, index: number): void {
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      this._selectEntity(index);
+    }
+  }
+
   private _entityLabel = (schema: { name: string }): string => {
     const labels: Record<string, string> = {
       entity: 'Entity',
@@ -399,9 +425,21 @@ export class ApartmentViewCardEditor extends LitElement {
         <div class="section-title">Entities</div>
         ${this._config.entities.map((e, i) => {
           const directional = isDirectional(e.orientation);
+          const expanded = i === this._selectedEntity;
           return html`
-            <div class="entity-row ${i === this._selectedEntity ? 'selected' : ''}">
-              <div class="row-header" @click=${() => this._selectEntity(i)}>
+            <div class="entity-row ${expanded ? 'selected' : ''}">
+              <div
+                class="row-header"
+                role="button"
+                tabindex="0"
+                aria-expanded=${expanded ? 'true' : 'false'}
+                @click=${() => this._selectEntity(i)}
+                @keydown=${(ev: KeyboardEvent) => this._onRowKey(ev, i)}
+              >
+                <ha-icon
+                  class="chevron ${expanded ? 'open' : ''}"
+                  icon="mdi:chevron-right"
+                ></ha-icon>
                 <span class="row-title">${e.name || e.entity || 'New entity'}</span>
                 <ha-icon-button
                   class="remove-entity"
@@ -413,15 +451,17 @@ export class ApartmentViewCardEditor extends LitElement {
                   }}
                 ></ha-icon-button>
               </div>
-              <ha-form
-                class="entity-form"
-                .hass=${this.hass}
-                .data=${entityToForm(e)}
-                .schema=${entitySchema(directional)}
-                .computeLabel=${this._entityLabel}
-                @value-changed=${(ev: CustomEvent) =>
-                  this._onEntityChanged(ev, i)}
-              ></ha-form>
+              ${expanded
+                ? html`<ha-form
+                    class="entity-form"
+                    .hass=${this.hass}
+                    .data=${entityToForm(e)}
+                    .schema=${entitySchema(directional)}
+                    .computeLabel=${this._entityLabel}
+                    @value-changed=${(ev: CustomEvent) =>
+                      this._onEntityChanged(ev, i)}
+                  ></ha-form>`
+                : nothing}
             </div>
           `;
         })}

@@ -230,23 +230,56 @@ describe('apartment-view-card-editor: entities', () => {
     expect(fired.entities[0].entity).toBe('light.b');
   });
 
+  /** Accordion: a row's ha-form renders only while expanded. Expand index i. */
+  async function expand(el: any, i: number) {
+    el._selectedEntity = i;
+    await el.updateComplete;
+    return el.shadowRoot.querySelector('ha-form.entity-form') as any;
+  }
+
+  it('entity forms collapse by default and expand one at a time (accordion)', async () => {
+    const el = await mountWithEntities();
+    // collapsed: rows present, no forms
+    expect(el.shadowRoot.querySelectorAll('.entity-row').length).toBe(2);
+    expect(el.shadowRoot.querySelectorAll('ha-form.entity-form').length).toBe(0);
+
+    const headers = el.shadowRoot.querySelectorAll('.row-header');
+    (headers[0] as HTMLElement).click();
+    await el.updateComplete;
+    expect(el.shadowRoot.querySelectorAll('ha-form.entity-form').length).toBe(1);
+    expect((el.shadowRoot.querySelectorAll('.row-header')[0] as HTMLElement).getAttribute('aria-expanded')).toBe('true');
+
+    // expanding another collapses the first (single _selectedEntity)
+    (el.shadowRoot.querySelectorAll('.row-header')[1] as HTMLElement).click();
+    await el.updateComplete;
+    const forms = el.shadowRoot.querySelectorAll('ha-form.entity-form');
+    expect(forms.length).toBe(1);
+    expect((forms[0] as any).data.entity).toBe('light.b');
+
+    // clicking the open header again collapses it
+    (el.shadowRoot.querySelectorAll('.row-header')[1] as HTMLElement).click();
+    await el.updateComplete;
+    expect(el.shadowRoot.querySelectorAll('ha-form.entity-form').length).toBe(0);
+  });
+
   it('the per-entity form schema includes orientation only when directional', async () => {
     const el = await mountWithEntities();
-    const forms = el.shadowRoot.querySelectorAll('ha-form.entity-form');
-    const namesA = (forms[0] as any).schema.map((s: any) => s.name);
-    const namesB = (forms[1] as any).schema.map((s: any) => s.name);
+    const formA = await expand(el, 0);
+    const namesA = formA.schema.map((s: any) => s.name);
     expect(namesA.includes('orientation')).toBe(false); // light.a orientation null
-    expect(namesB.includes('orientation')).toBe(true); // light.b orientation 90
     // entity selector NOT domain-limited
-    const entityRow = (forms[0] as any).schema.find((s: any) => s.name === 'entity');
-    expect(entityRow.selector.entity).toEqual({});
+    expect(formA.schema.find((s: any) => s.name === 'entity').selector.entity).toEqual({});
+
+    const formB = await expand(el, 1);
+    const namesB = formB.schema.map((s: any) => s.name);
+    expect(namesB.includes('orientation')).toBe(true); // light.b orientation 90
   });
 
   it('turning the directional toggle on writes orientation 0 (nullable->0)', async () => {
     const el = await mountWithEntities();
     let fired: any = null;
     el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
-    const form = el.shadowRoot.querySelectorAll('ha-form.entity-form')[0] as any;
+    const form = await expand(el, 0);
     form.dispatchEvent(
       new CustomEvent('value-changed', {
         detail: { value: { ...form.data, directional: true } },
@@ -261,7 +294,7 @@ describe('apartment-view-card-editor: entities', () => {
     const el = await mountWithEntities();
     let fired: any = null;
     el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
-    const form = el.shadowRoot.querySelectorAll('ha-form.entity-form')[1] as any;
+    const form = await expand(el, 1);
     form.dispatchEvent(
       new CustomEvent('value-changed', {
         detail: { value: { ...form.data, directional: false } },

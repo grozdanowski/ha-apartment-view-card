@@ -98,6 +98,12 @@ export class AvControlSurface extends LitElement {
     .tbtn.play { width: 48px; height: 48px; background: color-mix(in srgb, var(--primary-text-color, #fff) 16%, transparent); --mdc-icon-size: 26px; }
     .nowplaying { flex: 1; font-size: 13px; color: var(--secondary-text-color, #c7cad1); }
     .nowplaying b { color: var(--primary-text-color, #f5f5f7); font-weight: 500; }
+    .src {
+      flex: 1; height: 40px; font: inherit; font-size: 14px; cursor: pointer;
+      color: var(--primary-text-color, #f5f5f7);
+      background: var(--secondary-background-color, #2a2d34);
+      border: none; border-radius: 12px; padding: 0 12px;
+    }
     .temp { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
     .tval { font-size: 32px; font-weight: 500; }
     .tval small { font-size: 14px; color: var(--secondary-text-color, #8a8f98); }
@@ -132,6 +138,15 @@ export class AvControlSurface extends LitElement {
   }
   private _close(): void {
     this.dispatchEvent(new CustomEvent('surface-close', { bubbles: true, composed: true }));
+  }
+
+  protected updated(): void {
+    // A <select>'s value can't be set declaratively before its <option>s exist,
+    // so reflect the current media source onto the picker after each render.
+    const sel = this.renderRoot.querySelector('select.src') as HTMLSelectElement | null;
+    if (!sel) return;
+    const src = this._state(this.entityIds[0])?.attributes?.source;
+    if (typeof src === 'string' && sel.value !== src) sel.value = src;
   }
 
   protected render(): TemplateResult | typeof nothing {
@@ -292,25 +307,40 @@ export class AvControlSurface extends LitElement {
     const playing = state?.state === 'playing';
     const vol = typeof a.volume_level === 'number' ? a.volume_level : 0;
     const title = a.media_title;
+    const sources: string[] = Array.isArray(a.source_list) ? (a.source_list as string[]) : [];
+    const hasTransport = c.previous || c.play || c.pause || c.next;
     return html`
       <div class="body">
         ${title
           ? html`<div class="row"><span class="nowplaying"><b>${title}</b>${a.media_artist ? ' · ' + a.media_artist : ''}</span></div>`
           : nothing}
-        <div class="row transport">
-          ${c.previous ? html`<button class="tbtn" aria-label="Previous" @click=${() => this._call('media_player', 'media_previous_track', {})}><ha-icon icon="mdi:skip-previous"></ha-icon></button>` : nothing}
-          ${c.play || c.pause
-            ? html`<button class="tbtn play" aria-label="Play or pause" @click=${() => this._call('media_player', 'media_play_pause', {})}><ha-icon icon=${playing ? 'mdi:pause' : 'mdi:play'}></ha-icon></button>`
-            : nothing}
-          ${c.next ? html`<button class="tbtn" aria-label="Next" @click=${() => this._call('media_player', 'media_next_track', {})}><ha-icon icon="mdi:skip-next"></ha-icon></button>` : nothing}
-          ${c.volume
-            ? html`<span class="ico" style="margin-left:6px"><ha-icon icon="mdi:volume-high"></ha-icon></span>
-                <div class="track" role="slider" tabindex="0" aria-label="Volume" aria-valuenow=${Math.round(vol * 100)} style="height:34px"
-                  @pointerdown=${this._volDown} @pointermove=${this._volMove}>
-                  <div class="fill" style="width:${Math.round(vol * 100)}%;background:linear-gradient(90deg,#5b9bff,#bcd6ff)"></div>
-                </div>`
-            : nothing}
-        </div>
+        ${hasTransport
+          ? html`<div class="row transport">
+              ${c.previous ? html`<button class="tbtn" aria-label="Previous" @click=${() => this._call('media_player', 'media_previous_track', {})}><ha-icon icon="mdi:skip-previous"></ha-icon></button>` : nothing}
+              ${c.play || c.pause
+                ? html`<button class="tbtn play" aria-label="Play or pause" @click=${() => this._call('media_player', 'media_play_pause', {})}><ha-icon icon=${playing ? 'mdi:pause' : 'mdi:play'}></ha-icon></button>`
+                : nothing}
+              ${c.next ? html`<button class="tbtn" aria-label="Next" @click=${() => this._call('media_player', 'media_next_track', {})}><ha-icon icon="mdi:skip-next"></ha-icon></button>` : nothing}
+            </div>`
+          : nothing}
+        ${c.volume
+          ? html`<div class="row">
+              <span class="ico"><ha-icon icon="mdi:volume-high"></ha-icon></span>
+              <div class="track" role="slider" tabindex="0" aria-label="Volume" aria-valuenow=${Math.round(vol * 100)}
+                @pointerdown=${this._volDown} @pointermove=${this._volMove} @pointerup=${this._volUp} @keydown=${this._volKey}>
+                <div class="fill" style="width:${Math.round(vol * 100)}%;background:linear-gradient(90deg,#5b9bff,#bcd6ff)"></div>
+              </div>
+            </div>`
+          : nothing}
+        ${c.source && sources.length
+          ? html`<div class="row">
+              <span class="ico"><ha-icon icon="mdi:import"></ha-icon></span>
+              <select class="src" aria-label="Source"
+                @change=${(e: Event) => this._call('media_player', 'select_source', { source: (e.target as HTMLSelectElement).value })}>
+                ${sources.map((s) => html`<option value=${s}>${s}</option>`)}
+              </select>
+            </div>`
+          : nothing}
       </div>
     `;
   }
@@ -321,6 +351,14 @@ export class AvControlSurface extends LitElement {
   }
   private _volDown = (e: PointerEvent): void => { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); this._vol = true; this._call('media_player', 'volume_set', { volume_level: this._volFromEvent(e) }); };
   private _volMove = (e: PointerEvent): void => { if (!this._vol) return; const now = Date.now(); if (now - this._lastCall < 120) return; this._lastCall = now; this._call('media_player', 'volume_set', { volume_level: this._volFromEvent(e) }); };
+  private _volUp = (e: PointerEvent): void => { if (!this._vol) return; this._vol = false; this._call('media_player', 'volume_set', { volume_level: this._volFromEvent(e) }); };
+  private _volKey = (e: KeyboardEvent): void => {
+    const cur = typeof this._state(this.entityIds[0])?.attributes?.volume_level === 'number'
+      ? (this._state(this.entityIds[0]) as HassEntity).attributes.volume_level as number
+      : 0;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') this._call('media_player', 'volume_set', { volume_level: Math.min(1, cur + 0.05) });
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') this._call('media_player', 'volume_set', { volume_level: Math.max(0, cur - 0.05) });
+  };
 
   // ---- Climate ----------------------------------------------------------
   private _displayTemp(state: HassEntity): number | string {
