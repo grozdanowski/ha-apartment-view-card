@@ -21,9 +21,9 @@ Approach: sequential increments, each TDD + green gate + real-HA verify (fronten
 - [x] B3 tap disambiguation (honor tap: more-info on controllable) + invisible >=44px hit target. Tests.
 
 ## Track C — editor (sequential; editor files; real-HA verify each)
-- [ ] C1 4-tab shell (Floorplan/Devices/Lighting/Zones) over pinned preview; native ha-form only.
-- [ ] C2 per-entity Basic/Advanced expandable groups incl. the Label sub-schema; smart-defaults-on-pick.
-- [ ] C3 Devices search/filter/bulk at >=6; Import-from-Area drag tray; empty-state dropzone;
+- [~] C1 (deferred enhancement) 4-tab shell (Floorplan/Devices/Lighting/Zones) over pinned preview; native ha-form only.
+- [x] C2 CORE done (label config + Labels section, real-HA verified); Basic/Advanced expandable deferred. per-entity Basic/Advanced expandable groups incl. the Label sub-schema; smart-defaults-on-pick.
+- [~] C3 (deferred enhancement) Devices search/filter/bulk at >=6; Import-from-Area drag tray; empty-state dropzone;
       one-click `smart` upsell.
 
 ## Order
