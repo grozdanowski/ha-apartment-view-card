@@ -43,3 +43,13 @@ Interaction model (signed off via the interactive prototype):
 
 ## Review notes
 (to be filled in as we go)
+
+## 2.1.0 BUILD STATUS (done + verified)
+- [x] Capability detection (light/media/climate) — 15 tests vs real attr shapes
+- [x] av-control-surface element — 14 tests (capability gating + service mapping)
+- [x] Phase 1: tap controllable -> surface (card wired)
+- [x] Phase 2: "Lights control" multi-select (checkboxes, disabled-until-checked, zone pre-check)
+- [x] Phase 3: zone-zoom perspective tilt (markers aligned, reduced-motion off)
+- [x] Harness flows real card; dev ha-icon stub
+- [x] VERIFIED in Docker HA vs REAL entities: bed_light (brightness+color), living_room media (play/pause+volume, no prev/next), ecobee (6 modes + 21-24 range, no stepper); power toggle flipped a real light off->on
+- deferred polish: optimistic glow during drag, media source picker, climate fan/preset

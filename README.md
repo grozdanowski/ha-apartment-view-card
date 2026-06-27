@@ -213,7 +213,7 @@ Without `orientation` (or `orientation: null`): lights render an omnidirectional
 
 ### Zones with Tap-to-Zoom
 
-The zone chip list appears below the card. Tapping a chip animates the card to zoom in and center on that zone (0.6s easing). While focused:
+The zone chip list appears below the card. Tapping a chip animates the card to zoom in and center on that zone (0.6s easing) with a subtle **perspective tilt** that gives the room depth (disabled under `prefers-reduced-motion`). While focused:
 
 - Non-focused zones' entity icons dim to 25%.
 - A **"← Back to All"** chip appears as the first item in the list.
@@ -224,11 +224,24 @@ The zone chip list appears below the card. Tapping a chip animates the card to z
 
 Entity icons live on a **separate, non-transformed overlay** positioned in screen pixels. They do not live inside the pan/zoom layer, so they remain sharp vector SVGs regardless of zoom level. The raster base render softens at high zoom (inherent to raster images); icons do not.
 
-### Tap and Hold
+### On-Floorplan Control
 
-- **Tap** (< 8 px movement, < 450 ms) — performs the configured `tap` action (`toggle`, `more-info`, or `none`).
-- **Press-and-hold** (≥ 450 ms, < 8 px movement) — opens the native HA more-info dialog for the entity.
-- Moving > 8 px before the hold timer fires cancels the hold and starts a pan gesture.
+Tapping a **controllable** entity (light, media player, climate) opens a compact control surface **below the floorplan** — no dialog, no context switch. The surface is **capability-driven**: it renders only what the specific device actually supports, read live from its attributes.
+
+- **Lights** — brightness slider (if dimmable), a row of colour swatches (if the light supports `rgb`/`hs`/`xy`), and on/off. Colour-only-temperature and on/off-only lights show just what they can do.
+- **Media players** — only the transport buttons the device reports (`play`/`pause`, `next`/`previous`), a volume slider (if `VOLUME_SET`), and power.
+- **Climate** — a single target-temperature stepper or a low/high range (whichever the device uses), clamped to its real min/max/step, plus its actual `hvac_modes` as chips.
+
+Tapping a **non-controllable** entity performs its configured `tap` action (`toggle`, `more-info`, or `none`). **Press-and-hold** (≥ 450 ms) on any marker opens the native HA more-info dialog. Moving > 8 px before the hold timer fires starts a pan gesture instead.
+
+### Lights Control (multi-select)
+
+The **Lights control** pill (top-right of the floorplan) enters a multi-select mode for driving several lights from one surface:
+
+- Light markers gain checkboxes; non-light markers dim and become non-interactive.
+- The control surface opens but stays disabled until at least one light is checked, then drives the whole group at once (group brightness; colour swatches when every selected light supports colour).
+- Focusing a zone first pre-checks that zone's lights and scopes selection to it.
+- Tap **Done**, press `Escape`, or close the surface to exit.
 
 ---
 
