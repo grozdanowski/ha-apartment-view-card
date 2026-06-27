@@ -190,6 +190,46 @@ export class ApartmentViewCard extends LitElement {
       color: var(--text-primary-color, #fff);
       box-shadow: 0 0 0 2px var(--card-background-color, #15171c), inset 0 0 0 1.5px var(--primary-color, #03a9f4);
     }
+    /* Offline (unavailable/unknown): desaturated chip + dashed ring, no glow. */
+    .marker-overlay .marker.offline {
+      filter: grayscale(0.85);
+      opacity: 0.55;
+    }
+    .marker-overlay .marker.offline::after {
+      content: '';
+      position: absolute;
+      inset: -2px;
+      border-radius: 50%;
+      border: 1.5px dashed var(--secondary-text-color, #8a8f98);
+    }
+    /* Dynamic value label — frosted plate guarantees contrast on any floorplan. */
+    .marker-overlay .marker-label {
+      position: absolute;
+      transform: translate(-50%, var(--label-dy, 26px));
+      max-inline-size: var(--av-label-max-width, 8em);
+      padding: 2px 7px;
+      border-radius: 7px;
+      font-size: 11px;
+      line-height: 1.4;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      pointer-events: none;
+      z-index: 1;
+      color: var(--primary-text-color, #f5f5f7);
+      background: color-mix(in srgb, var(--card-background-color, #1c1c1e) 72%, transparent);
+      -webkit-backdrop-filter: blur(6px) saturate(1.3);
+      backdrop-filter: blur(6px) saturate(1.3);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.35);
+      transition: opacity 0.25s ease;
+    }
+    .marker-overlay .marker-label.anchor-start {
+      transform: translate(-12px, var(--label-dy, 26px));
+    }
+    .marker-overlay .marker-label.anchor-end {
+      transform: translate(calc(-100% + 12px), var(--label-dy, 26px));
+    }
     .lights-control {
       position: absolute;
       top: 10px;
@@ -268,6 +308,9 @@ export class ApartmentViewCard extends LitElement {
     }
     @media (prefers-reduced-motion: reduce) {
       .scene {
+        transition: none;
+      }
+      .marker-overlay .marker-label {
         transition: none;
       }
       .tilt {
@@ -691,6 +734,8 @@ export class ApartmentViewCard extends LitElement {
       focusedZoneEntityIds,
       this._selectMode,
       new Set(this._controlled),
+      this.config.options.labels,
+      this.hass,
     );
 
     return html`

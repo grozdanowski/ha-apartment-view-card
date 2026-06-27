@@ -1,15 +1,24 @@
 import { html, nothing, type TemplateResult } from 'lit';
 import { ifDefined } from 'lit/directives/if-defined.js';
-import type { HassEntity } from '../core/ha-types';
+import type { HassEntity, HassLike } from '../core/ha-types';
 import type { EntityConfig } from '../core/config';
 import { isActive, intensity, iconForEntity } from '../core/entity-state';
 import { resolveLightColor, rgbCss } from '../core/light-color';
+import {
+  effectiveLabel,
+  formatLabel,
+  DEFAULT_LABELS,
+  type LabelDefaults,
+  type LabelVisibility,
+} from '../core/label';
 import {
   markerScreenPos,
   clampIconScale,
   type Viewport,
   type ZoomTransform,
 } from '../core/geometry';
+
+export type LabelAnchor = 'start' | 'center' | 'end';
 
 export interface MarkerView {
   entity: EntityConfig;
@@ -18,7 +27,7 @@ export interface MarkerView {
   top: number;
   iconScale: number;
   icon: string;
-  /** Human label: config name -> entity friendly_name -> entity id. */
+  /** Accessibility name: config name -> entity friendly_name -> entity id. */
   label: string;
   active: boolean;
   focused: boolean;
@@ -32,6 +41,12 @@ export interface MarkerView {
   selectable: boolean;
   /** Currently checked in the selection. */
   selected: boolean;
+  /** Device offline (unavailable/unknown): desaturated chip, dashed ring, no glow, no value label. */
+  offline: boolean;
+  /** Dynamic value label text to paint on the floorplan, or null (after visibility + collision cull). */
+  labelText: string | null;
+  /** Horizontal anchoring of the label relative to the marker point (edge-aware). */
+  labelAnchor: LabelAnchor;
 }
 
 function isLight(entity: EntityConfig, state: HassEntity | undefined): boolean {
@@ -51,10 +66,38 @@ function markerLabel(
   );
 }
 
+function anchorFor(xPercent: number): LabelAnchor {
+  return xPercent < 28 ? 'start' : xPercent > 72 ? 'end' : 'center';
+}
+
+interface LabelBox {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+/** Estimate a label's screen box (below the chip), matching the CSS anchoring. */
+function labelBoxFor(view: MarkerView, text: string): LabelBox {
+  const w = Math.min(120, text.length * 7.2 + 16);
+  const h = 19;
+  const y1 = view.top + 20 * view.iconScale + 6; // just below the chip
+  let x1: number;
+  if (view.labelAnchor === 'start') x1 = view.left - 12;
+  else if (view.labelAnchor === 'end') x1 = view.left + 12 - w;
+  else x1 = view.left - w / 2;
+  return { x1, y1, x2: x1 + w, y2: y1 + h };
+}
+function boxesOverlap(a: LabelBox, b: LabelBox): boolean {
+  return a.x1 < b.x2 && b.x1 < a.x2 && a.y1 < b.y2 && b.y1 < a.y2;
+}
+
 /**
  * Project entity configs into absolute screen-px placements for the
  * NON-transformed overlay. `focusedZoneEntityIds === null` => overview
  * (no dimming); otherwise entities not in the set render unfocused (0.25).
+ *
+ * Dynamic value labels are resolved here (visibility engine + spatial-collision
+ * cull) so the render stays a pure projection of MarkerView.
  */
 export function computeMarkerViews(
   entities: EntityConfig[],
@@ -64,8 +107,13 @@ export function computeMarkerViews(
   focusedZoneEntityIds: Set<string> | null,
   selectMode = false,
   selectedIds: ReadonlySet<string> = new Set(),
+  labelDefaults: LabelDefaults = DEFAULT_LABELS,
+  hass?: HassLike,
 ): MarkerView[] {
-  return entities.map((entity) => {
+  const zoneFocused = focusedZoneEntityIds !== null;
+
+  // First pass: base views + tentative (pre-collision) label decision.
+  const records = entities.map((entity) => {
     const state = states[entity.entity];
     const { left, top } = markerScreenPos(entity.x, entity.y, t, vp);
     const active = state ? isActive(state) : false;
@@ -73,7 +121,21 @@ export function computeMarkerViews(
     const brightness = light && state ? intensity(state) : 0;
     const focused =
       focusedZoneEntityIds === null ? true : focusedZoneEntityIds.has(entity.entity);
-    return {
+    const offline = !state || state.state === 'unavailable' || state.state === 'unknown';
+
+    const cfg = effectiveLabel(entity.label, labelDefaults, entity.entity);
+    const vis: LabelVisibility = cfg?.visibility ?? labelDefaults.visibility;
+    // Offline / select-mode / dimmed markers never paint a value label.
+    const text =
+      cfg && !offline && !selectMode && focused ? formatLabel(cfg, state, hass) : null;
+    let show = false;
+    if (text) {
+      if (vis === 'always') show = true;
+      else if (vis === 'active') show = active;
+      else if (vis === 'auto') show = t.scale >= 1.25 || (zoneFocused && focused);
+    }
+
+    const view: MarkerView = {
       entity,
       state,
       left,
@@ -86,11 +148,45 @@ export function computeMarkerViews(
       glowColor: light && active && state ? rgbCss(resolveLightColor(state)) : undefined,
       brightness,
       selectMode,
-      // only lights are selectable, and only within the focused zone when one is focused
       selectable: selectMode && light && focused,
       selected: selectedIds.has(entity.entity),
+      offline,
+      labelText: null, // set after the collision cull below
+      labelAnchor: anchorFor(entity.x),
     };
+    return { view, text, vis, show, active };
   });
+
+  // Second pass: cull overlapping AUTO labels by priority; explicit always/active
+  // labels are never culled and reserve their boxes first. densityCap is a final ceiling.
+  const cx = vp.width / 2;
+  const cy = vp.height / 2;
+  const shown = records.filter((r) => r.show && r.text);
+  const kept: LabelBox[] = [];
+  for (const r of shown.filter((r) => r.vis !== 'auto')) {
+    kept.push(labelBoxFor(r.view, r.text as string));
+  }
+  const auto = shown
+    .filter((r) => r.vis === 'auto')
+    .sort((a, b) => {
+      if (a.active !== b.active) return a.active ? -1 : 1; // active first
+      const da = (a.view.left - cx) ** 2 + (a.view.top - cy) ** 2;
+      const db = (b.view.left - cx) ** 2 + (b.view.top - cy) ** 2;
+      return da - db; // then nearest to centre
+    });
+  let autoCount = 0;
+  for (const r of auto) {
+    const box = labelBoxFor(r.view, r.text as string);
+    if (autoCount >= labelDefaults.densityCap || kept.some((b) => boxesOverlap(b, box))) {
+      r.show = false;
+    } else {
+      kept.push(box);
+      autoCount++;
+    }
+  }
+
+  for (const r of records) r.view.labelText = r.show && r.text ? r.text : null;
+  return records.map((r) => r.view);
 }
 
 /**
@@ -118,6 +214,7 @@ export function renderMarkerOverlay(
         const interactive = m.selectMode ? m.selectable : m.focused;
         const cls = ['marker'];
         if (m.active) cls.push('active');
+        if (m.offline) cls.push('offline');
         if (!m.focused) cls.push('dimmed');
         if (m.selectMode) {
           cls.push(m.selectable ? 'selectable' : 'select-dim');
@@ -152,6 +249,14 @@ export function renderMarkerOverlay(
               ? html`<span class="marker-check"><ha-icon icon="mdi:check"></ha-icon></span>`
               : nothing}
           </button>
+          ${m.labelText
+            ? html`<span
+                class="marker-label anchor-${m.labelAnchor}"
+                aria-hidden="true"
+                title=${m.labelText}
+                style="left:${m.left}px;top:${m.top}px;--label-dy:${Math.round(20 * m.iconScale + 6)}px"
+                >${m.labelText}</span>`
+            : nothing}
         `;
       })}
     </div>

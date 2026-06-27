@@ -140,6 +140,9 @@ function makeView(over: Partial<MarkerView> = {}): MarkerView {
     selectMode: false,
     selectable: false,
     selected: false,
+    offline: false,
+    labelText: null,
+    labelAnchor: 'center',
     ...over,
   };
 }
@@ -278,5 +281,77 @@ describe('computeMarkerViews label', () => {
 
     const fallback = computeMarkerViews([ent({ entity: 'light.raw' })], {}, t, vp, null);
     expect(fallback[0].label).toBe('light.raw');
+  });
+});
+
+describe('computeMarkerViews labels', () => {
+  const defaults = (over: Record<string, unknown> = {}) =>
+    ({ source: 'none', visibility: 'auto', densityCap: 14, ...over } as any);
+  const big: ZoomTransform = { scale: 1.5, panX: 0, panY: 0 };
+  const sens = (state = '1', attrs: Record<string, any> = {}): HassEntity => ({ entity_id: 'sensor.x', state, attributes: attrs });
+
+  it('always-visible label renders its text at any zoom', () => {
+    const v = computeMarkerViews(
+      [ent({ entity: 'sensor.x', x: 50, label: { source: 'static', text: 'Hi', visibility: 'always' } })],
+      { 'sensor.x': sens() }, t, vp, null, false, new Set(), defaults());
+    expect(v[0].labelText).toBe('Hi');
+  });
+
+  it('auto label hides at overview zoom, reveals when zoomed in', () => {
+    const e = [ent({ entity: 'sensor.x', x: 50, label: { source: 'static', text: 'X' } })];
+    const st = { 'sensor.x': sens() };
+    expect(computeMarkerViews(e, st, t, vp, null, false, new Set(), defaults())[0].labelText).toBeNull();
+    expect(computeMarkerViews(e, st, big, vp, null, false, new Set(), defaults())[0].labelText).toBe('X');
+  });
+
+  it('auto label reveals when its zone is focused', () => {
+    const e = [ent({ entity: 'sensor.x', x: 50, label: { source: 'static', text: 'Z' } })];
+    const v = computeMarkerViews(e, { 'sensor.x': sens() }, t, vp, new Set(['sensor.x']), false, new Set(), defaults());
+    expect(v[0].labelText).toBe('Z');
+  });
+
+  it('active-visibility label only while the entity is active', () => {
+    const e = [ent({ entity: 'light.x', x: 50, label: { source: 'static', text: 'On', visibility: 'active' } })];
+    expect(computeMarkerViews(e, { 'light.x': lightState(true) }, t, vp, null, false, new Set(), defaults())[0].labelText).toBe('On');
+    expect(computeMarkerViews(e, { 'light.x': lightState(false) }, t, vp, null, false, new Set(), defaults())[0].labelText).toBeNull();
+  });
+
+  it('offline entity is flagged and never labels (even always)', () => {
+    const e = [ent({ entity: 'sensor.x', x: 50, label: { source: 'static', text: 'Hi', visibility: 'always' } })];
+    const v = computeMarkerViews(e, { 'sensor.x': sens('unavailable') }, t, vp, null, false, new Set(), defaults());
+    expect(v[0].offline).toBe(true);
+    expect(v[0].labelText).toBeNull();
+  });
+
+  it('culls overlapping auto labels, keeping the active one', () => {
+    const e = [
+      ent({ entity: 'light.off', x: 50, y: 50, label: { source: 'static', text: 'AAAA' } }),
+      ent({ entity: 'light.on', x: 50, y: 50, label: { source: 'static', text: 'BBBB' } }),
+    ];
+    const st = { 'light.off': lightState(false), 'light.on': lightState(true) };
+    const shown = computeMarkerViews(e, st, big, vp, null, false, new Set(), defaults()).filter((m) => m.labelText);
+    expect(shown.length).toBe(1);
+    expect(shown[0].entity.entity).toBe('light.on');
+  });
+
+  it('smart default labels per domain (climate temp); lights stay quiet', () => {
+    const e = [ent({ entity: 'climate.lr', x: 40 }), ent({ entity: 'light.lamp', x: 60 })];
+    const st = {
+      'climate.lr': { entity_id: 'climate.lr', state: 'heat', attributes: { current_temperature: 21 } },
+      'light.lamp': lightState(true),
+    };
+    const hass = { states: st, callService: async () => {}, config: { unit_system: { temperature: '°C' } } } as any;
+    const v = computeMarkerViews(e, st, big, vp, null, false, new Set(), defaults({ source: 'smart' }), hass);
+    expect(v[0].labelText).toBe('21°C');
+    expect(v[1].labelText).toBeNull();
+  });
+
+  it('label anchor is edge-aware by x position', () => {
+    const anchor = (x: number) =>
+      computeMarkerViews([ent({ entity: 'sensor.x', x, label: { source: 'static', text: 'q', visibility: 'always' } })],
+        { 'sensor.x': sens() }, t, vp, null, false, new Set(), defaults())[0].labelAnchor;
+    expect(anchor(10)).toBe('start');
+    expect(anchor(50)).toBe('center');
+    expect(anchor(90)).toBe('end');
   });
 });

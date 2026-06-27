@@ -48,7 +48,12 @@ const rawConfig = {
     { name: 'Kitchen', icon: 'mdi:silverware-fork-knife', x: 20, y: 5, width: 35, height: 35 },
     { name: 'Living room', icon: 'mdi:sofa', x: 50, y: 35, width: 45, height: 50 },
   ],
-  options: { view: 'auto', lightStyle: 'lit' },
+  options: {
+    view: 'auto',
+    lightStyle: 'lit',
+    // demo the smart label map: climate -> temp, media -> now-playing, lights stay quiet
+    labels: { source: 'smart', visibility: 'always' },
+  },
 };
 const config: ApartmentViewConfig = normalizeConfig(rawConfig);
 

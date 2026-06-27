@@ -30,9 +30,37 @@ describe('normalizeConfig', () => {
       freePanZoom: true,
       zoomMax: 1.5,
       duskDawnOffsetMinutes: 60,
+      labels: { source: 'none', visibility: 'auto', densityCap: 14 },
     });
     expect(cfg.entities).toEqual([]);
     expect(cfg.zones).toEqual([]);
+  });
+
+  it('parses a per-entity label object + string shorthands', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      entities: [
+        { entity: 'climate.a', label: { source: 'climate-current', visibility: 'always' } },
+        { entity: 'scene.b', label: 'Movie Night' },         // arbitrary string -> static
+        { entity: 'cover.c', label: 'cover-position' },        // known source name
+        { entity: 'light.d', label: 'off' },                   // off -> none
+        { entity: 'light.e', label: { source: 'bogus' } },     // invalid source -> none
+        { entity: 'light.f' },                                 // no label
+      ],
+    });
+    expect(cfg.entities[0].label).toEqual({ source: 'climate-current', visibility: 'always' });
+    expect(cfg.entities[1].label).toEqual({ source: 'static', text: 'Movie Night' });
+    expect(cfg.entities[2].label).toEqual({ source: 'cover-position' });
+    expect(cfg.entities[3].label).toEqual({ source: 'none' });
+    expect(cfg.entities[4].label).toEqual({ source: 'none' });
+    expect(cfg.entities[5].label).toBeUndefined();
+  });
+
+  it('parses global label defaults incl. smart, falling back on invalid', () => {
+    const smart = normalizeConfig({ images: { base: '/b.png' }, options: { labels: { source: 'smart', visibility: 'always', densityCap: 20 } } });
+    expect(smart.options.labels).toEqual({ source: 'smart', visibility: 'always', densityCap: 20 });
+    const bad = normalizeConfig({ images: { base: '/b.png' }, options: { labels: { source: 'nope', visibility: 'sideways', densityCap: -3 } } });
+    expect(bad.options.labels).toEqual({ source: 'none', visibility: 'auto', densityCap: 14 });
   });
 
   it('maps legacy image keys into images object', () => {

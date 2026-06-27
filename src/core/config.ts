@@ -1,3 +1,6 @@
+import type { LabelConfig, LabelDefaults, LabelSource } from './label';
+import { DEFAULT_LABELS, VALID_LABEL_SOURCES, VALID_LABEL_VISIBILITIES } from './label';
+
 export type LightStyle = 'lit' | 'reveal' | 'glow';
 export type SizeTier = 'tiny' | 'small' | 'medium' | 'large' | 'huge';
 export type TapAction = 'toggle' | 'more-info' | 'none';
@@ -12,6 +15,7 @@ export interface EntityConfig {
   tap: TapAction;
   orientation: number | null;
   lightStyle?: LightStyle;
+  label?: LabelConfig;
 }
 
 export interface ZoneConfig {
@@ -36,6 +40,7 @@ export interface CardOptions {
   freePanZoom: boolean;
   zoomMax: number;
   duskDawnOffsetMinutes: number;
+  labels: LabelDefaults;
 }
 
 export interface ApartmentViewConfig {
@@ -98,6 +103,44 @@ function normalizeOrientation(value: any): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * Parse a per-entity label. Accepts the object form, or a string shorthand:
+ * a known source name ('climate-current'), 'off'/'none', or any other string
+ * as static text ('Movie Night').
+ */
+function normalizeLabel(raw: any): LabelConfig | undefined {
+  if (raw == null) return undefined;
+  if (typeof raw === 'string') {
+    if (raw === 'off' || raw === 'none') return { source: 'none' };
+    if ((VALID_LABEL_SOURCES as readonly string[]).includes(raw)) return { source: raw as LabelSource };
+    return { source: 'static', text: raw };
+  }
+  if (typeof raw !== 'object') return undefined;
+  const source: LabelSource = (VALID_LABEL_SOURCES as readonly string[]).includes(raw.source)
+    ? raw.source
+    : 'none';
+  const cfg: LabelConfig = { source };
+  if (typeof raw.text === 'string') cfg.text = raw.text;
+  if (typeof raw.attribute === 'string') cfg.attribute = raw.attribute;
+  if ((VALID_LABEL_VISIBILITIES as readonly string[]).includes(raw.visibility)) cfg.visibility = raw.visibility;
+  return cfg;
+}
+
+function normalizeLabelDefaults(raw: any): LabelDefaults {
+  const o = raw ?? {};
+  const source =
+    o.source === 'smart' || (VALID_LABEL_SOURCES as readonly string[]).includes(o.source)
+      ? o.source
+      : DEFAULT_LABELS.source;
+  return {
+    source,
+    visibility: (VALID_LABEL_VISIBILITIES as readonly string[]).includes(o.visibility)
+      ? o.visibility
+      : DEFAULT_LABELS.visibility,
+    densityCap: typeof o.densityCap === 'number' && o.densityCap > 0 ? o.densityCap : DEFAULT_LABELS.densityCap,
+  };
+}
+
 function normalizeEntity(raw: any): EntityConfig {
   const entity: EntityConfig = {
     entity: raw?.entity ?? raw?.entityName ?? '',
@@ -114,6 +157,8 @@ function normalizeEntity(raw: any): EntityConfig {
   if (VALID_STYLES.includes(raw?.lightStyle)) {
     entity.lightStyle = raw.lightStyle;
   }
+  const label = normalizeLabel(raw?.label);
+  if (label) entity.label = label;
   return entity;
 }
 
@@ -140,6 +185,7 @@ function normalizeOptions(raw: any): CardOptions {
       typeof o.duskDawnOffsetMinutes === 'number'
         ? o.duskDawnOffsetMinutes
         : 60,
+    labels: normalizeLabelDefaults(o.labels),
   };
 }
 

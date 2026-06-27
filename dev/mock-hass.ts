@@ -21,6 +21,8 @@ export interface MockHass {
     data?: Record<string, any>,
   ): Promise<void>;
   readonly serviceCalls: ServiceCall[];
+  config: { unit_system: Record<string, string> };
+  locale: { language: string };
 }
 
 let ctxCounter = 0;
@@ -127,6 +129,8 @@ export function createMockHass(
   const hass: MockHass = {
     states,
     serviceCalls,
+    config: { unit_system: { temperature: '°C' } },
+    locale: { language: 'en' },
     async callService(domain, service, data = {}) {
       serviceCalls.push({ domain, service, data: { ...data } });
       if (domain === 'homeassistant' && service === 'toggle') {
