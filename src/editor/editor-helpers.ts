@@ -157,6 +157,15 @@ export function optionsSchema(): HaFormSchema[] {
   ];
 }
 
+/** Floorplan-tab options (the static stage): everything except the light style. */
+export function stageOptionsSchema(): HaFormSchema[] {
+  return optionsSchema().filter((s) => s.name !== 'lightStyle');
+}
+/** Lighting-tab options: just the global light style. */
+export function lightingOptionsSchema(): HaFormSchema[] {
+  return optionsSchema().filter((s) => s.name === 'lightStyle');
+}
+
 export function entitySchema(directional: boolean, labelSource = 'inherit'): HaFormSchema[] {
   const schema: HaFormSchema[] = [
     // Entity selector is intentionally NOT domain-limited (spec §7).

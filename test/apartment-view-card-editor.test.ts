@@ -451,3 +451,65 @@ describe('apartment-view-card-editor: zones', () => {
     expect(fired.zones.map((z: any) => z.name)).toEqual(['Kitchen', 'Living']);
   });
 });
+
+describe('apartment-view-card-editor: tabs + import + search', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  async function mountEd(entities: any[] = []) {
+    const el = document.createElement('apartment-view-card-editor') as any;
+    el.hass = { states: {}, localize: (k: string) => k };
+    el.setConfig({ ...baseConfig(), entities });
+    document.body.appendChild(el);
+    await el.updateComplete;
+    return el;
+  }
+
+  it('renders 4 tabs; switching changes the active pane', async () => {
+    const el = await mountEd();
+    const tabs = Array.from(el.shadowRoot.querySelectorAll('.tab')) as HTMLElement[];
+    expect(tabs.length).toBe(4);
+    expect(el.shadowRoot.querySelector('.tab-devices.active')).toBeTruthy();
+    (tabs.find((t) => /zones/i.test(t.textContent || '')) as HTMLElement).click();
+    await el.updateComplete;
+    expect(el.shadowRoot.querySelector('.tab-zones.active')).toBeTruthy();
+    expect(el.shadowRoot.querySelector('.tab-devices.active')).toBeNull();
+  });
+
+  it("Import-from-Area appends the area's sensible, unplaced entities", async () => {
+    const el = await mountEd([{ entity: 'light.placed', x: 1, y: 2, size: 'small', tap: 'toggle', orientation: null }]);
+    el.hass = {
+      states: {}, localize: (k: string) => k,
+      areas: { kitchen: { area_id: 'kitchen', name: 'Kitchen' } },
+      devices: { dev1: { area_id: 'kitchen' } },
+      entities: {
+        'light.ceiling': { entity_id: 'light.ceiling', area_id: 'kitchen' },
+        'switch.kettle': { entity_id: 'switch.kettle', device_id: 'dev1' },
+        'light.placed': { entity_id: 'light.placed', area_id: 'kitchen' },
+        'automation.x': { entity_id: 'automation.x', area_id: 'kitchen' },
+        'light.other': { entity_id: 'light.other', area_id: 'bedroom' },
+        'light.hidden': { entity_id: 'light.hidden', area_id: 'kitchen', hidden: true },
+      },
+    };
+    await el.updateComplete;
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    el._addEntitiesFromArea('kitchen');
+    const added = fired.entities.map((e: any) => e.entity);
+    expect(added).toContain('light.ceiling');
+    expect(added).toContain('switch.kettle'); // area via its device
+    expect(added).not.toContain('automation.x'); // not a sensible domain
+    expect(added).not.toContain('light.other'); // different area
+    expect(added).not.toContain('light.hidden'); // hidden
+    expect(added.filter((id: string) => id === 'light.placed').length).toBe(1); // not re-added
+  });
+
+  it('search box (shown at >5 entities) filters rows by id/name', async () => {
+    const ents = Array.from({ length: 7 }, (_, i) => ({ entity: `light.lamp_${i}`, x: 1, y: 1, size: 'small', tap: 'toggle', orientation: null }));
+    ents[0].entity = 'light.kitchen_special';
+    const el = await mountEd(ents);
+    expect(el.shadowRoot.querySelector('.entity-search')).toBeTruthy();
+    el._entitySearch = 'special';
+    await el.updateComplete;
+    expect(el.shadowRoot.querySelectorAll('.entity-row').length).toBe(1);
+  });
+});

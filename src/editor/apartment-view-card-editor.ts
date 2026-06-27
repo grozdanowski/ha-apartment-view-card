@@ -8,7 +8,6 @@ import {
   type ZoneConfig,
 } from '../core/config';
 import {
-  optionsSchema,
   IMAGE_FIELDS,
   type ImageFieldKey,
   entitySchema,
@@ -19,7 +18,17 @@ import {
   zoneSchema,
   defaultZone,
   labelsSchema,
+  stageOptionsSchema,
+  lightingOptionsSchema,
 } from './editor-helpers';
+
+type EditorTab = 'floorplan' | 'devices' | 'lighting' | 'zones';
+const TABS: { id: EditorTab; label: string; icon: string }[] = [
+  { id: 'floorplan', label: 'Floorplan', icon: 'mdi:floor-plan' },
+  { id: 'devices', label: 'Devices', icon: 'mdi:devices' },
+  { id: 'lighting', label: 'Lighting', icon: 'mdi:lightbulb-group' },
+  { id: 'zones', label: 'Zones', icon: 'mdi:select-group' },
+];
 import './preview-canvas';
 
 @customElement('apartment-view-card-editor')
@@ -29,8 +38,60 @@ export class ApartmentViewCardEditor extends LitElement {
   @state() private _selectedEntity = -1;
   @state() private _drawingZone = false;
   @state() private _uploadingKey: ImageFieldKey | null = null;
+  @state() private _tab: EditorTab = 'devices';
+  @state() private _entitySearch = '';
 
   static styles = css`
+    .tabs {
+      display: flex;
+      gap: 2px;
+      border-bottom: 1px solid var(--divider-color);
+      margin: 8px 0 16px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+    .tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 14px;
+      border: none;
+      background: none;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.95em;
+      color: var(--secondary-text-color);
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      --mdc-icon-size: 18px;
+    }
+    .tab.active {
+      color: var(--primary-color);
+      border-bottom-color: var(--primary-color);
+    }
+    .tab-pane {
+      display: none;
+    }
+    .tab-pane.active {
+      display: block;
+    }
+    .import-row {
+      margin-bottom: 10px;
+    }
+    .area-import,
+    .entity-search {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 9px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--divider-color);
+      background: var(--card-background-color);
+      color: var(--primary-text-color);
+      font: inherit;
+    }
+    .entity-search {
+      margin-bottom: 10px;
+    }
     .section {
       margin-bottom: 24px;
     }
@@ -252,6 +313,48 @@ export class ApartmentViewCardEditor extends LitElement {
     this._selectedEntity = this._config.entities.length - 1;
   }
 
+  private _matchesSearch(e: EntityConfig): boolean {
+    const q = this._entitySearch.trim().toLowerCase();
+    if (!q) return true;
+    return (e.name ?? '').toLowerCase().includes(q) || e.entity.toLowerCase().includes(q);
+  }
+
+  private _sensibleDomains = new Set([
+    'light', 'switch', 'input_boolean', 'media_player', 'climate', 'cover',
+    'fan', 'lock', 'sensor', 'binary_sensor', 'vacuum', 'humidifier',
+  ]);
+
+  /** Entity ids in an HA area (via the entity's own area, else its device's), not yet placed. */
+  private _entitiesInArea(areaId: string): string[] {
+    const reg = (this.hass as any).entities ?? {};
+    const dev = (this.hass as any).devices ?? {};
+    const placed = new Set(this._config.entities.map((e) => e.entity));
+    return Object.values(reg)
+      .filter((e: any) => {
+        if (e.hidden || e.disabled_by) return false;
+        const aid = e.area_id ?? dev[e.device_id]?.area_id;
+        return (
+          aid === areaId &&
+          !placed.has(e.entity_id) &&
+          this._sensibleDomains.has((e.entity_id.split('.')[0] || '').toLowerCase())
+        );
+      })
+      .map((e: any) => e.entity_id);
+  }
+
+  /** Append an area's devices as markers in a loose grid; the user drags them into place. */
+  private _addEntitiesFromArea(areaId: string): void {
+    const ids = this._entitiesInArea(areaId);
+    if (!ids.length) return;
+    const start = this._config.entities.length;
+    const added: EntityConfig[] = ids.map((id, i) => {
+      const n = start + i;
+      return { ...defaultEntity(), entity: id, x: 14 + (n % 5) * 17, y: 14 + (Math.floor(n / 5) % 5) * 17 };
+    });
+    this._commitEntities([...this._config.entities, ...added]);
+    this._tab = 'devices';
+  }
+
   private _removeEntity(index: number): void {
     const entities = this._config.entities.filter((_, i) => i !== index);
     if (this._selectedEntity === index) this._selectedEntity = -1;
@@ -456,11 +559,49 @@ export class ApartmentViewCardEditor extends LitElement {
     `;
   }
 
+  private _renderImportFromArea() {
+    const areas = (this.hass as unknown as { areas?: Record<string, { area_id: string; name: string }> }).areas ?? {};
+    const list = Object.values(areas);
+    if (!list.length) return nothing;
+    return html`<div class="import-row">
+      <select
+        class="area-import"
+        aria-label="Import devices from a room"
+        @change=${(ev: Event) => {
+          const sel = ev.target as HTMLSelectElement;
+          if (sel.value) this._addEntitiesFromArea(sel.value);
+          sel.value = '';
+        }}
+      >
+        <option value="">+ Import devices from a room…</option>
+        ${list
+          .slice()
+          .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+          .map((a) => html`<option value=${a.area_id}>${a.name}</option>`)}
+      </select>
+    </div>`;
+  }
+
   private _renderEntities() {
     return html`
       <div class="section">
         <div class="section-title">Entities</div>
-        ${this._config.entities.map((e, i) => {
+        ${this._renderImportFromArea()}
+        ${this._config.entities.length > 5
+          ? html`<input
+              class="entity-search"
+              type="search"
+              placeholder="Search devices…"
+              .value=${this._entitySearch}
+              @input=${(ev: Event) => {
+                this._entitySearch = (ev.target as HTMLInputElement).value;
+              }}
+            />`
+          : nothing}
+        ${this._config.entities
+          .map((e, i) => ({ e, i }))
+          .filter(({ e }) => this._matchesSearch(e))
+          .map(({ e, i }) => {
           const directional = isDirectional(e.orientation);
           const expanded = i === this._selectedEntity;
           return html`
@@ -523,6 +664,37 @@ export class ApartmentViewCardEditor extends LitElement {
         @preview-zone-drawn=${this._onZoneDrawn}
         @preview-zone-draw-cancelled=${this._onZoneDrawCancelled}
       ></preview-canvas>
+      <div class="tabs" role="tablist">
+        ${TABS.map(
+          (t) => html`<button
+            role="tab"
+            class="tab ${this._tab === t.id ? 'active' : ''}"
+            aria-selected=${this._tab === t.id ? 'true' : 'false'}
+            @click=${() => {
+              this._tab = t.id;
+            }}
+          >
+            <ha-icon icon=${t.icon}></ha-icon><span>${t.label}</span>
+          </button>`,
+        )}
+      </div>
+      <div class="tab-pane tab-floorplan ${this._tab === 'floorplan' ? 'active' : ''}">
+        ${this._renderFloorplanTab()}
+      </div>
+      <div class="tab-pane tab-devices ${this._tab === 'devices' ? 'active' : ''}">
+        ${this._renderEntities()}
+      </div>
+      <div class="tab-pane tab-lighting ${this._tab === 'lighting' ? 'active' : ''}">
+        ${this._renderLightingTab()}
+      </div>
+      <div class="tab-pane tab-zones ${this._tab === 'zones' ? 'active' : ''}">
+        ${this._renderZones()}
+      </div>
+    `;
+  }
+
+  private _renderFloorplanTab() {
+    return html`
       <div class="section">
         <div class="section-title">Images</div>
         ${IMAGE_FIELDS.map((f) => {
@@ -569,12 +741,28 @@ export class ApartmentViewCardEditor extends LitElement {
         })}
       </div>
       <div class="section">
-        <div class="section-title">Options</div>
+        <div class="section-title">View &amp; motion</div>
         <ha-form
           class="options"
           .hass=${this.hass}
           .data=${this._config.options}
-          .schema=${optionsSchema()}
+          .schema=${stageOptionsSchema()}
+          .computeLabel=${this._optionsLabel}
+          @value-changed=${this._onOptionsChanged}
+        ></ha-form>
+      </div>
+    `;
+  }
+
+  private _renderLightingTab() {
+    return html`
+      <div class="section">
+        <div class="section-title">Light style</div>
+        <ha-form
+          class="lighting-options"
+          .hass=${this.hass}
+          .data=${this._config.options}
+          .schema=${lightingOptionsSchema()}
           .computeLabel=${this._optionsLabel}
           @value-changed=${this._onOptionsChanged}
         ></ha-form>
@@ -594,8 +782,6 @@ export class ApartmentViewCardEditor extends LitElement {
           @value-changed=${this._onLabelsChanged}
         ></ha-form>
       </div>
-      ${this._renderEntities()}
-      ${this._renderZones()}
     `;
   }
 }
