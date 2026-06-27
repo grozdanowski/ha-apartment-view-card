@@ -41,6 +41,8 @@ export interface CardOptions {
   zoomMax: number;
   duskDawnOffsetMinutes: number;
   labels: LabelDefaults;
+  /** A weather.* entity to drive a subtle ambient tint over the floorplan. */
+  weatherEntity?: string;
 }
 
 export interface QuickAction {
@@ -211,6 +213,9 @@ function normalizeOptions(raw: any): CardOptions {
         ? o.duskDawnOffsetMinutes
         : 60,
     labels: normalizeLabelDefaults(o.labels),
+    ...(typeof o.weatherEntity === 'string' && o.weatherEntity.length
+      ? { weatherEntity: o.weatherEntity }
+      : {}),
   };
 }
 

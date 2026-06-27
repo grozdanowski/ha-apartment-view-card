@@ -101,8 +101,23 @@ export class AvControlSurface extends LitElement {
       background: color-mix(in srgb, var(--primary-text-color, #fff) 8%, transparent); --mdc-icon-size: 22px;
     }
     .tbtn.play { width: 48px; height: 48px; background: color-mix(in srgb, var(--primary-text-color, #fff) 16%, transparent); --mdc-icon-size: 26px; }
-    .nowplaying { flex: 1; font-size: 13px; color: var(--secondary-text-color, #c7cad1); }
-    .nowplaying b { color: var(--primary-text-color, #f5f5f7); font-weight: 500; }
+    .nowplaying-row { gap: 12px; }
+    .nowplaying { flex: 1; font-size: 13px; color: var(--secondary-text-color, #c7cad1); min-width: 0; }
+    .nowplaying b { color: var(--primary-text-color, #f5f5f7); font-weight: 500; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .art {
+      width: 48px; height: 48px; border-radius: 8px; object-fit: cover; flex: 0 0 auto;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    }
+    .progress {
+      height: 4px; border-radius: 2px; margin: -4px 0 14px;
+      background: color-mix(in srgb, var(--primary-text-color, #fff) 12%, transparent);
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%; border-radius: 2px;
+      background: var(--primary-color, #03a9f4);
+      transition: width 0.4s linear;
+    }
     .src {
       flex: 1; height: 40px; font: inherit; font-size: 14px; cursor: pointer;
       color: var(--primary-text-color, #f5f5f7);
@@ -360,12 +375,21 @@ export class AvControlSurface extends LitElement {
     const playing = state?.state === 'playing';
     const vol = typeof a.volume_level === 'number' ? a.volume_level : 0;
     const title = a.media_title;
+    const art = typeof a.entity_picture === 'string' ? a.entity_picture : null;
+    const dur = typeof a.media_duration === 'number' ? a.media_duration : 0;
+    const pos = typeof a.media_position === 'number' ? a.media_position : 0;
     const sources: string[] = Array.isArray(a.source_list) ? (a.source_list as string[]) : [];
     const hasTransport = c.previous || c.play || c.pause || c.next;
     return html`
       <div class="body">
         ${title
-          ? html`<div class="row"><span class="nowplaying"><b>${title}</b>${a.media_artist ? ' · ' + a.media_artist : ''}</span></div>`
+          ? html`<div class="row nowplaying-row">
+              ${art ? html`<img class="art" src=${art} alt="" />` : nothing}
+              <span class="nowplaying"><b>${title}</b>${a.media_artist ? ' · ' + a.media_artist : ''}</span>
+            </div>
+            ${dur > 0
+              ? html`<div class="progress" aria-hidden="true"><div class="progress-fill" style="width:${Math.max(0, Math.min(100, (pos / dur) * 100)).toFixed(1)}%"></div></div>`
+              : nothing}`
           : nothing}
         ${hasTransport
           ? html`<div class="row transport">

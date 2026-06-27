@@ -5,7 +5,7 @@ import { fireEvent } from 'custom-card-helpers';
 import type { HassLike } from './core/ha-types';
 import { normalizeConfig, type ApartmentViewConfig, type EntityConfig, type ZoneConfig, type QuickAction } from './core/config';
 import './editor/apartment-view-card-editor';
-import { renderBaseLayer } from './render/base-layer';
+import { renderBaseLayer, weatherTint } from './render/base-layer';
 import { renderLightLayer } from './render/light-layer';
 import { renderEffect, EFFECT_STYLES } from './render/effect-layer';
 import { PanZoomController } from './core/pan-zoom';
@@ -97,6 +97,14 @@ export class ApartmentViewCard extends LitElement {
       display: block;
       width: 100%;
       height: auto;
+    }
+    /* ambient weather tint over the floorplan (soft-light) */
+    .weather-tint {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      mix-blend-mode: soft-light;
+      transition: background 1.2s ease;
     }
     .warning {
       padding: 16px;
@@ -553,7 +561,12 @@ export class ApartmentViewCard extends LitElement {
 
   private _relevantStateChanged(prev?: HassLike, next?: HassLike): boolean {
     if (!prev || !next) return true;
-    const ids = ['sun.sun', ...(this.config?.entities?.map((e) => e.entity) ?? [])];
+    const weather = this.config?.options?.weatherEntity;
+    const ids = [
+      'sun.sun',
+      ...(weather ? [weather] : []),
+      ...(this.config?.entities?.map((e) => e.entity) ?? []),
+    ];
     return ids.some((id) => prev.states?.[id] !== next.states?.[id]);
   }
 
@@ -928,11 +941,15 @@ export class ApartmentViewCard extends LitElement {
   private _renderScene(): TemplateResult {
     const { images, options, entities } = this.config;
     const sun = this.hass?.states?.['sun.sun'];
+    const tint = options.weatherEntity
+      ? weatherTint(this.hass?.states?.[options.weatherEntity])
+      : null;
     return html`${renderBaseLayer(images, options, sun)}
       ${renderLightLayer(this.hass, entities, options, images, this._cardWidth)}
       ${entities.map((e) =>
         renderEffect(this.hass?.states?.[e.entity], e, this._cardWidth),
-      )}`;
+      )}
+      ${tint ? html`<div class="weather-tint" style="background:${tint}"></div>` : nothing}`;
   }
 
   // ---------------------------------------------------------------------------

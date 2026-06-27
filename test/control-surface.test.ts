@@ -293,3 +293,23 @@ describe('control-surface: alarm', () => {
     expect(hass.calls.at(-1)).toMatchObject({ domain: 'alarm_control_panel', service: 'alarm_disarm' });
   });
 });
+
+describe('control-surface: media artwork + progress', () => {
+  it('renders album art + a progress bar from position/duration', async () => {
+    const f = MEDIA_FEATURE.PLAY | MEDIA_FEATURE.PAUSE;
+    const { sr } = await mount(['media_player.tv'], { 'media_player.tv': ent('media_player.tv', 'playing', {
+      supported_features: f, media_title: 'Awake', media_artist: 'Tycho',
+      entity_picture: '/api/media_player_proxy/x', media_duration: 200, media_position: 50,
+    }) });
+    const art = sr.querySelector('img.art') as HTMLImageElement;
+    expect(art).toBeTruthy();
+    expect(art.getAttribute('src')).toBe('/api/media_player_proxy/x');
+    const fill = sr.querySelector('.progress-fill') as HTMLElement;
+    expect(fill).toBeTruthy();
+    expect(fill.style.width).toBe('25.0%'); // 50 / 200
+  });
+  it('no progress bar without a duration', async () => {
+    const { sr } = await mount(['media_player.r'], { 'media_player.r': ent('media_player.r', 'playing', { supported_features: MEDIA_FEATURE.PLAY, media_title: 'X' }) });
+    expect(sr.querySelector('.progress')).toBeNull();
+  });
+});

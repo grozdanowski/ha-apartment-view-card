@@ -235,3 +235,10 @@ describe('normalizeConfig quickActions', () => {
     expect(normalizeConfig({ images: { base: '/b.png' } }).quickActions).toEqual([]);
   });
 });
+
+describe('normalizeConfig weatherEntity', () => {
+  it('keeps a string weatherEntity, omits otherwise', () => {
+    expect(normalizeConfig({ images: { base: '/b.png' }, options: { weatherEntity: 'weather.home' } }).options.weatherEntity).toBe('weather.home');
+    expect('weatherEntity' in normalizeConfig({ images: { base: '/b.png' } }).options).toBe(false);
+  });
+});

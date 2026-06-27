@@ -7,6 +7,31 @@ export type TimeOfDay = 'day' | 'night' | 'duskDawn';
 
 const MIN = 60_000;
 
+/** Subtle ambient tint colour per weather condition (soft-light blended), or null. */
+const WEATHER_TINT: Record<string, string> = {
+  rainy: 'rgba(70,110,165,0.20)',
+  pouring: 'rgba(55,90,150,0.26)',
+  lightning: 'rgba(80,85,140,0.22)',
+  'lightning-rainy': 'rgba(70,80,140,0.26)',
+  snowy: 'rgba(205,225,255,0.16)',
+  'snowy-rainy': 'rgba(165,195,235,0.18)',
+  cloudy: 'rgba(120,128,140,0.14)',
+  fog: 'rgba(185,190,200,0.20)',
+  hail: 'rgba(150,185,225,0.18)',
+  windy: 'rgba(150,160,172,0.10)',
+  'windy-variant': 'rgba(150,160,172,0.10)',
+  sunny: 'rgba(255,205,130,0.10)',
+  clear: 'rgba(255,205,130,0.10)',
+  'clear-night': 'rgba(55,75,140,0.16)',
+  partlycloudy: 'rgba(180,182,190,0.08)',
+  exceptional: 'rgba(220,120,90,0.16)',
+};
+
+export function weatherTint(state: HassEntity | undefined): string | null {
+  if (!state) return null;
+  return WEATHER_TINT[state.state] ?? null;
+}
+
 // Returns a NEW Date anchored to `ref`'s calendar day at `src`'s time-of-day.
 // Never mutates `src` (v1 bug: _getDayState mutated parsed sun.sun dates).
 function anchorToDay(src: Date, ref: Date): Date {

@@ -118,3 +118,16 @@ describe('renderBaseLayer', () => {
     expect(img.style.filter).toBe('');
   });
 });
+
+import { weatherTint } from '../src/render/base-layer';
+
+describe('weatherTint', () => {
+  const w = (state: string) => ({ entity_id: 'weather.home', state, attributes: {} });
+  it('returns a tint for known conditions, null otherwise', () => {
+    expect(weatherTint(w('rainy'))).toMatch(/rgba/);
+    expect(weatherTint(w('sunny'))).toMatch(/rgba/);
+    expect(weatherTint(w('snowy'))).toMatch(/rgba/);
+    expect(weatherTint(w('totally-unknown'))).toBeNull();
+    expect(weatherTint(undefined)).toBeNull();
+  });
+});
