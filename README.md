@@ -229,10 +229,21 @@ Entity icons live on a **separate, non-transformed overlay** positioned in scree
 Tapping a **controllable** entity (light, media player, climate) opens a compact control surface **below the floorplan** — no dialog, no context switch. The surface is **capability-driven**: it renders only what the specific device actually supports, read live from its attributes.
 
 - **Lights** — brightness slider (if dimmable), a row of colour swatches (if the light supports `rgb`/`hs`/`xy`), and on/off. Colour-only-temperature and on/off-only lights show just what they can do.
-- **Media players** — only the transport buttons the device reports (`play`/`pause`, `next`/`previous`), a volume slider (if `VOLUME_SET`), and power.
+- **Media players** — only the transport buttons the device reports (`play`/`pause`, `next`/`previous`), a volume slider (if `VOLUME_SET`), a **source picker** (if `SELECT_SOURCE`), and power.
 - **Climate** — a single target-temperature stepper or a low/high range (whichever the device uses), clamped to its real min/max/step, plus its actual `hvac_modes` as chips.
+- **Covers** — open / stop / close, plus a position slider when the cover reports `SET_POSITION`.
+- **Fans** — a speed slider (`percentage`), preset chips, and an oscillate toggle — each shown only if supported.
+- **Locks** — lock / unlock, a jammed warning, and a confirm-guarded "open latch" when supported.
 
-Tapping a **non-controllable** entity performs its configured `tap` action (`toggle`, `more-info`, or `none`). **Press-and-hold** (≥ 450 ms) on any marker opens the native HA more-info dialog. Moving > 8 px before the hold timer fires starts a pan gesture instead.
+A marker that points at a **group** (`group.*`) drives all of its members. Tapping a **non-controllable** entity performs its configured `tap` action (`toggle`, `more-info`, or `none`) — and `tap: more-info` is honoured even on controllable entities. **Press-and-hold** (≥ 450 ms) on any marker opens the native HA more-info dialog.
+
+### Glanceable labels, badges & motion
+
+The floorplan tells you about your home before you touch anything:
+
+- **Dynamic labels** — an optional value beside each marker: a custom string, the state, a named attribute, or a self-describing preset (temperature, now-playing, source, brightness %, cover/fan %, battery %, sensor value, last-changed). A global **`smart`** default picks a sensible value per device type and keeps lights quiet (the brightness ring already says it). Labels stay calm by default and **bloom on zoom or zone focus**, with edge-aware placement and overlap culling so a busy floorplan stays legible.
+- **Attention badges** — a door left open, a leak, an unlocked lock, a low battery, or an **offline** device surface a colour-coded corner badge, and an **"N need attention"** pill that pulses those markers so you can find them.
+- **Motion ripple** — a presence/motion sensor firing emits a one-shot ripple where it lives (capped, decaying, disabled under reduced-motion).
 
 ### Lights Control (multi-select)
 
@@ -247,12 +258,12 @@ The **Lights control** pill (top-right of the floorplan) enters a multi-select m
 
 ## Visual Editor
 
-The card ships a fully functional `ha-form`-based visual editor (no manual YAML required for most workflows).
+The card ships a fully functional `ha-form`-based visual editor (no manual YAML required for most workflows), organised into **four tabs** over a pinned live preview:
 
-**Sections:**
-- **Images + Options** — paths for `base`/`allLights`/`night`/`duskDawn`, view mode, light style, pan/zoom settings.
-- **Entities** — add, remove, and reorder entities. Per-entity: entity selector (all domains), icon picker, name, size, tap action, orientation toggle + slider (0–359), and X/Y sliders.
-- **Zones** — add, remove, and reorder zones. Per-zone: name, icon, X/Y/width/height.
+- **Floorplan** — `base`/`allLights`/`night`/`duskDawn` images, view mode, dusk/dawn offset, pan/zoom.
+- **Devices** — the entity list (collapsible accordion rows). Per-entity: entity selector (all domains), name, icon, **label** (source + visibility, revealing custom-text / attribute fields as needed), size, tap action, light-style override, orientation toggle + slider, and X/Y sliders. **Import from a room** appends an HA Area's devices as markers to drag into place, and a search box filters the list.
+- **Lighting** — global light style + the global **Labels** default (including the one-tap `smart` mode).
+- **Zones** — add, remove, reorder, and draw zones on the preview.
 
 **Live preview:** the editor renders the base image with draggable markers. Dragging a marker updates its X/Y sliders bidirectionally. Selecting a row highlights its marker. Zones can be drawn by dragging a rectangle on the preview (crosshair cursor while drawing; dashed outline while active; solid when complete). Zone rectangles are shown as dashed outlines in edit mode only — they are invisible in normal card view.
 
