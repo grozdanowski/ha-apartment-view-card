@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from 'lit';
+import { html, nothing, type TemplateResult } from 'lit';
 import { ifDefined } from 'lit/directives/if-defined.js';
 import type { HassEntity } from '../core/ha-types';
 import type { EntityConfig } from '../core/config';
@@ -26,6 +26,12 @@ export interface MarkerView {
   glowColor?: string;
   /** Brightness 0..1 for active lights (drives the glow strength + brightness ring); 0 otherwise. */
   brightness: number;
+  /** "Lights control" multi-select mode is active. */
+  selectMode: boolean;
+  /** This marker can be checked in select mode (a light, in the focused zone if any). */
+  selectable: boolean;
+  /** Currently checked in the selection. */
+  selected: boolean;
 }
 
 function isLight(entity: EntityConfig, state: HassEntity | undefined): boolean {
@@ -55,7 +61,9 @@ export function computeMarkerViews(
   states: Record<string, HassEntity>,
   t: ZoomTransform,
   vp: Viewport,
-  focusedZoneEntityIds: Set<string> | null
+  focusedZoneEntityIds: Set<string> | null,
+  selectMode = false,
+  selectedIds: ReadonlySet<string> = new Set(),
 ): MarkerView[] {
   return entities.map((entity) => {
     const state = states[entity.entity];
@@ -63,6 +71,8 @@ export function computeMarkerViews(
     const active = state ? isActive(state) : false;
     const light = isLight(entity, state);
     const brightness = light && state ? intensity(state) : 0;
+    const focused =
+      focusedZoneEntityIds === null ? true : focusedZoneEntityIds.has(entity.entity);
     return {
       entity,
       state,
@@ -72,12 +82,13 @@ export function computeMarkerViews(
       icon: state ? iconForEntity(state, entity) : (entity.icon ?? 'mdi:checkbox-blank-circle'),
       label: markerLabel(entity, state),
       active,
-      focused:
-        focusedZoneEntityIds === null
-          ? true
-          : focusedZoneEntityIds.has(entity.entity),
+      focused,
       glowColor: light && active && state ? rgbCss(resolveLightColor(state)) : undefined,
       brightness,
+      selectMode,
+      // only lights are selectable, and only within the focused zone when one is focused
+      selectable: selectMode && light && focused,
+      selected: selectedIds.has(entity.entity),
     };
   });
 }
@@ -104,16 +115,30 @@ export function renderMarkerOverlay(
           ...(m.glowColor ? [`--marker-glow:${m.glowColor}`] : []),
         ].join(';');
         const ariaLabel = m.state ? `${m.label}, ${m.state.state}` : m.label;
-        // aria-pressed only on toggle markers (a true on/off control).
-        const pressed = m.entity.tap === 'toggle' ? String(m.active) : undefined;
+        const interactive = m.selectMode ? m.selectable : m.focused;
+        const cls = ['marker'];
+        if (m.active) cls.push('active');
+        if (!m.focused) cls.push('dimmed');
+        if (m.selectMode) {
+          cls.push(m.selectable ? 'selectable' : 'select-dim');
+          if (m.selected) cls.push('selected');
+        }
+        // aria-pressed reflects selection in select mode, else the on/off toggle.
+        const pressed = m.selectMode
+          ? m.selectable
+            ? String(m.selected)
+            : undefined
+          : m.entity.tap === 'toggle'
+            ? String(m.active)
+            : undefined;
         return html`
           <button
-            class="marker${m.active ? ' active' : ''}${m.focused ? '' : ' dimmed'}"
+            class=${cls.join(' ')}
             title=${m.label}
             aria-label=${ariaLabel}
             aria-pressed=${ifDefined(pressed)}
-            tabindex=${m.focused ? '0' : '-1'}
-            aria-hidden=${ifDefined(m.focused ? undefined : 'true')}
+            tabindex=${interactive ? '0' : '-1'}
+            aria-hidden=${ifDefined(interactive ? undefined : 'true')}
             style=${style}
             @pointerdown=${(e: PointerEvent) => onPointerDown(e, m)}
             @click=${(e: MouseEvent) => {
@@ -123,6 +148,9 @@ export function renderMarkerOverlay(
             }}
           >
             <ha-icon icon=${m.icon}></ha-icon>
+            ${m.selectMode && (m.selectable || m.selected)
+              ? html`<span class="marker-check"><ha-icon icon="mdi:check"></ha-icon></span>`
+              : nothing}
           </button>
         `;
       })}

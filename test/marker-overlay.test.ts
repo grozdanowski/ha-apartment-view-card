@@ -137,6 +137,9 @@ function makeView(over: Partial<MarkerView> = {}): MarkerView {
     active: true,
     focused: true,
     brightness: 1,
+    selectMode: false,
+    selectable: false,
+    selected: false,
     ...over,
   };
 }

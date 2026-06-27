@@ -147,6 +147,69 @@ export class ApartmentViewCard extends LitElement {
       cursor: default;
       color: var(--disabled-text-color);
     }
+    /* "Lights control" multi-select mode */
+    .marker-overlay .marker.select-dim {
+      opacity: 0.28;
+      pointer-events: none;
+      filter: grayscale(0.5);
+    }
+    .marker-overlay .marker.selectable {
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), inset 0 0 0 1.5px rgba(255, 255, 255, 0.42);
+    }
+    .marker-overlay .marker.selected {
+      scale: 1.05;
+    }
+    .marker-overlay .marker-check {
+      position: absolute;
+      right: -4px;
+      top: -4px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      --mdc-icon-size: 12px;
+      background: var(--card-background-color, #15171c);
+      color: transparent;
+      box-shadow: 0 0 0 2px var(--card-background-color, #15171c), inset 0 0 0 1.5px rgba(255, 255, 255, 0.55);
+    }
+    .marker-overlay .marker.selected .marker-check {
+      background: var(--primary-color, #03a9f4);
+      color: var(--text-primary-color, #fff);
+      box-shadow: 0 0 0 2px var(--card-background-color, #15171c), inset 0 0 0 1.5px var(--primary-color, #03a9f4);
+    }
+    .lights-control {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 6;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      height: 34px;
+      padding: 0 14px;
+      border: none;
+      border-radius: 17px;
+      cursor: pointer;
+      pointer-events: auto;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--primary-text-color);
+      background: color-mix(in srgb, var(--card-background-color, #1c1e24) 60%, transparent);
+      -webkit-backdrop-filter: blur(14px) saturate(1.5);
+      backdrop-filter: blur(14px) saturate(1.5);
+      box-shadow: inset 0 0 0 1px var(--divider-color, rgba(255, 255, 255, 0.14)), 0 4px 14px rgba(0, 0, 0, 0.35);
+      transition: scale 0.18s cubic-bezier(.34, 1.56, .64, 1), background-color 0.2s ease;
+      --mdc-icon-size: 16px;
+    }
+    .lights-control.active {
+      background: var(--primary-color, #03a9f4);
+      color: var(--text-primary-color, #fff);
+    }
+    .lights-control:active {
+      scale: 0.96;
+    }
     .zone-controls {
       display: flex;
       flex-direction: row;
@@ -380,7 +443,11 @@ export class ApartmentViewCard extends LitElement {
   }
 
   private _handleKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape' && this._focusedZone !== null) {
+    if (e.key !== 'Escape') return;
+    if (this._controlled.length || this._selectMode) {
+      e.preventDefault();
+      this._closeControl();
+    } else if (this._focusedZone !== null) {
       e.preventDefault();
       this._exitFocus();
     }
@@ -442,8 +509,16 @@ export class ApartmentViewCard extends LitElement {
    */
   private _activateEntity(entity: EntityConfig): void {
     if (!this.hass) return;
+    if (this._selectMode) {
+      // Only lights are selectable, scoped to the focused zone if any.
+      if (controlKind(entity.entity) !== 'light') return;
+      if (this._focusedZone && !entityInFocusedZone(entity, this._focusedZone, this.config.zones)) return;
+      this._controlled = this._controlled.includes(entity.entity)
+        ? this._controlled.filter((id) => id !== entity.entity)
+        : [...this._controlled, entity.entity];
+      return;
+    }
     if (controlKind(entity.entity) !== 'none') {
-      this._selectMode = false;
       this._controlled = [entity.entity];
     } else {
       dispatchTapAction({ hass: this.hass }, entity, this);
@@ -454,6 +529,27 @@ export class ApartmentViewCard extends LitElement {
     this._controlled = [];
     this._selectMode = false;
   };
+
+  /** "Lights control" toggle: enter multi-select (pre-checking the focused zone's lights) or exit. */
+  private _toggleSelectMode = (): void => {
+    if (this._selectMode) {
+      this._selectMode = false;
+      this._controlled = [];
+      return;
+    }
+    this._selectMode = true;
+    this._controlled = this._focusedZone ? this._lightsInZone(this._focusedZone) : [];
+  };
+
+  private _lightsInZone(zone: ZoneConfig): string[] {
+    return this.config.entities
+      .filter((e) => controlKind(e.entity) === 'light' && entityInFocusedZone(e, zone, this.config.zones))
+      .map((e) => e.entity);
+  }
+
+  private _hasLights(): boolean {
+    return this.config.entities.some((e) => controlKind(e.entity) === 'light');
+  }
 
   private _beginGesture(e: PointerEvent) {
     this._tapHold.start(e.clientX, e.clientY, performance.now());
@@ -577,6 +673,8 @@ export class ApartmentViewCard extends LitElement {
       t,
       vp,
       focusedZoneEntityIds,
+      this._selectMode,
+      new Set(this._controlled),
     );
 
     return html`
@@ -591,6 +689,16 @@ export class ApartmentViewCard extends LitElement {
             ${this._renderScene()}
           </div>
           ${renderMarkerOverlay(views, this._onMarkerPointerDown, this._onMarkerActivate)}
+          ${this._hasLights()
+            ? html`<button
+                class="lights-control ${this._selectMode ? 'active' : ''}"
+                @click=${this._toggleSelectMode}
+                aria-pressed=${this._selectMode}
+              >
+                <ha-icon icon="mdi:tune-variant"></ha-icon>
+                <span>${this._selectMode ? 'Done' : 'Lights control'}</span>
+              </button>`
+            : nothing}
         </div>
         <div class="zone-controls" role="toolbar" aria-label="Zones">
           ${buildZoneChips(this.config.zones, this._focusedZone).map(

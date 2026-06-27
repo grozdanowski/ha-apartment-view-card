@@ -283,3 +283,55 @@ describe('card-component: glow-style light overlay opacity', () => {
     expect(parseFloat(overlay!.style.opacity)).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// "Lights control" multi-select mode
+// ---------------------------------------------------------------------------
+
+describe('card-component: Lights control (multi-select)', () => {
+  const click = (el: Element) => el.dispatchEvent(new MouseEvent('click', { detail: 0, bubbles: true }));
+
+  it('shows the Lights control button when there are lights', async () => {
+    const card = await mountCard();
+    expect(card.shadowRoot!.querySelector('.lights-control')).toBeTruthy();
+  });
+
+  it('entering select mode opens a disabled surface and marks light markers selectable', async () => {
+    const card = await mountCard();
+    click(card.shadowRoot!.querySelector('.lights-control')!);
+    await (card as any).updateComplete;
+    const surface = card.shadowRoot!.querySelector('av-control-surface') as any;
+    expect(surface.selectMode).toBe(true);
+    expect(surface.entityIds).toEqual([]);
+    // both demo entities are lights -> selectable, with a checkbox
+    expect(card.shadowRoot!.querySelectorAll('.marker.selectable').length).toBe(2);
+    expect(card.shadowRoot!.querySelector('.marker-check')).toBeTruthy();
+  });
+
+  it('checking lights builds the group; checking again removes; Done exits', async () => {
+    const card = await mountCard();
+    click(card.shadowRoot!.querySelector('.lights-control')!);
+    await (card as any).updateComplete;
+    const markers = () => Array.from(card.shadowRoot!.querySelectorAll('.marker-overlay .marker')) as HTMLElement[];
+
+    click(markers()[0]); // check kitchen
+    await (card as any).updateComplete;
+    let surface = card.shadowRoot!.querySelector('av-control-surface') as any;
+    expect(surface.entityIds).toEqual(['light.kitchen_ceiling']);
+
+    click(markers()[1]); // check living
+    await (card as any).updateComplete;
+    surface = card.shadowRoot!.querySelector('av-control-surface') as any;
+    expect(surface.entityIds).toEqual(['light.kitchen_ceiling', 'light.living_lamp']);
+    expect(card.shadowRoot!.querySelectorAll('.marker.selected').length).toBe(2);
+
+    click(markers()[0]); // uncheck kitchen
+    await (card as any).updateComplete;
+    surface = card.shadowRoot!.querySelector('av-control-surface') as any;
+    expect(surface.entityIds).toEqual(['light.living_lamp']);
+
+    click(card.shadowRoot!.querySelector('.lights-control')!); // Done
+    await (card as any).updateComplete;
+    expect(card.shadowRoot!.querySelector('av-control-surface')).toBeNull();
+  });
+});
