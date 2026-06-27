@@ -143,6 +143,7 @@ function makeView(over: Partial<MarkerView> = {}): MarkerView {
     offline: false,
     labelText: null,
     labelAnchor: 'center',
+    attention: null,
     ...over,
   };
 }
@@ -353,5 +354,37 @@ describe('computeMarkerViews labels', () => {
     expect(anchor(10)).toBe('start');
     expect(anchor(50)).toBe('center');
     expect(anchor(90)).toBe('end');
+  });
+});
+
+describe('renderMarkerOverlay attention', () => {
+  it('renders a severity badge + has-attention class when the marker needs attention', () => {
+    const host = document.createElement('div');
+    render(renderMarkerOverlay([makeView({ attention: { kind: 'open', label: 'Open', severity: 'warning' } })], noop, noop), host);
+    const marker = host.querySelector('.marker') as HTMLElement;
+    expect(marker.classList.contains('has-attention')).toBe(true);
+    const badge = host.querySelector('.marker-badge') as HTMLElement;
+    expect(badge).toBeTruthy();
+    expect(badge.classList.contains('sev-warning')).toBe(true);
+  });
+  it('no badge when attention is null', () => {
+    const host = document.createElement('div');
+    render(renderMarkerOverlay([makeView({ attention: null })], noop, noop), host);
+    expect(host.querySelector('.marker-badge')).toBeNull();
+  });
+  it('pulse param adds the pulse class to the overlay', () => {
+    const host = document.createElement('div');
+    render(renderMarkerOverlay([makeView()], noop, noop, true), host);
+    expect((host.querySelector('.marker-overlay') as HTMLElement).classList.contains('pulse')).toBe(true);
+  });
+  it('select mode hides the attention badge (the check takes over)', () => {
+    const host = document.createElement('div');
+    render(renderMarkerOverlay([makeView({ selectMode: true, selectable: true, attention: { kind: 'open', label: 'Open', severity: 'warning' } })], noop, noop), host);
+    expect(host.querySelector('.marker-badge')).toBeNull();
+    expect(host.querySelector('.marker-check')).toBeTruthy();
+  });
+  it('computeMarkerViews derives attention from state', () => {
+    const v = computeMarkerViews([ent({ entity: 'binary_sensor.door' })], { 'binary_sensor.door': { entity_id: 'binary_sensor.door', state: 'on', attributes: { device_class: 'door' } } }, t, vp, null);
+    expect(v[0].attention).toMatchObject({ kind: 'open' });
   });
 });

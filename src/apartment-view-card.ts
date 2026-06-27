@@ -35,6 +35,9 @@ export class ApartmentViewCard extends LitElement {
   @state() private _controlled: string[] = [];
   /** "Lights control" multi-select mode. */
   @state() private _selectMode = false;
+  /** Transient: pulse the attention markers to help locate them. */
+  @state() private _pulse = false;
+  private _pulseTimer?: ReturnType<typeof setTimeout>;
 
   private _ro?: ResizeObserver;
   private _panZoom = new PanZoomController({ zoomMax: 1.5 });
@@ -230,6 +233,58 @@ export class ApartmentViewCard extends LitElement {
     .marker-overlay .marker-label.anchor-end {
       transform: translate(calc(-100% + 12px), var(--label-dy, 26px));
     }
+    /* attention badge on the marker corner (auto-derived: open/leak/unlocked/battery/offline) */
+    .marker-overlay .marker-badge {
+      position: absolute;
+      right: -3px;
+      top: -3px;
+      width: 17px;
+      height: 17px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      --mdc-icon-size: 11px;
+      color: #fff;
+      box-shadow: 0 0 0 2px var(--card-background-color, #15171c);
+    }
+    .marker-overlay .marker-badge.sev-critical { background: var(--error-color, #db4437); }
+    .marker-overlay .marker-badge.sev-warning { background: var(--warning-color, #ffa600); color: #1c1c1e; }
+    .marker-overlay .marker-badge.sev-info { background: var(--secondary-text-color, #8a8f98); }
+    /* pulse-to-locate when the "N need attention" pill is tapped */
+    .marker-overlay.pulse .marker.has-attention {
+      animation: av-attention 0.55s ease 0s 3;
+    }
+    @keyframes av-attention {
+      0%, 100% { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.42), inset 0 0 0 1px rgba(255, 255, 255, 0.14); }
+      50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--warning-color, #ffa600) 55%, transparent), 0 4px 14px rgba(0, 0, 0, 0.42); }
+    }
+    .attention-pill {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 6;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      height: 34px;
+      padding: 0 14px;
+      border: none;
+      border-radius: 17px;
+      cursor: pointer;
+      pointer-events: auto;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--primary-text-color);
+      background: color-mix(in srgb, var(--card-background-color, #1c1e24) 60%, transparent);
+      -webkit-backdrop-filter: blur(14px) saturate(1.5);
+      backdrop-filter: blur(14px) saturate(1.5);
+      box-shadow: inset 0 0 0 1px var(--divider-color, rgba(255, 255, 255, 0.14)), 0 4px 14px rgba(0, 0, 0, 0.35);
+      transition: scale 0.18s cubic-bezier(.34, 1.56, .64, 1);
+      --mdc-icon-size: 16px;
+    }
+    .attention-pill ha-icon { color: var(--warning-color, #ffa600); }
+    .attention-pill:active { scale: 0.96; }
     .lights-control {
       position: absolute;
       top: 10px;
@@ -313,6 +368,9 @@ export class ApartmentViewCard extends LitElement {
       .marker-overlay .marker-label {
         transition: none;
       }
+      .marker-overlay.pulse .marker.has-attention {
+        animation: none;
+      }
       .tilt {
         transition: none;
         transform: none !important;
@@ -389,6 +447,7 @@ export class ApartmentViewCard extends LitElement {
     window.removeEventListener('pointerup', this._onWindowPointerUp);
     window.removeEventListener('pointercancel', this._onWindowPointerUp);
     window.removeEventListener('keydown', this._handleKeyDown);
+    clearTimeout(this._pulseTimer);
     this._cancelHold();
     this._ro?.disconnect();
     this._ro = undefined;
@@ -597,6 +656,15 @@ export class ApartmentViewCard extends LitElement {
     this._selectMode = false;
   };
 
+  /** Briefly pulse the attention markers so the eye can find them. */
+  private _pulseAttention = (): void => {
+    clearTimeout(this._pulseTimer);
+    this._pulse = true;
+    this._pulseTimer = setTimeout(() => {
+      this._pulse = false;
+    }, 1400);
+  };
+
   /** "Lights control" toggle: enter multi-select (pre-checking the focused zone's lights) or exit. */
   private _toggleSelectMode = (): void => {
     if (this._selectMode) {
@@ -745,6 +813,7 @@ export class ApartmentViewCard extends LitElement {
       this.config.options.labels,
       this.hass,
     );
+    const attentionCount = views.filter((v) => v.attention).length;
 
     return html`
       <ha-card>
@@ -761,8 +830,18 @@ export class ApartmentViewCard extends LitElement {
               <!-- base-layer + light-layer come from Phase 2 render functions -->
               ${this._renderScene()}
             </div>
-            ${renderMarkerOverlay(views, this._onMarkerPointerDown, this._onMarkerActivate)}
+            ${renderMarkerOverlay(views, this._onMarkerPointerDown, this._onMarkerActivate, this._pulse)}
           </div>
+          ${attentionCount > 0 && !this._selectMode
+            ? html`<button
+                class="attention-pill"
+                @click=${this._pulseAttention}
+                title="Locate items that need attention"
+              >
+                <ha-icon icon="mdi:alert-circle"></ha-icon>
+                <span>${attentionCount} need${attentionCount === 1 ? 's' : ''} attention</span>
+              </button>`
+            : nothing}
           ${this._hasLights()
             ? html`<button
                 class="lights-control ${this._selectMode ? 'active' : ''}"

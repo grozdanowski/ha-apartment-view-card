@@ -365,3 +365,21 @@ describe('card-component: tap disambiguation + groups', () => {
     expect(surf.entityIds).toEqual(['light.kitchen_ceiling', 'light.living_lamp']);
   });
 });
+
+describe('card-component: attention pill', () => {
+  it('shows "N need attention" + a marker badge when an entity needs attention', async () => {
+    const cfg = { ...BASE_CONFIG, entities: [{ entity: 'binary_sensor.front_door', x: 30, y: 40, size: 'small', tap: 'more-info' }] };
+    const hass = createMockHass();
+    (hass.states as any)['binary_sensor.front_door'] = { entity_id: 'binary_sensor.front_door', state: 'on', attributes: { device_class: 'door' } };
+    const card = await mountCard(cfg, hass);
+    const pill = card.shadowRoot!.querySelector('.attention-pill') as HTMLElement;
+    expect(pill).toBeTruthy();
+    expect(pill.textContent).toContain('1 need');
+    expect(card.shadowRoot!.querySelector('.marker-badge')).toBeTruthy();
+  });
+
+  it('no pill when nothing needs attention', async () => {
+    const card = await mountCard();
+    expect(card.shadowRoot!.querySelector('.attention-pill')).toBeNull();
+  });
+});

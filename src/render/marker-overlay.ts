@@ -11,6 +11,7 @@ import {
   type LabelDefaults,
   type LabelVisibility,
 } from '../core/label';
+import { attentionFor, ATTENTION_ICON, type Attention } from '../core/attention';
 import {
   markerScreenPos,
   clampIconScale,
@@ -47,6 +48,8 @@ export interface MarkerView {
   labelText: string | null;
   /** Horizontal anchoring of the label relative to the marker point (edge-aware). */
   labelAnchor: LabelAnchor;
+  /** Auto-derived "needs attention" state (open door, leak, unlocked, low battery, offline), or null. */
+  attention: Attention | null;
 }
 
 function isLight(entity: EntityConfig, state: HassEntity | undefined): boolean {
@@ -153,6 +156,7 @@ export function computeMarkerViews(
       offline,
       labelText: null, // set after the collision cull below
       labelAnchor: anchorFor(entity.x),
+      attention: attentionFor(state),
     };
     return { view, text, vis, show, active };
   });
@@ -199,10 +203,11 @@ export function computeMarkerViews(
 export function renderMarkerOverlay(
   views: MarkerView[],
   onPointerDown: (e: PointerEvent, m: MarkerView) => void,
-  onActivate: (m: MarkerView) => void
+  onActivate: (m: MarkerView) => void,
+  pulse = false,
 ): TemplateResult {
   return html`
-    <div class="marker-overlay" part="marker-overlay">
+    <div class="marker-overlay ${pulse ? 'pulse' : ''}" part="marker-overlay">
       ${views.map((m) => {
         const style = [
           `left:${m.left}px`,
@@ -215,6 +220,7 @@ export function renderMarkerOverlay(
         const cls = ['marker'];
         if (m.active) cls.push('active');
         if (m.offline) cls.push('offline');
+        if (m.attention && !m.selectMode) cls.push('has-attention');
         if (!m.focused) cls.push('dimmed');
         if (m.selectMode) {
           cls.push(m.selectable ? 'selectable' : 'select-dim');
@@ -247,7 +253,10 @@ export function renderMarkerOverlay(
             <ha-icon icon=${m.icon}></ha-icon>
             ${m.selectMode && (m.selectable || m.selected)
               ? html`<span class="marker-check"><ha-icon icon="mdi:check"></ha-icon></span>`
-              : nothing}
+              : m.attention
+                ? html`<span class="marker-badge sev-${m.attention.severity}" title=${m.attention.label}
+                    ><ha-icon icon=${ATTENTION_ICON[m.attention.kind]}></ha-icon></span>`
+                : nothing}
           </button>
           ${m.labelText
             ? html`<span
