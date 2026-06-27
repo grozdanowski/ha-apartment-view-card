@@ -11,7 +11,7 @@ Approach: sequential increments, each TDD + green gate + real-HA verify (fronten
       (auto/always/active/never); spatial-collision cull; edge-aware auto-flip; frosted plate;
       values OUT of aria-label; RTL logical props; reduced-motion. Tests + harness + real-HA.
 - [x] A4 attention badges + "N need attention" + unavailable/offline marker treatment. Tests + verify.
-- [ ] A5 presence/motion pulse (capped ~3, decaying, reduced-motion). Tests + verify.
+- [x] A5 presence/motion pulse (capped ~3, decaying, reduced-motion). Tests + verify.
 
 ## Track B — controls (independent; control-surface + entity-capabilities)
 - [x] B1 entity-capabilities: extend ControlKind (cover/fan/lock + switch/toggle); coverCaps/

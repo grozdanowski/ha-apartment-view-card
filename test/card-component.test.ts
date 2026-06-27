@@ -383,3 +383,18 @@ describe('card-component: attention pill', () => {
     expect(card.shadowRoot!.querySelector('.attention-pill')).toBeNull();
   });
 });
+
+describe('card-component: motion ripple', () => {
+  it('a presence sensor turning off->on emits a ripple; none on first paint', async () => {
+    const cfg = { ...BASE_CONFIG, entities: [{ entity: 'binary_sensor.hall_motion', x: 50, y: 50, size: 'small', tap: 'more-info' }] };
+    const hass = createMockHass();
+    const off = { entity_id: 'binary_sensor.hall_motion', state: 'off', attributes: { device_class: 'motion' } };
+    (hass.states as any)['binary_sensor.hall_motion'] = off;
+    const card = await mountCard(cfg, hass);
+    expect(card.shadowRoot!.querySelectorAll('.motion-ripple').length).toBe(0); // no ripple on mount
+
+    card.hass = { ...(hass as any), states: { ...hass.states, 'binary_sensor.hall_motion': { entity_id: 'binary_sensor.hall_motion', state: 'on', attributes: { device_class: 'motion' } } } } as any;
+    await (card as any).updateComplete;
+    expect(card.shadowRoot!.querySelectorAll('.motion-ripple').length).toBeGreaterThan(0);
+  });
+});

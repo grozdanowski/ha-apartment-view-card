@@ -1,5 +1,6 @@
 import { LitElement, html, css, unsafeCSS, nothing, type TemplateResult, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
+import { repeat } from 'lit/directives/repeat.js';
 import { fireEvent } from 'custom-card-helpers';
 import type { HassLike } from './core/ha-types';
 import { normalizeConfig, type ApartmentViewConfig, type EntityConfig, type ZoneConfig } from './core/config';
@@ -14,7 +15,7 @@ import {
   renderMarkerOverlay,
   type MarkerView,
 } from './render/marker-overlay';
-import { zoomToZone, type Viewport, type ZoomTransform } from './core/geometry';
+import { zoomToZone, markerScreenPos, type Viewport, type ZoomTransform } from './core/geometry';
 import { buildZoneChips, type ZoneChip } from './render/zone-controls';
 import { entityInFocusedZone } from './render/zone-focus';
 import './render/control-surface';
@@ -38,6 +39,9 @@ export class ApartmentViewCard extends LitElement {
   /** Transient: pulse the attention markers to help locate them. */
   @state() private _pulse = false;
   private _pulseTimer?: ReturnType<typeof setTimeout>;
+  /** Transient motion ripples (presence sensors firing), capped + auto-decaying. */
+  @state() private _ripples: Array<{ key: number; left: number; top: number }> = [];
+  private _rippleSeq = 0;
 
   private _ro?: ResizeObserver;
   private _panZoom = new PanZoomController({ zoomMax: 1.5 });
@@ -285,6 +289,26 @@ export class ApartmentViewCard extends LitElement {
     }
     .attention-pill ha-icon { color: var(--warning-color, #ffa600); }
     .attention-pill:active { scale: 0.96; }
+    /* presence/motion ripple — a one-shot expanding pulse where motion fires */
+    .ripple-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .motion-ripple {
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      background: radial-gradient(circle, color-mix(in srgb, var(--primary-color, #03a9f4) 55%, transparent), transparent 70%);
+      animation: av-ripple 1.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    }
+    @keyframes av-ripple {
+      from { opacity: 0.7; scale: 0.3; }
+      to { opacity: 0; scale: 4.5; }
+    }
     .lights-control {
       position: absolute;
       top: 10px;
@@ -470,6 +494,43 @@ export class ApartmentViewCard extends LitElement {
     if (!prev || !next) return true;
     const ids = ['sun.sun', ...(this.config?.entities?.map((e) => e.entity) ?? [])];
     return ids.some((id) => prev.states?.[id] !== next.states?.[id]);
+  }
+
+  protected willUpdate(changed: PropertyValues): void {
+    if (changed.has('hass')) this._detectMotion(changed.get('hass') as HassLike | undefined);
+  }
+
+  private _reducedMotion(): boolean {
+    return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  private _isMotion(entity: EntityConfig): boolean {
+    if (!entity.entity.startsWith('binary_sensor.')) return false;
+    const dc = this.hass?.states?.[entity.entity]?.attributes?.device_class;
+    return dc === 'motion' || dc === 'occupancy' || dc === 'presence' || dc === 'moving';
+  }
+
+  /** Emit a ripple where a presence sensor just transitioned off->on. */
+  private _detectMotion(prev?: HassLike): void {
+    if (!prev || !this.hass || this._reducedMotion()) return; // no ripple on first paint
+    for (const e of this.config?.entities ?? []) {
+      if (!this._isMotion(e)) continue;
+      const now = this.hass.states[e.entity];
+      if (!now || now.state !== 'on') continue;
+      if (prev.states?.[e.entity]?.state === 'on') continue; // already on -> not a new trigger
+      this._fireRipple(e);
+    }
+  }
+
+  private _fireRipple(entity: EntityConfig): void {
+    const { left, top } = markerScreenPos(entity.x, entity.y, this._transform, this._viewport());
+    const key = ++this._rippleSeq;
+    let ripples = [...this._ripples, { key, left, top }];
+    if (ripples.length > 3) ripples = ripples.slice(ripples.length - 3); // cap concurrent
+    this._ripples = ripples;
+    setTimeout(() => {
+      this._ripples = this._ripples.filter((r) => r.key !== key);
+    }, 1400);
   }
 
   protected firstUpdated(): void {
@@ -831,6 +892,15 @@ export class ApartmentViewCard extends LitElement {
               ${this._renderScene()}
             </div>
             ${renderMarkerOverlay(views, this._onMarkerPointerDown, this._onMarkerActivate, this._pulse)}
+            ${this._ripples.length
+              ? html`<div class="ripple-layer">
+                  ${repeat(
+                    this._ripples,
+                    (r) => r.key,
+                    (r) => html`<span class="motion-ripple" style="left:${r.left}px;top:${r.top}px"></span>`,
+                  )}
+                </div>`
+              : nothing}
           </div>
           ${attentionCount > 0 && !this._selectMode
             ? html`<button
