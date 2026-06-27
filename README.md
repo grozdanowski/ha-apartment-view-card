@@ -234,8 +234,10 @@ Tapping a **controllable** entity (light, media player, climate) opens a compact
 - **Covers** — open / stop / close, plus a position slider when the cover reports `SET_POSITION`.
 - **Fans** — a speed slider (`percentage`), preset chips, and an oscillate toggle — each shown only if supported.
 - **Locks** — lock / unlock, a jammed warning, and a confirm-guarded "open latch" when supported.
+- **Vacuums** — start / pause / stop / return-to-dock / locate, fan-speed presets, and battery.
+- **Numbers** (`number`/`input_number`) — a min/max/step slider. **Selects** (`select`/`input_select`) — chips (≤ 4 options) or a dropdown. **Alarm panels** — arm home/away/night/vacation + disarm (code prompt when required).
 
-A marker that points at a **group** (`group.*`) drives all of its members. Tapping a **non-controllable** entity performs its configured `tap` action (`toggle`, `more-info`, or `none`) — and `tap: more-info` is honoured even on controllable entities. **Press-and-hold** (≥ 450 ms) on any marker opens the native HA more-info dialog.
+Media players also show **album art + a progress bar** when playing. A marker that points at a **group** (`group.*`) drives all of its members. Tapping a **non-controllable** entity performs its configured `tap` action (`toggle`, `more-info`, or `none`) — and `tap: more-info` is honoured even on controllable entities. **Press-and-hold** (≥ 450 ms) on any marker opens the native HA more-info dialog.
 
 ### Glanceable labels, badges & motion
 
@@ -244,6 +246,23 @@ The floorplan tells you about your home before you touch anything:
 - **Dynamic labels** — an optional value beside each marker: a custom string, the state, a named attribute, or a self-describing preset (temperature, now-playing, source, brightness %, cover/fan %, battery %, sensor value, last-changed). A global **`smart`** default picks a sensible value per device type and keeps lights quiet (the brightness ring already says it). Labels stay calm by default and **bloom on zoom or zone focus**, with edge-aware placement and overlap culling so a busy floorplan stays legible.
 - **Attention badges** — a door left open, a leak, an unlocked lock, a low battery, or an **offline** device surface a colour-coded corner badge, and an **"N need attention"** pill that pulses those markers so you can find them.
 - **Motion ripple** — a presence/motion sensor firing emits a one-shot ripple where it lives (capped, decaying, disabled under reduced-motion).
+
+### Quick actions, floors & ambient mood
+
+- **Radial quick actions** — configure `quickActions` (scenes, scripts, or service calls) and a bottom-right FAB fans them out on an arc. While a zone is focused it adds a contextual **"Turn off &lt;room&gt;"**.
+- **Multi-floor** — give the card a `floors` list (each with its own `images`/`entities`/`zones`) and a floor switcher cross-fades between them. Single-floor configs are unchanged.
+- **Ambient weather tint** — point `options.weatherEntity` at a `weather.*` entity and the floorplan picks up a subtle mood (warm sun, cool rain, bright snow, grey cloud…).
+
+```yaml
+quickActions:
+  - { name: Movie night, icon: mdi:movie, service: scene.turn_on, data: { entity_id: scene.movie } }
+  - { name: All off, icon: mdi:power, service: light.turn_off, data: { entity_id: all } }
+options:
+  weatherEntity: weather.home
+floors:
+  - { name: Ground, icon: mdi:home, images: { base: /local/ground.png }, entities: [...], zones: [...] }
+  - { name: Upstairs, icon: mdi:home-floor-2, images: { base: /local/upstairs.png }, entities: [...] }
+```
 
 ### Lights Control (multi-select)
 
