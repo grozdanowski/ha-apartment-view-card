@@ -19,17 +19,11 @@
       .app { width: 100%; max-width: 1000px; display: flex; flex-direction: column; gap: 14px; }
       h1 { font-size: 16px; font-weight: 500; margin: 0; }
       .muted { color: #8b94a0; font-size: 13px; }
-      .stage {
-        position: relative; width: 100%; aspect-ratio: 1166 / 930;
-        background: #07090b; border-radius: 12px; overflow: hidden;
+      .card-host {
+        width: 100%; background: #07090b; border-radius: 12px; overflow: hidden;
         border: 1px solid rgba(255, 255, 255, 0.08);
       }
-      .scene { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; }
-      #base { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
-        transition: filter 0.3s ease; user-select: none; -webkit-user-drag: none; }
-      #lights { position: absolute; inset: 0; pointer-events: none; }
-      /* the real card mounts here in Phase 2; harmless empty in Phase 1 */
-      apartment-view-card { position: absolute; inset: 0; display: block; pointer-events: none; }
+      apartment-view-card { display: block; width: 100%; }
       .panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
       .card { background: #12151a; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 12px 14px; }
       .card h2 { font-size: 12px; font-weight: 500; margin: 0 0 10px; color: #aab3bf;
@@ -56,11 +50,7 @@
         switch time-of-day; service calls are logged below.
       </p>
 
-      <div class="stage">
-        <div class="scene" id="scene">
-          <img id="base" src="/day.png" alt="floorplan base render" />
-          <div id="lights"></div>
-        </div>
+      <div class="card-host">
         <apartment-view-card id="card"></apartment-view-card>
       </div>
 
