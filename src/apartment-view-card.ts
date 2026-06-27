@@ -63,6 +63,18 @@ export class ApartmentViewCard extends LitElement {
       min-height: 120px;
       overflow: hidden;
       touch-action: none; /* let us own pinch/pan */
+      /* 3D context for the zone-focus perspective tilt. */
+      perspective: 1300px;
+      perspective-origin: 50% 44%;
+    }
+    /* Tilts the scene + marker overlay together on zone focus (they stay aligned;
+       markers remain crisp). The Lights-control button sits outside, staying flat. */
+    .tilt {
+      position: absolute;
+      inset: 0;
+      transform-origin: 50% 50%;
+      transform-style: preserve-3d;
+      transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
     }
     .scene {
       position: absolute;
@@ -257,6 +269,10 @@ export class ApartmentViewCard extends LitElement {
     @media (prefers-reduced-motion: reduce) {
       .scene {
         transition: none;
+      }
+      .tilt {
+        transition: none;
+        transform: none !important;
       }
       .marker-overlay .marker {
         transition: opacity 0.3s ease, background-color 0.3s ease, color 0.3s ease;
@@ -681,14 +697,19 @@ export class ApartmentViewCard extends LitElement {
       <ha-card>
         <div class="wrapper">
           <div
-            class="scene"
-            style="transform: translate(${t.panX}px, ${t.panY}px) scale(${t.scale});"
-            @pointerdown=${this._onScenePointerDown}
+            class="tilt"
+            style="transform: ${this._focusedZone ? 'rotateX(11deg)' : 'none'};"
           >
-            <!-- base-layer + light-layer come from Phase 2 render functions -->
-            ${this._renderScene()}
+            <div
+              class="scene"
+              style="transform: translate(${t.panX}px, ${t.panY}px) scale(${t.scale});"
+              @pointerdown=${this._onScenePointerDown}
+            >
+              <!-- base-layer + light-layer come from Phase 2 render functions -->
+              ${this._renderScene()}
+            </div>
+            ${renderMarkerOverlay(views, this._onMarkerPointerDown, this._onMarkerActivate)}
           </div>
-          ${renderMarkerOverlay(views, this._onMarkerPointerDown, this._onMarkerActivate)}
           ${this._hasLights()
             ? html`<button
                 class="lights-control ${this._selectMode ? 'active' : ''}"
