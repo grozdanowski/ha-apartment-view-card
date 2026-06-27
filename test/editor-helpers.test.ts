@@ -236,3 +236,47 @@ describe('formToEntity', () => {
     expect((out as any)._legacy).toBe('keep');
   });
 });
+
+import { labelsSchema } from '../src/editor/editor-helpers';
+
+describe('editor label config round-trip', () => {
+  const base = (over: Partial<EntityConfig> = {}): EntityConfig => ({ entity: 'light.x', x: 1, y: 2, size: 'small', tap: 'toggle', orientation: null, ...over });
+
+  it('entityToForm: no label -> labelSource "inherit"', () => {
+    expect(entityToForm(base()).labelSource).toBe('inherit');
+  });
+  it('entityToForm: maps a per-entity label to flat fields', () => {
+    const f = entityToForm(base({ label: { source: 'static', text: 'Hi', visibility: 'always' } }));
+    expect(f).toMatchObject({ labelSource: 'static', labelText: 'Hi', labelVisibility: 'always' });
+  });
+  it('formToEntity: inherit clears the label', () => {
+    const e = formToEntity(base({ label: { source: 'state' } }), { labelSource: 'inherit' } as any);
+    expect(e.label).toBeUndefined();
+  });
+  it('formToEntity: none -> {source:none}', () => {
+    expect(formToEntity(base(), { labelSource: 'none' } as any).label).toEqual({ source: 'none' });
+  });
+  it('formToEntity: static keeps text; preset keeps non-auto visibility; transient fields stripped', () => {
+    const e1 = formToEntity(base(), { labelSource: 'static', labelText: 'Movie', labelVisibility: 'auto' } as any);
+    expect(e1.label).toEqual({ source: 'static', text: 'Movie' }); // auto visibility omitted
+    const e2 = formToEntity(base(), { labelSource: 'climate-current', labelVisibility: 'always' } as any);
+    expect(e2.label).toEqual({ source: 'climate-current', visibility: 'always' });
+    expect('labelSource' in (e2 as any)).toBe(false);
+    expect('labelText' in (e2 as any)).toBe(false);
+  });
+  it('entitySchema reveals labelText only for static, labelAttribute only for attribute', () => {
+    const names = (src: string) => entitySchema(false, src).map((s) => s.name);
+    expect(names('static')).toContain('labelText');
+    expect(names('static')).not.toContain('labelAttribute');
+    expect(names('attribute')).toContain('labelAttribute');
+    expect(names('inherit')).not.toContain('labelVisibility');
+    expect(names('climate-current')).toContain('labelVisibility');
+  });
+  it('labelsSchema exposes source + visibility (incl. smart)', () => {
+    const s = labelsSchema();
+    expect(s.map((r) => r.name)).toEqual(['source', 'visibility']);
+    const sources = s[0].selector.select.options.map((o: any) => o.value);
+    expect(sources).toContain('smart');
+    expect(sources).toContain('none');
+  });
+});

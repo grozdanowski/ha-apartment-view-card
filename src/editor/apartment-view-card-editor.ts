@@ -18,6 +18,7 @@ import {
   isDirectional,
   zoneSchema,
   defaultZone,
+  labelsSchema,
 } from './editor-helpers';
 import './preview-canvas';
 
@@ -36,6 +37,12 @@ export class ApartmentViewCardEditor extends LitElement {
     .section-title {
       font-weight: 600;
       margin: 16px 0 8px;
+    }
+    .section-hint {
+      font-size: 0.85em;
+      color: var(--secondary-text-color);
+      margin: 0 0 10px;
+      line-height: 1.4;
     }
     .entity-row {
       border: 1px solid var(--divider-color);
@@ -275,9 +282,39 @@ export class ApartmentViewCardEditor extends LitElement {
       y: 'Y position',
       directional: 'Directional (cone)',
       orientation: 'Orientation',
+      labelSource: 'Label',
+      labelText: 'Label text',
+      labelAttribute: 'Attribute name',
+      labelVisibility: 'Label visibility',
     };
     return labels[schema.name] ?? schema.name;
   };
+
+  private _labelsLabel = (schema: { name: string }): string => {
+    const labels: Record<string, string> = {
+      source: 'Default label',
+      visibility: 'When to show labels',
+    };
+    return labels[schema.name] ?? schema.name;
+  };
+
+  private _onLabelsChanged(ev: CustomEvent): void {
+    ev.stopPropagation();
+    const v = ev.detail.value as { source?: string; visibility?: string };
+    const config: ApartmentViewConfig = {
+      ...this._config,
+      options: {
+        ...this._config.options,
+        labels: {
+          ...this._config.options.labels,
+          source: (v.source ?? this._config.options.labels.source) as any,
+          visibility: (v.visibility ?? this._config.options.labels.visibility) as any,
+        },
+      },
+    };
+    this._config = config;
+    fireEvent(this, 'config-changed', { config });
+  }
 
   private _onEntityChanged(ev: CustomEvent, index: number): void {
     ev.stopPropagation();
@@ -456,7 +493,7 @@ export class ApartmentViewCardEditor extends LitElement {
                     class="entity-form"
                     .hass=${this.hass}
                     .data=${entityToForm(e)}
-                    .schema=${entitySchema(directional)}
+                    .schema=${entitySchema(directional, e.label?.source ?? 'inherit')}
                     .computeLabel=${this._entityLabel}
                     @value-changed=${(ev: CustomEvent) =>
                       this._onEntityChanged(ev, i)}
@@ -540,6 +577,21 @@ export class ApartmentViewCardEditor extends LitElement {
           .schema=${optionsSchema()}
           .computeLabel=${this._optionsLabel}
           @value-changed=${this._onOptionsChanged}
+        ></ha-form>
+      </div>
+      <div class="section">
+        <div class="section-title">Labels</div>
+        <div class="section-hint">
+          A glanceable value beside each marker. "Smart" picks a sensible value per device
+          (temperature, now-playing…) and leaves lights quiet. Override per entity below.
+        </div>
+        <ha-form
+          class="labels"
+          .hass=${this.hass}
+          .data=${this._config.options.labels}
+          .schema=${labelsSchema()}
+          .computeLabel=${this._labelsLabel}
+          @value-changed=${this._onLabelsChanged}
         ></ha-form>
       </div>
       ${this._renderEntities()}

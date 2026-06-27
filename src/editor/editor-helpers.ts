@@ -73,6 +73,47 @@ const TAP_OPTIONS: { value: TapAction; label: string }[] = [
   { value: 'none', label: 'None' },
 ];
 
+/** Per-entity label source. 'inherit' = no per-entity label (use the global default). */
+const LABEL_SOURCE_OPTIONS = [
+  { value: 'inherit', label: 'Inherit from card default' },
+  { value: 'none', label: 'No label' },
+  { value: 'state', label: 'State' },
+  { value: 'static', label: 'Custom text…' },
+  { value: 'attribute', label: 'Attribute…' },
+  { value: 'climate-current', label: 'Temperature (current)' },
+  { value: 'climate-target', label: 'Temperature (target)' },
+  { value: 'media-title', label: 'Now playing' },
+  { value: 'media-source', label: 'Media source' },
+  { value: 'light-brightness', label: 'Brightness %' },
+  { value: 'cover-position', label: 'Cover position %' },
+  { value: 'fan-percentage', label: 'Fan speed %' },
+  { value: 'battery', label: 'Battery %' },
+  { value: 'sensor', label: 'Sensor value' },
+  { value: 'last-changed', label: 'Last changed' },
+];
+
+/** Global label default adds 'smart' (per-domain preset) and drops 'inherit'. */
+const GLOBAL_LABEL_SOURCE_OPTIONS = [
+  { value: 'none', label: 'Off' },
+  { value: 'smart', label: 'Smart (per device type)' },
+  ...LABEL_SOURCE_OPTIONS.filter((o) => o.value !== 'inherit' && o.value !== 'none'),
+];
+
+const LABEL_VISIBILITY_OPTIONS = [
+  { value: 'auto', label: 'Auto (on zoom / zone focus)' },
+  { value: 'always', label: 'Always' },
+  { value: 'active', label: 'When active' },
+  { value: 'never', label: 'Never' },
+];
+
+/** ha-form schema for the global label defaults (card options.labels). */
+export function labelsSchema(): HaFormSchema[] {
+  return [
+    { name: 'source', selector: { select: { mode: 'dropdown', options: GLOBAL_LABEL_SOURCE_OPTIONS } } },
+    { name: 'visibility', selector: { select: { mode: 'dropdown', options: LABEL_VISIBILITY_OPTIONS } } },
+  ];
+}
+
 /**
  * Image fields are rendered with <ha-picture-upload> (HA's click-to-upload /
  * "Pick media" widget) rather than a ha-form selector — HA has no `image`
@@ -116,12 +157,29 @@ export function optionsSchema(): HaFormSchema[] {
   ];
 }
 
-export function entitySchema(directional: boolean): HaFormSchema[] {
+export function entitySchema(directional: boolean, labelSource = 'inherit'): HaFormSchema[] {
   const schema: HaFormSchema[] = [
     // Entity selector is intentionally NOT domain-limited (spec §7).
     { name: 'entity', required: true, selector: { entity: {} } },
     { name: 'name', selector: { text: {} } },
     { name: 'icon', selector: { icon: {} } },
+    {
+      name: 'labelSource',
+      selector: { select: { mode: 'dropdown', options: LABEL_SOURCE_OPTIONS } },
+    },
+  ];
+  if (labelSource === 'static') {
+    schema.push({ name: 'labelText', selector: { text: {} } });
+  } else if (labelSource === 'attribute') {
+    schema.push({ name: 'labelAttribute', selector: { text: {} } });
+  }
+  if (labelSource !== 'inherit' && labelSource !== 'none') {
+    schema.push({
+      name: 'labelVisibility',
+      selector: { select: { mode: 'dropdown', options: LABEL_VISIBILITY_OPTIONS } },
+    });
+  }
+  schema.push(
     {
       name: 'size',
       selector: { select: { mode: 'dropdown', options: SIZE_OPTIONS } },
@@ -143,7 +201,7 @@ export function entitySchema(directional: boolean): HaFormSchema[] {
       selector: { number: { min: 0, max: 100, step: 0.5, mode: 'slider' } },
     },
     { name: 'directional', selector: { boolean: {} } },
-  ];
+  );
   if (directional) {
     schema.push({
       name: 'orientation',
@@ -189,6 +247,11 @@ export interface EntityFormData {
   y: number;
   directional: boolean;
   orientation?: number;
+  /** 'inherit' when no per-entity label is set; else the label source. */
+  labelSource: string;
+  labelText?: string;
+  labelAttribute?: string;
+  labelVisibility?: string;
 }
 
 export function entityToForm(e: EntityConfig): EntityFormData {
@@ -203,10 +266,14 @@ export function entityToForm(e: EntityConfig): EntityFormData {
     x: e.x,
     y: e.y,
     directional,
+    labelSource: e.label ? e.label.source : 'inherit',
   };
   if (directional) {
     form.orientation = e.orientation as number;
   }
+  if (e.label?.text) form.labelText = e.label.text;
+  if (e.label?.attribute) form.labelAttribute = e.label.attribute;
+  if (e.label?.visibility) form.labelVisibility = e.label.visibility;
   return form;
 }
 
@@ -233,7 +300,25 @@ export function formToEntity(
     merged.orientation = null;
   }
 
-  // 'directional' is a transient UI-only field; never persist it.
+  // Rebuild the nested label config from the flat form fields.
+  const ls = merged.labelSource as string | undefined;
+  if (!ls || ls === 'inherit') {
+    delete merged.label;
+  } else if (ls === 'none') {
+    merged.label = { source: 'none' };
+  } else {
+    const label: any = { source: ls };
+    if (ls === 'static' && merged.labelText) label.text = merged.labelText;
+    if (ls === 'attribute' && merged.labelAttribute) label.attribute = merged.labelAttribute;
+    if (merged.labelVisibility && merged.labelVisibility !== 'auto') label.visibility = merged.labelVisibility;
+    merged.label = label;
+  }
+
+  // Transient UI-only fields; never persist them.
   delete merged.directional;
+  delete merged.labelSource;
+  delete merged.labelText;
+  delete merged.labelAttribute;
+  delete merged.labelVisibility;
   return merged as EntityConfig;
 }
