@@ -112,6 +112,7 @@ export function computeMarkerViews(
   selectedIds: ReadonlySet<string> = new Set(),
   labelDefaults: LabelDefaults = DEFAULT_LABELS,
   hass?: HassLike,
+  maxIconScale = 2.0,
 ): MarkerView[] {
   const zoneFocused = focusedZoneEntityIds !== null;
 
@@ -143,7 +144,7 @@ export function computeMarkerViews(
       state,
       left,
       top,
-      iconScale: clampIconScale(t.scale),
+      iconScale: clampIconScale(t.scale, maxIconScale),
       icon: state ? iconForEntity(state, entity) : (entity.icon ?? 'mdi:checkbox-blank-circle'),
       label: markerLabel(entity, state),
       active,

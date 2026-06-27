@@ -61,8 +61,18 @@ describe('clampIconScale', () => {
     expect(clampIconScale(1.5)).toBe(1.5);
   });
 
-  it('caps icon scale at 2.0', () => {
+  it('caps icon scale at 2.0 by default', () => {
     expect(clampIconScale(2.0)).toBe(2.0);
     expect(clampIconScale(3.7)).toBe(2.0);
+  });
+
+  it('honours a custom max scale (configurable max icon size)', () => {
+    expect(clampIconScale(3, 1.5)).toBe(1.5); // capped lower
+    expect(clampIconScale(3, 3)).toBe(3); // allowed higher
+    expect(clampIconScale(1.2, 3)).toBe(1.2); // below the cap passes through
+  });
+
+  it('never lets the max drop the icon below its base size', () => {
+    expect(clampIconScale(2, 0.5)).toBe(1); // maxScale floored at 1
   });
 });

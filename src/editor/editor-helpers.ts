@@ -154,6 +154,14 @@ export function optionsSchema(): HaFormSchema[] {
         number: { min: 0, max: 180, step: 5, mode: 'slider', unit_of_measurement: 'min' },
       },
     },
+    {
+      name: 'iconSize',
+      selector: { number: { min: 24, max: 80, step: 1, mode: 'slider', unit_of_measurement: 'px' } },
+    },
+    {
+      name: 'iconSizeMax',
+      selector: { number: { min: 30, max: 160, step: 2, mode: 'slider', unit_of_measurement: 'px' } },
+    },
   ];
 }
 

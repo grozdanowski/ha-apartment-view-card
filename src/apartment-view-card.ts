@@ -156,9 +156,10 @@ export class ApartmentViewCard extends LitElement {
     }
     .marker-overlay .marker {
       position: absolute;
-      /* >=44px hit area for touch (icon stays ~22px, centered). */
-      min-width: 44px;
-      min-height: 44px;
+      /* Base marker size at overview, configurable via options.iconSize
+         (default 44px; the icon glyph is half the chip). */
+      min-width: var(--av-icon-size, 44px);
+      min-height: var(--av-icon-size, 44px);
       transform: translate(-50%, -50%);
       display: grid;
       place-items: center;
@@ -168,7 +169,7 @@ export class ApartmentViewCard extends LitElement {
       cursor: pointer;
       pointer-events: auto;
       color: var(--primary-text-color);
-      --mdc-icon-size: 22px;
+      --mdc-icon-size: calc(var(--av-icon-size, 44px) * 0.5);
       /* Frosted, dimensional chip that floats above the floorplan. The
          translucent fill + backdrop blur read on any image; the inset hairline
          gives a crisp edge on light and dark themes alike. */
@@ -1038,6 +1039,8 @@ export class ApartmentViewCard extends LitElement {
               .map((e) => e.entity),
           );
 
+    const iconSize = this.config.options.iconSize;
+    const maxIconScale = iconSize > 0 ? this.config.options.iconSizeMax / iconSize : 2;
     const views = computeMarkerViews(
       this._floorData.entities,
       this.hass?.states ?? {},
@@ -1048,6 +1051,7 @@ export class ApartmentViewCard extends LitElement {
       new Set(this._controlled),
       this.config.options.labels,
       this.hass,
+      maxIconScale,
     );
     const attentionCount = views.filter((v) => v.attention).length;
 
@@ -1069,7 +1073,7 @@ export class ApartmentViewCard extends LitElement {
               )}
             </div>`
           : nothing}
-        <div class="wrapper">
+        <div class="wrapper" style="--av-icon-size:${iconSize}px">
           <div
             class="tilt"
             style="transform: ${this._focusedZone ? 'rotateX(11deg)' : 'none'};"

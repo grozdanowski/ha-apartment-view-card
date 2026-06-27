@@ -233,24 +233,21 @@ export class ApartmentViewCardEditor extends LitElement {
       freePanZoom: 'Free pan / zoom',
       zoomMax: 'Max zone-zoom scale',
       duskDawnOffsetMinutes: 'Dusk/Dawn offset',
+      iconSize: 'Marker size (zoomed out)',
+      iconSizeMax: 'Max marker size (zoomed in)',
     };
     return labels[schema.name] ?? schema.name;
   };
 
   private _onOptionsChanged(ev: CustomEvent): void {
     ev.stopPropagation();
+    // ha-form sends the full options object; merge it so every field (incl.
+    // iconSize/iconSizeMax and any future option) is picked up. Spread _config
+    // first so images/entities/zones/unknown keys survive.
     const v = ev.detail.value as Record<string, any>;
-    // Spread _config first so images/entities/zones/unknown keys survive.
     const config: ApartmentViewConfig = {
       ...this._config,
-      options: {
-        ...this._config.options,
-        view: v.view,
-        lightStyle: v.lightStyle,
-        freePanZoom: v.freePanZoom,
-        zoomMax: v.zoomMax,
-        duskDawnOffsetMinutes: v.duskDawnOffsetMinutes,
-      },
+      options: { ...this._config.options, ...v },
     };
     this._config = config;
     fireEvent(this, 'config-changed', { config });

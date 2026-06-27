@@ -31,6 +31,8 @@ describe('normalizeConfig', () => {
       zoomMax: 1.5,
       duskDawnOffsetMinutes: 60,
       labels: { source: 'none', visibility: 'auto', densityCap: 14 },
+      iconSize: 44,
+      iconSizeMax: 88,
     });
     expect(cfg.entities).toEqual([]);
     expect(cfg.zones).toEqual([]);
@@ -260,5 +262,16 @@ describe('normalizeConfig floors (multi-floor)', () => {
   });
   it('a floor without a base throws', () => {
     expect(() => normalizeConfig({ floors: [{ name: 'X', images: {} }] })).toThrow(/images\.base/);
+  });
+});
+
+describe('normalizeConfig icon sizing', () => {
+  it('keeps valid iconSize/iconSizeMax; falls back to 44/88', () => {
+    const cfg = normalizeConfig({ images: { base: '/b.png' }, options: { iconSize: 60, iconSizeMax: 120 } });
+    expect(cfg.options.iconSize).toBe(60);
+    expect(cfg.options.iconSizeMax).toBe(120);
+    const bad = normalizeConfig({ images: { base: '/b.png' }, options: { iconSize: -5, iconSizeMax: 'x' } });
+    expect(bad.options.iconSize).toBe(44);
+    expect(bad.options.iconSizeMax).toBe(88);
   });
 });

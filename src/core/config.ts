@@ -41,6 +41,10 @@ export interface CardOptions {
   zoomMax: number;
   duskDawnOffsetMinutes: number;
   labels: LabelDefaults;
+  /** Marker size (px) at overview (zoom = 1). */
+  iconSize: number;
+  /** Max marker size (px) when zoomed in — icons grow with zoom but never beyond this. */
+  iconSizeMax: number;
   /** A weather.* entity to drive a subtle ambient tint over the floorplan. */
   weatherEntity?: string;
 }
@@ -224,6 +228,8 @@ function normalizeOptions(raw: any): CardOptions {
         ? o.duskDawnOffsetMinutes
         : 60,
     labels: normalizeLabelDefaults(o.labels),
+    iconSize: typeof o.iconSize === 'number' && o.iconSize > 0 ? o.iconSize : 44,
+    iconSizeMax: typeof o.iconSizeMax === 'number' && o.iconSizeMax > 0 ? o.iconSizeMax : 88,
     ...(typeof o.weatherEntity === 'string' && o.weatherEntity.length
       ? { weatherEntity: o.weatherEntity }
       : {}),

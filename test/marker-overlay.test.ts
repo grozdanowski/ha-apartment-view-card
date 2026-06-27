@@ -388,3 +388,13 @@ describe('renderMarkerOverlay attention', () => {
     expect(v[0].attention).toMatchObject({ kind: 'open' });
   });
 });
+
+describe('computeMarkerViews icon sizing', () => {
+  it('caps iconScale at the configured maxIconScale', () => {
+    const big: ZoomTransform = { scale: 3, panX: 0, panY: 0 };
+    const v = computeMarkerViews([ent({ entity: 'light.x' })], { 'light.x': lightState(true) }, big, vp, null, false, new Set(), undefined, undefined, 1.5);
+    expect(v[0].iconScale).toBe(1.5);
+    const v2 = computeMarkerViews([ent({ entity: 'light.x' })], { 'light.x': lightState(true) }, big, vp, null, false, new Set(), undefined, undefined, 3);
+    expect(v2[0].iconScale).toBe(3);
+  });
+});

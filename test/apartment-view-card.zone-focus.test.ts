@@ -20,6 +20,8 @@ function makeConfig(): ApartmentViewConfig {
       zoomMax: 1.5,
       duskDawnOffsetMinutes: 60,
       labels: { source: 'none', visibility: 'auto', densityCap: 14 },
+      iconSize: 44,
+      iconSizeMax: 88,
     },
     quickActions: [],
   };

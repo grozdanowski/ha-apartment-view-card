@@ -49,9 +49,9 @@ export function markerScreenPos(
   };
 }
 
-/** Icons grow with zoom but never beyond 2x baseline (spec §5/§6). */
-export function clampIconScale(scale: number): number {
-  return Math.min(scale, 2.0);
+/** Icons grow with zoom but never beyond `maxScale`x the baseline size. */
+export function clampIconScale(scale: number, maxScale = 2.0): number {
+  return Math.min(scale, Math.max(1, maxScale));
 }
 
 function clamp(v: number, lo: number, hi: number): number {

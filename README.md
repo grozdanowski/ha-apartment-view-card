@@ -224,6 +224,8 @@ The zone chip list appears below the card. Tapping a chip animates the card to z
 
 Entity icons live on a **separate, non-transformed overlay** positioned in screen pixels. They do not live inside the pan/zoom layer, so they remain sharp vector SVGs regardless of zoom level. The raster base render softens at high zoom (inherent to raster images); icons do not.
 
+Marker size is configurable: **`options.iconSize`** sets the base marker size (px) at overview, and **`options.iconSizeMax`** caps how large markers grow when you zoom in — they scale up with the zoom but never exceed this. Both are in the editor's **Floorplan** tab.
+
 ### On-Floorplan Control
 
 Tapping a **controllable** entity (light, media player, climate) opens a compact control surface **below the floorplan** — no dialog, no context switch. The surface is **capability-driven**: it renders only what the specific device actually supports, read live from its attributes.
