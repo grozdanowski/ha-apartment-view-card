@@ -1065,15 +1065,49 @@ describe('card-component: tap disambiguation + groups', () => {
 });
 
 describe('card-component: attention pill', () => {
-  it('shows "N need attention" + a marker badge when an entity needs attention', async () => {
+  it('renders a round warning-icon button (no text label) + a marker badge when an entity needs attention', async () => {
     const cfg = { ...BASE_CONFIG, entities: [{ entity: 'binary_sensor.front_door', x: 30, y: 40, size: 'small', tap: 'more-info' }] };
     const hass = createMockHass();
     (hass.states as any)['binary_sensor.front_door'] = { entity_id: 'binary_sensor.front_door', state: 'on', attributes: { device_class: 'door' } };
     const card = await mountCard(cfg, hass);
     const pill = card.shadowRoot!.querySelector('.attention-pill') as HTMLElement;
     expect(pill).toBeTruthy();
-    expect(pill.textContent).toContain('1 need');
+    // Round icon-only chip: the alert glyph, no text label. Count discoverable
+    // via the aria-label; a single item shows no badge (glyph alone is clear).
+    expect(pill.querySelector('ha-icon')?.getAttribute('icon')).toBe('mdi:alert-circle');
+    expect(pill.querySelector('.attention-count')).toBeNull();
+    expect(pill.getAttribute('aria-label')).toContain('1 need');
     expect(card.shadowRoot!.querySelector('.marker-badge')).toBeTruthy();
+  });
+
+  it('shows the count as a corner badge when more than one item needs attention', async () => {
+    const cfg = {
+      ...BASE_CONFIG,
+      entities: [
+        { entity: 'binary_sensor.front_door', x: 30, y: 40, size: 'small', tap: 'more-info' },
+        { entity: 'binary_sensor.balcony_door', x: 60, y: 55, size: 'small', tap: 'more-info' },
+      ],
+    };
+    const hass = createMockHass();
+    (hass.states as any)['binary_sensor.front_door'] = { entity_id: 'binary_sensor.front_door', state: 'on', attributes: { device_class: 'door' } };
+    (hass.states as any)['binary_sensor.balcony_door'] = { entity_id: 'binary_sensor.balcony_door', state: 'on', attributes: { device_class: 'door' } };
+    const card = await mountCard(cfg, hass);
+    const pill = card.shadowRoot!.querySelector('.attention-pill') as HTMLElement;
+    expect(pill.querySelector('.attention-count')?.textContent?.trim()).toBe('2');
+  });
+
+  it('still starts the attention tour when tapped', async () => {
+    const cfg = {
+      ...BASE_CONFIG,
+      entities: [{ entity: 'binary_sensor.front_door', x: 20, y: 30, size: 'small', tap: 'more-info' }],
+      zones: [{ name: 'Hall', x: 10, y: 20, width: 30, height: 30 }],
+    };
+    const hass = createMockHass();
+    (hass.states as any)['binary_sensor.front_door'] = { entity_id: 'binary_sensor.front_door', state: 'on', attributes: { device_class: 'door' } };
+    const card = await mountCard(cfg as any, hass);
+    (card.shadowRoot!.querySelector('.attention-pill') as HTMLElement).click();
+    await (card as any).updateComplete;
+    expect((card as any)._focusedZone?.name).toBe('Hall');
   });
 
   it('no pill when nothing needs attention', async () => {
@@ -1108,6 +1142,11 @@ describe('card-component: attention pill takes you there (P0-6)', () => {
   }
   const pill = (card: Card) => card.shadowRoot!.querySelector('.attention-pill') as HTMLElement;
 
+  // The round chip carries no text; the live tour position surfaces via the
+  // aria-label + the corner count badge (and the internal cycle index).
+  const badge = (card: Card) =>
+    pill(card).querySelector('.attention-count')?.textContent?.trim() ?? null;
+
   it('tapping the pill focuses the first attention item\'s zone and counts the tour', async () => {
     const card = await mountCard(ATT_CONFIG as any, attHass());
     // Dynamic label (review a11y fix): carries the live count, not a static string.
@@ -1115,7 +1154,8 @@ describe('card-component: attention pill takes you there (P0-6)', () => {
     pill(card).click();
     await (card as any).updateComplete;
     expect((card as any)._focusedZone?.name).toBe('Hall');
-    expect(pill(card).textContent).toContain('1 of 2');
+    expect(pill(card).getAttribute('aria-label')).toBe('Attention 1 of 2 — go to the next one');
+    expect(badge(card)).toBe('1');
   });
 
   it('a second tap advances to the next item; the cycle wraps', async () => {
@@ -1125,21 +1165,25 @@ describe('card-component: attention pill takes you there (P0-6)', () => {
     pill(card).click();
     await (card as any).updateComplete;
     expect((card as any)._focusedZone?.name).toBe('Living');
-    expect(pill(card).textContent).toContain('2 of 2');
+    expect(pill(card).getAttribute('aria-label')).toBe('Attention 2 of 2 — go to the next one');
+    expect(badge(card)).toBe('2');
     pill(card).click(); // wraps back to the first item
     await (card as any).updateComplete;
     expect((card as any)._focusedZone?.name).toBe('Hall');
-    expect(pill(card).textContent).toContain('1 of 2');
+    expect(pill(card).getAttribute('aria-label')).toBe('Attention 1 of 2 — go to the next one');
+    expect(badge(card)).toBe('1');
   });
 
   it('the cycle resets on exit-focus', async () => {
     const card = await mountCard(ATT_CONFIG as any, attHass());
     pill(card).click();
     await (card as any).updateComplete;
-    expect(pill(card).textContent).toContain('1 of 2');
+    expect(pill(card).getAttribute('aria-label')).toBe('Attention 1 of 2 — go to the next one');
     (card as any)._exitFocus();
     await (card as any).updateComplete;
-    expect(pill(card).textContent).toContain('2 need attention');
+    expect(pill(card).getAttribute('aria-label')).toBe('2 need attention — go to the next one');
+    // At rest the badge falls back to the total count.
+    expect(badge(card)).toBe('2');
     pill(card).click(); // the tour restarts at the first item
     await (card as any).updateComplete;
     expect((card as any)._focusedZone?.name).toBe('Hall');
@@ -1150,7 +1194,7 @@ describe('card-component: attention pill takes you there (P0-6)', () => {
     const card = await mountCard(ATT_CONFIG as any, hass);
     pill(card).click();
     await (card as any).updateComplete;
-    expect(pill(card).textContent).toContain('1 of 2');
+    expect(pill(card).getAttribute('aria-label')).toBe('Attention 1 of 2 — go to the next one');
     // The balcony closes — one less item needing attention.
     card.hass = {
       ...(hass as any),
@@ -1160,7 +1204,7 @@ describe('card-component: attention pill takes you there (P0-6)', () => {
       },
     } as any;
     await (card as any).updateComplete;
-    expect(pill(card).textContent).toContain('1 needs attention');
+    expect(pill(card).getAttribute('aria-label')).toBe('1 needs attention — go to the next one');
   });
 
   it('a zoneless attention item gets the 1.35x centered, cover-clamped camera', async () => {
@@ -1205,7 +1249,7 @@ describe('card-component: attention pill takes you there (P0-6)', () => {
     // The target marker must not be dimmed while the camera centers on it.
     const markers = Array.from(card.shadowRoot!.querySelectorAll('.marker-overlay .marker'));
     expect(markers.some((m) => m.classList.contains('dimmed'))).toBe(false);
-    expect(pill(card).textContent).toContain('2 of 2');
+    expect(pill(card).getAttribute('aria-label')).toBe('Attention 2 of 2 — go to the next one');
   });
 
   it('the locate pulse fires once the camera settles (fallback timer)', async () => {

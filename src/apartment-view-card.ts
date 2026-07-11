@@ -562,36 +562,61 @@ export class ApartmentViewCard extends LitElement {
     }
     /* 34px visual height; the ::after inset extends the effective hit target
        to 44px (a11y guardrail) without changing the calm HUD look. */
-    .attention-pill::after,
     .lights-control::after {
+      content: '';
+      position: absolute;
+      inset: -5px;
+    }
+    /* Compact ROUND warning-icon button (field feedback): just an alert glyph
+       in a 34px circle — no text label — with the live count as a small corner
+       badge. Still taps to start/advance the attention tour. Hit target reaches
+       the 44px a11y floor via the ::after inset. */
+    .attention-pill::after {
       content: '';
       position: absolute;
       inset: -5px;
     }
     .attention-pill {
       position: relative;
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
+      display: inline-grid;
+      place-items: center;
+      width: 34px;
       height: 34px;
-      padding: 0 14px;
+      padding: 0;
       border: none;
-      border-radius: 17px;
+      border-radius: 50%;
       cursor: pointer;
       pointer-events: auto;
       font: inherit;
-      font-size: 13px;
-      font-weight: 500;
       color: var(--primary-text-color);
       background: color-mix(in srgb, var(--card-background-color, #1c1e24) 60%, transparent);
       -webkit-backdrop-filter: blur(14px) saturate(1.5);
       backdrop-filter: blur(14px) saturate(1.5);
       box-shadow: inset 0 0 0 1px var(--divider-color, rgba(255, 255, 255, 0.14)), 0 4px 14px rgba(0, 0, 0, 0.35);
       transition: scale var(--av-dur-fast) var(--av-ease-spring);
-      --mdc-icon-size: 16px;
+      --mdc-icon-size: 20px;
     }
     .attention-pill ha-icon { color: var(--warning-color, #ffa600); }
     .attention-pill:active { scale: 0.96; }
+    /* Count badge on the circle's top-right corner; hidden when count is 1. */
+    .attention-pill .attention-count {
+      position: absolute;
+      top: -3px;
+      right: -3px;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      box-sizing: border-box;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--warning-color, #ffa600);
+      color: #1c1c1e;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+      pointer-events: none;
+    }
     /* One-shot "modifier + scroll to zoom" hint (spec P0-3): same frosted
        recipe as .attention-pill, non-interactive, opacity-only in/out. */
     .wheel-hint {
@@ -2125,18 +2150,31 @@ export class ApartmentViewCard extends LitElement {
 
     // HUD row above the canvas: attention pill (left) + lights control (right).
     // The pill label counts the tour while cycling ("2 of 3", spec P0-6).
+    const attentionLabel =
+      this._attentionCycle > 0
+        ? `Attention ${((this._attentionCycle - 1) % attentionCount) + 1} of ${attentionCount} — go to the next one`
+        : `${attentionCount} need${attentionCount === 1 ? 's' : ''} attention — go to the next one`;
+    // The corner badge counts the tour while cycling ("2"), else the total
+    // count; hidden entirely when a single item needs attention (round glyph
+    // alone reads clearly). No text label on the chip itself (field feedback).
+    const attentionBadge =
+      this._attentionCycle > 0
+        ? `${((this._attentionCycle - 1) % attentionCount) + 1}`
+        : attentionCount > 1
+        ? `${attentionCount}`
+        : null;
     const attentionPill =
       attentionCount > 0 && !this._selectMode
         ? html`<button
             class="attention-pill"
             @click=${this._goToAttention}
-            aria-label="${attentionCount} need${attentionCount === 1 ? 's' : ''} attention — go to the next one"
+            aria-label=${attentionLabel}
             title="Go to the next item that needs attention"
           >
             <ha-icon icon="mdi:alert-circle"></ha-icon>
-            <span>${this._attentionCycle > 0
-              ? `${((this._attentionCycle - 1) % attentionCount) + 1} of ${attentionCount}`
-              : `${attentionCount} need${attentionCount === 1 ? 's' : ''} attention`}</span>
+            ${attentionBadge !== null
+              ? html`<span class="attention-count" aria-hidden="true">${attentionBadge}</span>`
+              : nothing}
           </button>`
         : nothing;
     // While the attention tour is cycling, the right HUD slot becomes the way
