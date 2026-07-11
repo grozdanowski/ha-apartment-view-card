@@ -331,4 +331,16 @@ describe('normalizeConfig icon sizing', () => {
     expect(bad.options.iconSize).toBe(44);
     expect(bad.options.iconSizeMax).toBe(88);
   });
+
+  it('keeps optional mobile overrides only when a positive number', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      options: { iconSizeMobile: 56, iconSizeMaxMobile: 72 },
+    });
+    expect(cfg.options.iconSizeMobile).toBe(56);
+    expect(cfg.options.iconSizeMaxMobile).toBe(72);
+    const none = normalizeConfig({ images: { base: '/b.png' }, options: { iconSizeMobile: -1 } });
+    expect('iconSizeMobile' in none.options).toBe(false);
+    expect('iconSizeMaxMobile' in none.options).toBe(false);
+  });
 });

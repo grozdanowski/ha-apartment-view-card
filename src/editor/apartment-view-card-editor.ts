@@ -238,8 +238,10 @@ export class ApartmentViewCardEditor extends LitElement {
       freePanZoom: 'Free pan / zoom',
       zoomMax: 'Max zone-zoom scale',
       duskDawnOffsetMinutes: 'Dusk/Dawn offset',
-      iconSize: 'Marker size (zoomed out)',
-      iconSizeMax: 'Max marker size (zoomed in)',
+      iconSize: 'Marker size — desktop (zoomed out)',
+      iconSizeMax: 'Max marker size — desktop (zoomed in)',
+      iconSizeMobile: 'Marker size — mobile (zoomed out)',
+      iconSizeMaxMobile: 'Max marker size — mobile (zoomed in)',
     };
     return labels[schema.name] ?? schema.name;
   };

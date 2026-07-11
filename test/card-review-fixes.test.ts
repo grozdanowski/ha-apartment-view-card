@@ -200,3 +200,25 @@ describe('F-5: a pass-through wheel cancels the armed single-tap timer', () => {
     expect((card as any)._focusedZone).toBeNull();
   });
 });
+
+describe('rc.3: mobile icon-size overrides', () => {
+  it('_resolveIconSizes picks the mobile override only on a mobile screen', async () => {
+    const cfg = {
+      ...BASE_CONFIG,
+      options: { iconSize: 40, iconSizeMax: 80, iconSizeMobile: 56, iconSizeMaxMobile: 100 },
+    };
+    const card = await mountCard(cfg as any);
+    (card as any)._isMobileScreen = false;
+    expect((card as any)._resolveIconSizes()).toEqual({ iconSize: 40, iconSizeMax: 80 });
+    (card as any)._isMobileScreen = true;
+    expect((card as any)._resolveIconSizes()).toEqual({ iconSize: 56, iconSizeMax: 100 });
+  });
+
+  it('falls back to the desktop size when a mobile override is absent', async () => {
+    const cfg = { ...BASE_CONFIG, options: { iconSize: 44, iconSizeMax: 88, iconSizeMobile: 60 } };
+    const card = await mountCard(cfg as any);
+    (card as any)._isMobileScreen = true;
+    // mobile iconSize overridden, but iconSizeMax has no mobile value → desktop.
+    expect((card as any)._resolveIconSizes()).toEqual({ iconSize: 60, iconSizeMax: 88 });
+  });
+});

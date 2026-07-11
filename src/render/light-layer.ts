@@ -24,6 +24,17 @@ export function effectiveLightStyle(
   return cfg.lightStyle ?? options.lightStyle;
 }
 
+/**
+ * Whether an entity contributes procedural floor-light. Only actual lights do
+ * by default; `cfg.light` is an explicit override (true for a switch/plug
+ * driving a lamp, false to silence a light). Without this gate, ANY "active"
+ * entity — a heating heat pump, a playing media player, a running fan — pooled
+ * warm light on the floorplan, which is never what those states mean.
+ */
+export function emitsLight(cfg: EntityConfig): boolean {
+  return cfg.light ?? (cfg.entity.split('.')[0] || '').toLowerCase() === 'light';
+}
+
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
 }
@@ -150,9 +161,11 @@ export function renderLightLayer(
       'pointer-events': 'none',
     })}
   >
-    ${entities.map((cfg) =>
-      renderLight(hass?.states?.[cfg.entity], cfg, options, images, cardWidth),
-    )}
+    ${entities
+      .filter(emitsLight)
+      .map((cfg) =>
+        renderLight(hass?.states?.[cfg.entity], cfg, options, images, cardWidth),
+      )}
   </div>`;
 }
 

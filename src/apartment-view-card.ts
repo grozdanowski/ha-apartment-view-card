@@ -24,6 +24,8 @@ import { attentionFor } from './core/attention';
 import './render/control-surface';
 import { controlKind, controlTarget } from './core/entity-capabilities';
 
+/** Viewport width at/below which the mobile icon-size overrides apply. */
+const MOBILE_BREAKPOINT_PX = 768;
 /** Room-swipe recognition while focused (spec P0-1): min horizontal travel + max duration. */
 const SWIPE_MIN_PX = 56;
 const SWIPE_MAX_MS = 350;
@@ -83,6 +85,8 @@ export class ApartmentViewCard extends LitElement {
   @property({ attribute: false }) public hass?: HassLike;
   @property({ attribute: false }) public config!: ApartmentViewConfig;
   @state() private _cardWidth = 600;
+  /** True when the viewport is a mobile screen (drives the icon-size override). */
+  @state() private _isMobileScreen = false;
   /**
    * Base image aspect (naturalHeight / naturalWidth); null until the image
    * loads. The overlay viewport height is DERIVED from this (width × aspect)
@@ -148,6 +152,7 @@ export class ApartmentViewCard extends LitElement {
   private _inPreview: boolean | null = null;
 
   private _ro?: ResizeObserver;
+  private _mql?: MediaQueryList;
   /** The .wrapper currently carrying the non-passive multi-touch guards. */
   private _wrapperTouchTarget: HTMLElement | null = null;
   private _panZoom = new PanZoomController({ zoomMax: 1.5 });
@@ -835,11 +840,39 @@ export class ApartmentViewCard extends LitElement {
         if (w && Math.abs(w - this._cardWidth) > 0.5) {
           this._cardWidth = w;
         }
+        // Backstop for the matchMedia change event (some engines don't fire it
+        // on every viewport change) — a breakpoint crossing almost always
+        // resizes the card too, so re-read matches here.
+        if (this._mql && this._mql.matches !== this._isMobileScreen) {
+          this._isMobileScreen = this._mql.matches;
+        }
       });
+    }
+    // Mobile-screen icon sizing: track the viewport breakpoint reactively so
+    // options.iconSizeMobile / iconSizeMaxMobile apply on phones (spec: sizes
+    // set "separately for desktop and mobile screen sizes").
+    this._mql = window.matchMedia?.(`(max-width: ${MOBILE_BREAKPOINT_PX}px)`);
+    if (this._mql) {
+      this._isMobileScreen = this._mql.matches;
+      this._mql.addEventListener('change', this._onBreakpointChange);
     }
     // Re-arm the multi-touch guards on reconnect (the wrapper node survives
     // in the persisted renderRoot; no-op before the first render).
     this._attachWrapperTouchGuards();
+  }
+
+  private _onBreakpointChange = (e: MediaQueryListEvent): void => {
+    this._isMobileScreen = e.matches;
+  };
+
+  /** Effective marker sizes for the current screen (mobile override → desktop). */
+  private _resolveIconSizes(): { iconSize: number; iconSizeMax: number } {
+    const o = this.config.options;
+    const mobile = this._isMobileScreen;
+    return {
+      iconSize: (mobile && o.iconSizeMobile) || o.iconSize,
+      iconSizeMax: (mobile && o.iconSizeMaxMobile) || o.iconSizeMax,
+    };
   }
 
   public disconnectedCallback(): void {
@@ -870,6 +903,8 @@ export class ApartmentViewCard extends LitElement {
     this._unlatchGesture();
     this._ro?.disconnect();
     this._ro = undefined;
+    this._mql?.removeEventListener('change', this._onBreakpointChange);
+    this._mql = undefined;
   }
 
   /**
@@ -1896,8 +1931,8 @@ export class ApartmentViewCard extends LitElement {
               .map((e) => e.entity),
           );
 
-    const iconSize = this.config.options.iconSize;
-    const maxIconScale = iconSize > 0 ? this.config.options.iconSizeMax / iconSize : 2;
+    const { iconSize, iconSizeMax } = this._resolveIconSizes();
+    const maxIconScale = iconSize > 0 ? iconSizeMax / iconSize : 2;
     const views = computeMarkerViews(
       this._floorData.entities,
       this.hass?.states ?? {},

@@ -29,6 +29,11 @@ export interface EntityConfig {
   tap: TapAction;
   orientation: number | null;
   lightStyle?: LightStyle;
+  /** Emit procedural floor-light when active. Defaults to true for `light.*`
+   *  entities, false otherwise — set true for a switch/plug driving a lamp,
+   *  or false to silence a light. (Fixes non-lights — climate/media/fan —
+   *  glowing on the floorplan when merely "active".) */
+  light?: boolean;
   label?: LabelConfig;
 }
 
@@ -59,6 +64,10 @@ export interface CardOptions {
   iconSize: number;
   /** Max marker size (px) when zoomed in — icons grow with zoom but never beyond this. */
   iconSizeMax: number;
+  /** Mobile-screen overrides (viewport ≤ 768px). Fall back to the desktop
+   *  values above when unset, so a single number stays valid. */
+  iconSizeMobile?: number;
+  iconSizeMaxMobile?: number;
   /** A weather.* entity to drive a subtle ambient tint over the floorplan. */
   weatherEntity?: string;
   /** Input-behavior toggles (spec v2.5 §7). */
@@ -205,6 +214,7 @@ function normalizeEntity(raw: any): EntityConfig {
   if (VALID_STYLES.includes(raw?.lightStyle)) {
     entity.lightStyle = raw.lightStyle;
   }
+  if (typeof raw?.light === 'boolean') entity.light = raw.light;
   const label = normalizeLabel(raw?.label);
   if (label) entity.label = label;
   return entity;
@@ -260,6 +270,12 @@ function normalizeOptions(raw: any): CardOptions {
     labels: normalizeLabelDefaults(o.labels),
     iconSize: typeof o.iconSize === 'number' && o.iconSize > 0 ? o.iconSize : 44,
     iconSizeMax: typeof o.iconSizeMax === 'number' && o.iconSizeMax > 0 ? o.iconSizeMax : 88,
+    ...(typeof o.iconSizeMobile === 'number' && o.iconSizeMobile > 0
+      ? { iconSizeMobile: o.iconSizeMobile }
+      : {}),
+    ...(typeof o.iconSizeMaxMobile === 'number' && o.iconSizeMaxMobile > 0
+      ? { iconSizeMaxMobile: o.iconSizeMaxMobile }
+      : {}),
     interaction: normalizeInteraction(o.interaction),
     idleTimeout:
       typeof o.idleTimeout === 'number' &&

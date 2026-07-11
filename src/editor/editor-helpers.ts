@@ -162,6 +162,14 @@ export function optionsSchema(): HaFormSchema[] {
       name: 'iconSizeMax',
       selector: { number: { min: 30, max: 160, step: 2, mode: 'slider', unit_of_measurement: 'px' } },
     },
+    {
+      name: 'iconSizeMobile',
+      selector: { number: { min: 24, max: 96, step: 1, mode: 'slider', unit_of_measurement: 'px' } },
+    },
+    {
+      name: 'iconSizeMaxMobile',
+      selector: { number: { min: 30, max: 200, step: 2, mode: 'slider', unit_of_measurement: 'px' } },
+    },
   ];
 }
 

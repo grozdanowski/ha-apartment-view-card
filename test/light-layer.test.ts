@@ -158,4 +158,50 @@ describe('renderLightLayer', () => {
     expect(layer).toBeTruthy();
     expect(layer.querySelectorAll('.light-overlay').length).toBe(2);
   });
+
+  it('does NOT emit light for a non-light entity, even when it is "active"', () => {
+    // The heat-pump-glow bug: an active climate entity was rendered as light.
+    const hass = {
+      states: {
+        'climate.heat_pump': { entity_id: 'climate.heat_pump', state: 'heat', attributes: { hvac_action: 'heating' } },
+        'media_player.tv': { entity_id: 'media_player.tv', state: 'playing', attributes: {} },
+        'light.k': lightOn(),
+      },
+    };
+    const host = document.createElement('div');
+    render(
+      renderLightLayer(
+        hass,
+        [cfg({ entity: 'climate.heat_pump' }), cfg({ entity: 'media_player.tv' }), cfg({ entity: 'light.k' })],
+        opts(),
+        images,
+        1000,
+      ),
+      host,
+    );
+    // Only the actual light contributes a patch — not the heating heat pump.
+    expect(host.querySelectorAll('.light-overlay').length).toBe(1);
+  });
+
+  it('honors the per-entity `light` override (switch-lamp on, light off)', () => {
+    const hass = {
+      states: {
+        'switch.lamp_plug': { entity_id: 'switch.lamp_plug', state: 'on', attributes: {} },
+        'light.silent': lightOn(),
+      },
+    };
+    const host = document.createElement('div');
+    render(
+      renderLightLayer(
+        hass,
+        [cfg({ entity: 'switch.lamp_plug', light: true }), cfg({ entity: 'light.silent', light: false })],
+        opts(),
+        images,
+        1000,
+      ),
+      host,
+    );
+    // switch opted IN emits; light opted OUT does not → exactly one.
+    expect(host.querySelectorAll('.light-overlay').length).toBe(1);
+  });
 });
