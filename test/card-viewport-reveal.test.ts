@@ -38,6 +38,14 @@ async function mountCard(rawConfig = BASE_CONFIG, hass = createMockHass()): Prom
 const firstMarker = (card: Card): HTMLElement =>
   card.shadowRoot!.querySelector('.marker-overlay .marker') as HTMLElement;
 
+/** Markers are compositor-positioned (spec P0-2): the screen position lives
+ * in the inline `translate3d(Xpx, Ypx, 0)` transform, not left/top. */
+const markerTop = (el: HTMLElement): number => {
+  const m = /translate3d\((-?[\d.]+)px, (-?[\d.]+)px/.exec(el.style.transform);
+  expect(m).toBeTruthy();
+  return parseFloat(m![2]);
+};
+
 afterEach(() => {
   document.body.querySelectorAll('apartment-view-card').forEach((el) => el.remove());
 });
@@ -52,14 +60,14 @@ describe('viewport height derives from the image aspect (drift regression)', () 
       width: 400,
       height: 400 * (9 / 16),
     });
-    expect(parseFloat(firstMarker(card).style.top)).toBeCloseTo(expected.top, 1);
+    expect(markerTop(firstMarker(card))).toBeCloseTo(expected.top, 1);
   });
 
   it('RECOMPUTES marker positions when the image aspect becomes known', async () => {
     const card = await mountCard();
     (card as any)._cardWidth = 400;
     await (card as any).updateComplete;
-    const topBefore = parseFloat(firstMarker(card).style.top);
+    const topBefore = markerTop(firstMarker(card));
 
     // Simulate the base image load completing with a 4:3 floorplan.
     (card as any)._imgAspect = 3 / 4;
@@ -69,7 +77,7 @@ describe('viewport height derives from the image aspect (drift regression)', () 
       width: 400,
       height: 400 * (3 / 4),
     });
-    const topAfter = parseFloat(firstMarker(card).style.top);
+    const topAfter = markerTop(firstMarker(card));
     expect(topAfter).toBeCloseTo(expected.top, 1);
     expect(topAfter).not.toBeCloseTo(topBefore, 1); // it actually moved
   });

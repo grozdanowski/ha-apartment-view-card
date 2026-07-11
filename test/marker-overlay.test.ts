@@ -151,17 +151,53 @@ function makeView(over: Partial<MarkerView> = {}): MarkerView {
 const noop = (): void => {};
 
 describe('renderMarkerOverlay', () => {
-  it('positions each marker with left/top and transform scale', () => {
+  it('positions each marker via a compositor translate3d transform (no left/top)', () => {
     const host = document.createElement('div');
     const view = makeView({ left: 300, top: 250, iconScale: 1.2 });
     render(renderMarkerOverlay([view], noop, noop), host);
 
     const marker = host.querySelector('.marker') as HTMLElement;
     expect(marker).toBeTruthy();
-    expect(marker.style.left).toBe('300px');
-    expect(marker.style.top).toBe('250px');
+    // Position lives in the transform (spec P0-2): left/top stay at the CSS
+    // default (0) so per-frame moves never touch layout.
+    expect(marker.style.left).toBe('');
+    expect(marker.style.top).toBe('');
+    expect(marker.style.transform).toContain('translate3d(300px, 250px, 0)');
     expect(marker.style.transform).toContain('translate(-50%,-50%)');
     expect(marker.style.transform).toContain('scale(1.2)');
+  });
+
+  it('positions the value label via translate3d, keeping --label-dy and the anchor offset', () => {
+    const host = document.createElement('div');
+    const view = makeView({ left: 300, top: 250, iconScale: 1.5, labelText: 'On', labelAnchor: 'center' });
+    render(renderMarkerOverlay([view], noop, noop), host);
+
+    const label = host.querySelector('.marker-label') as HTMLElement;
+    expect(label).toBeTruthy();
+    expect(label.style.transform).toContain('translate3d(300px, 250px, 0)');
+    // --label-dy still drives the vertical drop below the chip (20*1.5+6=36).
+    expect(label.getAttribute('style')).toContain('--label-dy:36px');
+    expect(label.style.transform).toContain('translate(-50%, var(--label-dy, 26px))');
+  });
+
+  it('folds the edge anchors into the inline transform (start/end offsets)', () => {
+    const host = document.createElement('div');
+    render(
+      renderMarkerOverlay(
+        [
+          makeView({ left: 30, top: 40, labelText: 'L', labelAnchor: 'start' }),
+          makeView({ left: 970, top: 40, labelText: 'R', labelAnchor: 'end' }),
+        ],
+        noop,
+        noop,
+      ),
+      host,
+    );
+    const labels = host.querySelectorAll('.marker-label') as NodeListOf<HTMLElement>;
+    expect(labels[0].classList.contains('anchor-start')).toBe(true);
+    expect(labels[0].style.transform).toContain('translate(-12px, var(--label-dy, 26px))');
+    expect(labels[1].classList.contains('anchor-end')).toBe(true);
+    expect(labels[1].style.transform).toContain('translate(calc(-100% + 12px), var(--label-dy, 26px))');
   });
 
   it('passes icon attribute to ha-icon', () => {
@@ -354,6 +390,27 @@ describe('computeMarkerViews labels', () => {
     expect(anchor(10)).toBe('start');
     expect(anchor(50)).toBe('center');
     expect(anchor(90)).toBe('end');
+  });
+
+  it('frozenLabels skips the collision cull and reuses the snapshot verbatim (P0-2)', () => {
+    // Same colliding pair as the cull test above: unfrozen, the cull keeps
+    // only the active light's label. Frozen decisions INVERT that outcome —
+    // proof the cull did not run.
+    const e = [
+      ent({ entity: 'light.off', x: 50, y: 50, label: { source: 'static', text: 'AAAA' } }),
+      ent({ entity: 'light.on', x: 50, y: 50, label: { source: 'static', text: 'BBBB' } }),
+    ];
+    const st = { 'light.off': lightState(false), 'light.on': lightState(true) };
+    const frozen = new Map([
+      ['light.off', { text: 'AAAA', anchor: 'end' as const }],
+      ['light.on', { text: null, anchor: 'center' as const }],
+    ]);
+    const v = computeMarkerViews(e, st, big, vp, null, false, new Set(), defaults(), undefined, 2, frozen);
+    const off = v.find((m) => m.entity.entity === 'light.off')!;
+    const on = v.find((m) => m.entity.entity === 'light.on')!;
+    expect(off.labelText).toBe('AAAA');
+    expect(off.labelAnchor).toBe('end'); // frozen anchor reused too
+    expect(on.labelText).toBeNull();
   });
 });
 

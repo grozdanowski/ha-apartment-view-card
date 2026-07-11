@@ -21,6 +21,13 @@ import {
 
 export type LabelAnchor = 'start' | 'center' | 'end';
 
+/** A label decision snapshotted at gesture start (spec P0-2): while a gesture
+ * is active the collision cull is skipped and these are reused verbatim. */
+export interface FrozenLabel {
+  text: string | null;
+  anchor: LabelAnchor;
+}
+
 export interface MarkerView {
   entity: EntityConfig;
   state: HassEntity | undefined;
@@ -101,6 +108,10 @@ function boxesOverlap(a: LabelBox, b: LabelBox): boolean {
  *
  * Dynamic value labels are resolved here (visibility engine + spatial-collision
  * cull) so the render stays a pure projection of MarkerView.
+ *
+ * `frozenLabels` (spec P0-2): while a gesture is active the caller supplies
+ * the label decisions snapshotted at gesture start — formatting and the
+ * O(n²) collision cull are skipped entirely, so per-frame calls stay cheap.
  */
 export function computeMarkerViews(
   entities: EntityConfig[],
@@ -113,6 +124,7 @@ export function computeMarkerViews(
   labelDefaults: LabelDefaults = DEFAULT_LABELS,
   hass?: HassLike,
   maxIconScale = 2.0,
+  frozenLabels?: ReadonlyMap<string, FrozenLabel>,
 ): MarkerView[] {
   const zoneFocused = focusedZoneEntityIds !== null;
 
@@ -130,8 +142,11 @@ export function computeMarkerViews(
     const cfg = effectiveLabel(entity.label, labelDefaults, entity.entity);
     const vis: LabelVisibility = cfg?.visibility ?? labelDefaults.visibility;
     // Offline / select-mode / dimmed markers never paint a value label.
+    // Frozen mode skips formatting — the snapshot is applied wholesale below.
     const text =
-      cfg && !offline && !selectMode && focused ? formatLabel(cfg, state, hass) : null;
+      !frozenLabels && cfg && !offline && !selectMode && focused
+        ? formatLabel(cfg, state, hass)
+        : null;
     let show = false;
     if (text) {
       if (vis === 'always') show = true;
@@ -161,6 +176,18 @@ export function computeMarkerViews(
     };
     return { view, text, vis, show, active };
   });
+
+  // Gesture freeze: reuse the snapshotted decisions verbatim — no cull.
+  if (frozenLabels) {
+    for (const r of records) {
+      const f = frozenLabels.get(r.view.entity.entity);
+      if (f) {
+        r.view.labelText = f.text;
+        r.view.labelAnchor = f.anchor;
+      }
+    }
+    return records.map((r) => r.view);
+  }
 
   // Second pass: cull overlapping AUTO labels by priority; explicit always/active
   // labels are never culled and reserve their boxes first. densityCap is a final ceiling.
@@ -196,11 +223,20 @@ export function computeMarkerViews(
 
 /**
  * Render the interactive overlay. The container is NOT transformed; each
- * marker is absolutely positioned in screen px via computed left/top.
- * Unfocused markers (focused=false) are dimmed to 0.25 opacity and
- * pointer-events:none. Pointer handling is delegated to the host via
- * onPointerDown so tap/hold/drag are decided in one place.
+ * marker is positioned in screen px via an inline translate3d transform
+ * (compositor path, spec P0-2 — left/top stay 0 so per-frame position
+ * updates never touch layout). Unfocused markers (focused=false) are dimmed
+ * to 0.25 opacity and pointer-events:none. Pointer handling is delegated to
+ * the host via onPointerDown so tap/hold/drag are decided in one place.
  */
+const LABEL_ANCHOR_X: Record<LabelAnchor, string> = {
+  // Mirrors the pre-compositor CSS anchor rules: centered below the chip,
+  // or left/right-aligned near the viewport edges (folded into the inline
+  // transform because inline `transform` would override anchor classes).
+  start: '-12px',
+  center: '-50%',
+  end: 'calc(-100% + 12px)',
+};
 export function renderMarkerOverlay(
   views: MarkerView[],
   onPointerDown: (e: PointerEvent, m: MarkerView) => void,
@@ -215,9 +251,7 @@ export function renderMarkerOverlay(
     >
       ${views.map((m) => {
         const style = [
-          `left:${m.left}px`,
-          `top:${m.top}px`,
-          `transform:translate(-50%,-50%) scale(${m.iconScale})`,
+          `transform:translate3d(${m.left}px, ${m.top}px, 0) translate(-50%,-50%) scale(${m.iconScale})`,
           ...(m.glowColor ? [`--marker-glow:${m.glowColor}`] : []),
         ].join(';');
         const ariaLabel = m.state ? `${m.label}, ${m.state.state}` : m.label;
@@ -268,7 +302,7 @@ export function renderMarkerOverlay(
                 class="marker-label anchor-${m.labelAnchor}"
                 aria-hidden="true"
                 title=${m.labelText}
-                style="left:${m.left}px;top:${m.top}px;--label-dy:${Math.round(20 * m.iconScale + 6)}px"
+                style="--label-dy:${Math.round(20 * m.iconScale + 6)}px;transform:translate3d(${m.left}px, ${m.top}px, 0) translate(${LABEL_ANCHOR_X[m.labelAnchor]}, var(--label-dy, 26px))"
                 >${m.labelText}</span>`
             : nothing}
         `;

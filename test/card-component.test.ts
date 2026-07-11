@@ -8,7 +8,7 @@
  *   - Tapping a marker fires homeassistant.toggle
  *   - Light-overlay opacity matches the glow formula
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import '../src/apartment-view-card';
 import { createMockHass } from '../dev/mock-hass';
 import { markerScreenPos } from '../src/core/geometry';
@@ -42,6 +42,14 @@ afterEach(() => {
   // Remove all mounted cards between tests to avoid cross-test pollution.
   document.body.querySelectorAll('apartment-view-card').forEach((el) => el.remove());
 });
+
+/** Markers are compositor-positioned (spec P0-2): read left/top back out of
+ * the inline `translate3d(Xpx, Ypx, 0)` transform. */
+function markerPos(el: HTMLElement): { left: number; top: number } {
+  const m = /translate3d\((-?[\d.]+)px, (-?[\d.]+)px/.exec(el.style.transform);
+  expect(m).toBeTruthy();
+  return { left: parseFloat(m![1]), top: parseFloat(m![2]) };
+}
 
 // ---------------------------------------------------------------------------
 // shouldUpdate perf gate: don't rebuild layers on unrelated dashboard ticks
@@ -117,7 +125,7 @@ describe('card-component: marker rendering', () => {
 // ---------------------------------------------------------------------------
 
 describe('card-component: marker screen position', () => {
-  it('marker left/top matches markerScreenPos for a known viewport', async () => {
+  it('marker translate3d position matches markerScreenPos for a known viewport', async () => {
     const card = await mountCard();
 
     // Force a deterministic card width so markerScreenPos gives real numbers.
@@ -146,12 +154,10 @@ describe('card-component: marker screen position', () => {
     const firstMarker = markers[0];
     expect(firstMarker).toBeTruthy();
 
-    // The marker is positioned as left:${left}px, top:${top}px in the style attribute.
-    const actualLeft = parseFloat(firstMarker.style.left);
-    const actualTop = parseFloat(firstMarker.style.top);
-
-    expect(actualLeft).toBeCloseTo(expected.left, 1);
-    expect(actualTop).toBeCloseTo(expected.top, 1);
+    // The marker is positioned via transform:translate3d(${left}px, ${top}px, 0).
+    const actual = markerPos(firstMarker);
+    expect(actual.left).toBeCloseTo(expected.left, 1);
+    expect(actual.top).toBeCloseTo(expected.top, 1);
   });
 });
 
@@ -329,6 +335,95 @@ describe('card-component: focused zone interactions (P0-1)', () => {
     expect((card as any)._activePointers.size).toBe(1);
     expect((card as any)._pinchStartDist).toBe(0);
     window.dispatchEvent(new PointerEvent('pointerup', { ...d, bubbles: true }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Camera engine (spec P0-2): gated transitions + frozen labels
+// ---------------------------------------------------------------------------
+
+describe('card-component: camera engine (P0-2)', () => {
+  const ZONED = {
+    ...BASE_CONFIG,
+    zones: [{ name: 'Kitchen', x: 10, y: 20, width: 40, height: 40 }],
+  };
+  const wrapper = (card: Card) => card.shadowRoot!.querySelector('.wrapper')!;
+
+  it('a machine camera move raises is-animating; the fallback timeout clears it', async () => {
+    vi.useFakeTimers();
+    try {
+      const card = await mountCard(ZONED as any);
+      (card as any)._focusZone((card as any)._floorData.zones[0]);
+      await (card as any).updateComplete;
+      expect(wrapper(card).classList.contains('is-animating')).toBe(true);
+
+      // happy-dom fires no transitionend — the CAMERA_MS + 80 fallback clears.
+      vi.advanceTimersByTime(700);
+      await (card as any).updateComplete;
+      expect(wrapper(card).classList.contains('is-animating')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('exit focus also runs through the animated camera', async () => {
+    vi.useFakeTimers();
+    try {
+      const card = await mountCard(ZONED as any);
+      (card as any)._focusZone((card as any)._floorData.zones[0]);
+      vi.advanceTimersByTime(700);
+      await (card as any).updateComplete;
+
+      (card as any)._exitFocus();
+      // The target transform is written synchronously (doctrine L2 machine move).
+      expect((card as any)._transform).toEqual({ scale: 1, panX: 0, panY: 0 });
+      await (card as any).updateComplete;
+      expect(wrapper(card).classList.contains('is-animating')).toBe(true);
+      vi.advanceTimersByTime(700);
+      await (card as any).updateComplete;
+      expect(wrapper(card).classList.contains('is-animating')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a pan latch raises is-gesturing + freezes labels; pointerup clears both', async () => {
+    const card = await mountCard(ZONED as any);
+    const scene = card.shadowRoot!.querySelector('.scene') as HTMLElement;
+    const c = { pointerId: 51, button: 0, pointerType: 'touch' };
+    scene.dispatchEvent(new PointerEvent('pointerdown', { ...c, clientX: 100, clientY: 100, bubbles: true }));
+    // No latch on the bare press…
+    expect((card as any)._isGesturing).toBe(false);
+    // …only once movement exceeds the threshold.
+    window.dispatchEvent(new PointerEvent('pointermove', { ...c, clientX: 130, clientY: 100, bubbles: true }));
+    await (card as any).updateComplete;
+    expect(wrapper(card).classList.contains('is-gesturing')).toBe(true);
+    expect((card as any)._frozenLabels).not.toBeNull();
+
+    window.dispatchEvent(new PointerEvent('pointerup', { ...c, clientX: 130, clientY: 100, bubbles: true }));
+    await (card as any).updateComplete;
+    expect(wrapper(card).classList.contains('is-gesturing')).toBe(false);
+    expect((card as any)._frozenLabels).toBeNull();
+  });
+
+  it('a marker tap (no movement) never latches is-gesturing', async () => {
+    const card = await mountCard(ZONED as any);
+    const marker = card.shadowRoot!.querySelector('.marker-overlay .marker') as HTMLElement;
+    const c = { pointerId: 52, clientX: 50, clientY: 50, button: 0, pointerType: 'touch' };
+    marker.dispatchEvent(new PointerEvent('pointerdown', { ...c, bubbles: true }));
+    expect((card as any)._isGesturing).toBe(false);
+    window.dispatchEvent(new PointerEvent('pointerup', { ...c, bubbles: true }));
+    await (card as any).updateComplete;
+    expect((card as any)._isGesturing).toBe(false);
+    expect(wrapper(card).classList.contains('is-gesturing')).toBe(false);
+  });
+
+  it('direct gesture writes (wheel zoom) never raise is-animating (finger is 1:1)', async () => {
+    const card = await mountCard(ZONED as any);
+    (card as any)._onWheel(new WheelEvent('wheel', { deltaY: -100 }));
+    await (card as any).updateComplete;
+    expect((card as any)._transform.scale).toBeGreaterThan(1); // it did zoom
+    expect(wrapper(card).classList.contains('is-animating')).toBe(false);
   });
 });
 

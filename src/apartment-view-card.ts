@@ -1,6 +1,7 @@
 import { LitElement, html, css, unsafeCSS, nothing, type TemplateResult, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
+import { guard } from 'lit/directives/guard.js';
 import { fireEvent } from 'custom-card-helpers';
 import type { HassLike } from './core/ha-types';
 import { normalizeConfig, type ApartmentViewConfig, type EntityConfig, type ZoneConfig, type QuickAction, type ImagesConfig } from './core/config';
@@ -13,6 +14,7 @@ import { TapHoldTracker, HOLD_MS, MOVE_THRESHOLD_PX } from './core/tap-hold';
 import {
   computeMarkerViews,
   renderMarkerOverlay,
+  type FrozenLabel,
   type MarkerView,
 } from './render/marker-overlay';
 import { zoomToZone, markerScreenPos, type Viewport, type ZoomTransform } from './core/geometry';
@@ -24,6 +26,13 @@ import { controlKind, controlTarget } from './core/entity-capabilities';
 /** Room-swipe recognition while focused (spec P0-1): min horizontal travel + max duration. */
 const SWIPE_MIN_PX = 56;
 const SWIPE_MAX_MS = 350;
+
+/**
+ * Numeric twin of the --av-dur-slow motion token (camera moves). The
+ * is-animating fallback timer fires at CAMERA_MS + 80 for environments
+ * without transition events (tests, reduced motion, hidden tabs).
+ */
+const CAMERA_MS = 560;
 
 @customElement('apartment-view-card')
 export class ApartmentViewCard extends LitElement {
@@ -46,6 +55,20 @@ export class ApartmentViewCard extends LitElement {
   /** Markers stay hidden until image + geometry are ready, then fade in place. */
   @state() private _revealed = false;
   @state() private _transform: ZoomTransform = { scale: 1, panX: 0, panY: 0 };
+  /**
+   * A machine camera move is in flight (drives `.wrapper.is-animating`,
+   * which enables the scene/tilt/marker transform transitions). Set by
+   * _animateTransformTo only — direct gesture writes stay 1:1 (doctrine L2).
+   */
+  @state() private _isAnimating = false;
+  /**
+   * A pan/pinch movement has latched (drives `.wrapper.is-gesturing`).
+   * This is reactive state, NOT a raw classList toggle: render already runs
+   * per-frame during a gesture (every move writes _transform), and Lit's
+   * class= binding on .wrapper would clobber a manually toggled class on
+   * those renders. Latch/unlatch add at most one render each.
+   */
+  @state() private _isGesturing = false;
   @state() private _focusedZone: ZoneConfig | null = null;
   /** Entities currently driven by the control surface (empty = closed). */
   @state() private _controlled: string[] = [];
@@ -75,11 +98,30 @@ export class ApartmentViewCard extends LitElement {
   private _pinchStartScale = 1;
   private _lastMove: { x: number; y: number } | null = null;
   private _aspectListenerSrc?: string;
+  /** Label decisions snapshotted at gesture latch; frozen while gesturing so
+   * the O(n²) collision cull never runs per pointermove (spec P0-2 / L7). */
+  private _frozenLabels: Map<string, FrozenLabel> | null = null;
+  /** Marker views as last rendered — the snapshot source for _frozenLabels. */
+  private _lastViews: MarkerView[] = [];
+  private _animateFallback?: ReturnType<typeof setTimeout>;
+  private _sceneEndUnsub?: () => void;
 
   static styles = [
     css`
     :host {
       display: block;
+      /* Motion tokens (spec v2.5 §2) — every duration/easing in the card
+         derives from these. Reduced motion zeroes the durations below
+         (keyframes and the tilt transform don't read the vars, so they keep
+         explicit overrides in the media block). */
+      --av-dur-instant: 90ms; /* press feedback, check pops */
+      --av-dur-fast: 180ms; /* exits, dismissals, hover reveals */
+      --av-dur-med: 320ms; /* entrances, panel arrivals, snap-back */
+      --av-dur-slow: 560ms; /* camera moves: zone focus, reset, double-tap */
+      --av-ease-out: cubic-bezier(0.22, 1, 0.36, 1); /* the camera, fades, labels */
+      --av-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1); /* chips, checks, FAB; NEVER the camera */
+      --av-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); /* cross-fades, exits */
+      --av-ease-snap: cubic-bezier(0.175, 0.885, 0.32, 1.12); /* rubber-band return only */
     }
     /* The floorplan floats directly on the dashboard: no card chrome. */
     ha-card {
@@ -119,15 +161,23 @@ export class ApartmentViewCard extends LitElement {
       inset: 0;
       transform-origin: 50% 50%;
       transform-style: preserve-3d;
-      transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+      /* Gated (spec P0-2): no easing while the finger owns the glass; machine
+         camera moves enable it via .wrapper.is-animating below. */
+      transition: none;
     }
     .scene {
       position: absolute;
       inset: 0;
       transform-origin: 0 0;
       will-change: transform;
-      /* Transition lives here (not inline) so prefers-reduced-motion can cancel it. */
-      transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+      /* Gated: 1:1 with the pointer by default (doctrine L2). */
+      transition: none;
+    }
+    /* Machine camera move (spec P0-2): scene, tilt, markers and labels fly as
+       ONE body — same token, same curve, enabled by a single class. */
+    .wrapper.is-animating .scene,
+    .wrapper.is-animating .tilt {
+      transition: transform var(--av-dur-slow) var(--av-ease-out);
     }
     .base-image {
       display: block;
@@ -170,7 +220,7 @@ export class ApartmentViewCard extends LitElement {
       color: var(--text-primary-color, #fff);
     }
     .scene.floor-fade {
-      animation: av-floor-fade 0.42s ease;
+      animation: av-floor-fade var(--av-dur-med) var(--av-ease-out);
     }
     @keyframes av-floor-fade {
       from { opacity: 0.25; }
@@ -188,22 +238,20 @@ export class ApartmentViewCard extends LitElement {
       /* Hidden until image + geometry are ready, then fades in already in
          place (positions are committed one frame before .ready flips). */
       opacity: 0;
-      transition: opacity 0.45s ease;
+      transition: opacity var(--av-dur-med) var(--av-ease-out);
     }
     .marker-overlay.ready {
       opacity: 1;
     }
-    .marker-overlay:not(.ready) .marker {
-      transition: none;
-      pointer-events: none;
-    }
     .marker-overlay .marker {
       position: absolute;
       /* Base marker size at overview, configurable via options.iconSize
-         (default 44px; the icon glyph is half the chip). */
+         (default 44px; the icon glyph is half the chip). Position lives in
+         the inline translate3d transform (compositor path, spec P0-2). */
+      left: 0;
+      top: 0;
       min-width: var(--av-icon-size, 44px);
       min-height: var(--av-icon-size, 44px);
-      transform: translate(-50%, -50%);
       display: grid;
       place-items: center;
       border: none;
@@ -222,10 +270,42 @@ export class ApartmentViewCard extends LitElement {
       box-shadow:
         0 4px 14px rgba(0, 0, 0, 0.42),
         inset 0 0 0 1px rgba(255, 255, 255, 0.14);
-      transition: left 0.6s cubic-bezier(.4,0,.2,1), top 0.6s cubic-bezier(.4,0,.2,1),
-        transform 0.6s cubic-bezier(.4,0,.2,1),
-        scale 0.26s cubic-bezier(.34,1.56,.64,1),
+      /* Position (transform) is NOT transitioned by default — gestures are
+         1:1. Press feedback + state fades stay unconditional. */
+      transition:
+        scale var(--av-dur-fast) var(--av-ease-spring),
         box-shadow 0.4s ease, opacity 0.3s ease, color 0.4s ease;
+    }
+    /* During the machine camera move, marker/label transforms ride the same
+       token + curve as the scene so they never detach from their rooms. */
+    .wrapper.is-animating .marker-overlay .marker {
+      transition:
+        transform var(--av-dur-slow) var(--av-ease-out),
+        scale var(--av-dur-fast) var(--av-ease-spring),
+        box-shadow 0.4s ease, opacity 0.3s ease, color 0.4s ease;
+    }
+    .wrapper.is-animating .marker-overlay .marker-label {
+      transition:
+        transform var(--av-dur-slow) var(--av-ease-out),
+        opacity var(--av-dur-fast) var(--av-ease-out);
+    }
+    /* Reveal gate composes with the animation gate: pre-reveal, nothing may
+       transition (equal specificity to the is-animating rules; declared later
+       so order wins). */
+    .wrapper .marker-overlay:not(.ready) .marker {
+      transition: none;
+      pointer-events: none;
+    }
+    /* While the camera flies or a finger drags, blurred chips must not
+       re-sample the backdrop per frame (~30 elements, doctrine L7). The
+       opaque fill is invisible in motion and keeps contrast. */
+    .wrapper.is-animating .marker-overlay .marker,
+    .wrapper.is-gesturing .marker-overlay .marker,
+    .wrapper.is-animating .marker-overlay .marker-label,
+    .wrapper.is-gesturing .marker-overlay .marker-label {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background: var(--card-background-color, #1c1c1e);
     }
     /* press feedback — the individual 'scale' property composes with the
        positioning transform (translate + icon scale) without clobbering it. */
@@ -301,10 +381,13 @@ export class ApartmentViewCard extends LitElement {
       border-radius: 50%;
       border: 1.5px dashed var(--secondary-text-color, #8a8f98);
     }
-    /* Dynamic value label — frosted plate guarantees contrast on any floorplan. */
+    /* Dynamic value label — frosted plate guarantees contrast on any floorplan.
+       Position + anchor offset live in the inline translate3d transform
+       (see renderMarkerOverlay); --label-dy feeds into it. */
     .marker-overlay .marker-label {
       position: absolute;
-      transform: translate(-50%, var(--label-dy, 26px));
+      left: 0;
+      top: 0;
       max-inline-size: var(--av-label-max-width, 8em);
       padding: 2px 7px;
       border-radius: 7px;
@@ -321,13 +404,7 @@ export class ApartmentViewCard extends LitElement {
       -webkit-backdrop-filter: blur(6px) saturate(1.3);
       backdrop-filter: blur(6px) saturate(1.3);
       box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.35);
-      transition: opacity 0.25s ease;
-    }
-    .marker-overlay .marker-label.anchor-start {
-      transform: translate(-12px, var(--label-dy, 26px));
-    }
-    .marker-overlay .marker-label.anchor-end {
-      transform: translate(calc(-100% + 12px), var(--label-dy, 26px));
+      transition: opacity var(--av-dur-fast) var(--av-ease-out);
     }
     /* attention badge on the marker corner (auto-derived: open/leak/unlocked/battery/offline) */
     .marker-overlay .marker-badge {
@@ -372,7 +449,7 @@ export class ApartmentViewCard extends LitElement {
       -webkit-backdrop-filter: blur(14px) saturate(1.5);
       backdrop-filter: blur(14px) saturate(1.5);
       box-shadow: inset 0 0 0 1px var(--divider-color, rgba(255, 255, 255, 0.14)), 0 4px 14px rgba(0, 0, 0, 0.35);
-      transition: scale 0.18s cubic-bezier(.34, 1.56, .64, 1);
+      transition: scale var(--av-dur-fast) var(--av-ease-spring);
       --mdc-icon-size: 16px;
     }
     .attention-pill ha-icon { color: var(--warning-color, #ffa600); }
@@ -415,7 +492,7 @@ export class ApartmentViewCard extends LitElement {
       -webkit-backdrop-filter: blur(14px) saturate(1.5);
       backdrop-filter: blur(14px) saturate(1.5);
       box-shadow: inset 0 0 0 1px var(--divider-color, rgba(255, 255, 255, 0.14)), 0 4px 14px rgba(0, 0, 0, 0.35);
-      transition: scale 0.18s cubic-bezier(.34, 1.56, .64, 1), background-color 0.2s ease;
+      transition: scale var(--av-dur-fast) var(--av-ease-spring), background-color 0.2s ease;
       --mdc-icon-size: 16px;
     }
     .lights-control.active {
@@ -448,7 +525,7 @@ export class ApartmentViewCard extends LitElement {
       background: var(--primary-color, #03a9f4);
       box-shadow: 0 6px 18px rgba(0, 0, 0, 0.42);
       --mdc-icon-size: 24px;
-      transition: transform 0.25s cubic-bezier(.34, 1.56, .64, 1);
+      transition: transform var(--av-dur-fast) var(--av-ease-spring);
     }
     .quick.open .quick-fab {
       transform: rotate(135deg);
@@ -473,7 +550,7 @@ export class ApartmentViewCard extends LitElement {
       --mdc-icon-size: 20px;
       transform: translate(0, 0) scale(0.3);
       opacity: 0;
-      transition: transform 0.3s cubic-bezier(.34, 1.56, .64, 1), opacity 0.2s ease;
+      transition: transform var(--av-dur-fast) var(--av-ease-spring), opacity var(--av-dur-fast) var(--av-ease-out);
       transition-delay: var(--qd, 0s);
     }
     .quick.open .quick-action {
@@ -525,28 +602,23 @@ export class ApartmentViewCard extends LitElement {
       /* free pan/zoom is suppressed in JS; this is a styling hook only */
     }
     @media (prefers-reduced-motion: reduce) {
-      .scene {
-        transition: none;
-      }
-      .marker-overlay .marker-label {
-        transition: none;
+      /* Zeroing the tokens collapses every transition to instant. Keyframe
+         animations and the tilt transform don't read the duration vars, so
+         they keep explicit overrides. */
+      :host {
+        --av-dur-instant: 0ms;
+        --av-dur-fast: 0ms;
+        --av-dur-med: 0ms;
+        --av-dur-slow: 0ms;
       }
       .marker-overlay.pulse .marker.has-attention {
         animation: none;
-      }
-      .quick-action,
-      .quick-fab {
-        transition: none;
       }
       .scene.floor-fade {
         animation: none;
       }
       .tilt {
-        transition: none;
         transform: none !important;
-      }
-      .marker-overlay .marker {
-        transition: opacity 0.3s ease, background-color 0.3s ease, color 0.3s ease;
       }
     }
   `,
@@ -619,6 +691,7 @@ export class ApartmentViewCard extends LitElement {
     window.removeEventListener('keydown', this._handleKeyDown);
     clearTimeout(this._pulseTimer);
     clearTimeout(this._floorFadeTimer);
+    this._clearAnimating();
     this._cancelHold();
     this._ro?.disconnect();
     this._ro = undefined;
@@ -767,15 +840,47 @@ export class ApartmentViewCard extends LitElement {
   // Zone focus state machine (Phase 5)
   // ---------------------------------------------------------------------------
 
+  /**
+   * Machine camera move (spec P0-2, doctrine L2): writes the target transform
+   * SYNCHRONOUSLY (the state machine and its tests read it immediately) and
+   * raises `is-animating` for the transition's lifetime — cleared on the
+   * scene's own transitionend, with a timeout fallback for environments
+   * without transition events (tests, reduced motion). Direct gesture writes
+   * (pan/pinch/wheel) never come through here — the finger is 1:1.
+   */
+  private _animateTransformTo(t: ZoomTransform): void {
+    this._clearAnimating(); // restart cleanly if a move is already in flight
+    this._isAnimating = true;
+    this._transform = t;
+    const scene = this.renderRoot?.querySelector('.scene');
+    if (scene) {
+      const onEnd = (e: Event): void => {
+        if (e.target !== scene) return; // bubbled child transition, not the camera
+        this._clearAnimating();
+      };
+      scene.addEventListener('transitionend', onEnd);
+      this._sceneEndUnsub = () => scene.removeEventListener('transitionend', onEnd);
+    }
+    this._animateFallback = setTimeout(() => this._clearAnimating(), CAMERA_MS + 80);
+  }
+
+  private _clearAnimating(): void {
+    clearTimeout(this._animateFallback);
+    this._animateFallback = undefined;
+    this._sceneEndUnsub?.();
+    this._sceneEndUnsub = undefined;
+    this._isAnimating = false;
+  }
+
   private _focusZone(zone: ZoneConfig): void {
     this._focusedZone = zone;
-    this._transform = zoomToZone(zone, this._viewport(), this.config.options.zoomMax);
+    this._animateTransformTo(zoomToZone(zone, this._viewport(), this.config.options.zoomMax));
     this._panZoom.setEnabled(false);
   }
 
   private _exitFocus(): void {
     this._focusedZone = null;
-    this._transform = { scale: 1, panX: 0, panY: 0 };
+    this._animateTransformTo({ scale: 1, panX: 0, panY: 0 });
     this._panZoom.setEnabled(this.config.options.freePanZoom);
   }
 
@@ -1008,6 +1113,27 @@ export class ApartmentViewCard extends LitElement {
     }, HOLD_MS);
   }
 
+  /**
+   * A pan/pinch movement latched (spec P0-2): freeze the current label
+   * decisions (the O(n²) collision cull must not run per pointermove) and
+   * raise `is-gesturing` (suppresses backdrop-filter on the chips). Marker
+   * taps never latch — only actual movement past the threshold lands here.
+   */
+  private _latchGesture(): void {
+    if (this._isGesturing) return;
+    this._frozenLabels = new Map(
+      this._lastViews.map((v) => [v.entity.entity, { text: v.labelText, anchor: v.labelAnchor }]),
+    );
+    this._isGesturing = true;
+  }
+
+  /** Gesture over (up/cancel): labels re-resolve, backdrop blur returns. */
+  private _unlatchGesture(): void {
+    if (!this._isGesturing) return;
+    this._frozenLabels = null;
+    this._isGesturing = false;
+  }
+
   private _onWindowPointerMove = (e: PointerEvent) => {
     if (!this._activePointers.has(e.pointerId)) return;
     this._activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1020,6 +1146,7 @@ export class ApartmentViewCard extends LitElement {
       const [a, b] = [...this._activePointers.values()];
       const dist = this._panZoom.pinchDistance(a.x, a.y, b.x, b.y);
       if (Math.abs(dist - this._pinchStartDist) <= MOVE_THRESHOLD_PX) return; // below per-gesture threshold
+      this._latchGesture();
       const factor = dist / this._pinchStartDist;
       const r = this.getBoundingClientRect();
       const cx = (a.x + b.x) / 2 - r.left;
@@ -1037,6 +1164,7 @@ export class ApartmentViewCard extends LitElement {
     const moved = this._tapHold.move(e.clientX, e.clientY);
     if (moved.exceededThreshold) {
       this._cancelHold();
+      this._latchGesture();
       // pan: translate by the per-event delta. While focused the movement only
       // feeds swipe classification — never the (disabled) pan controller.
       if (this._focusedZone === null) {
@@ -1052,6 +1180,7 @@ export class ApartmentViewCard extends LitElement {
     this._activePointers.delete(e.pointerId);
     this._lastMove = null;
     if (this._activePointers.size < 2) this._pinchStartDist = 0;
+    if (this._activePointers.size === 0) this._unlatchGesture();
 
     const start = this._tapHold.startPoint;
     const now = performance.now();
@@ -1090,6 +1219,7 @@ export class ApartmentViewCard extends LitElement {
     this._activePointers.delete(e.pointerId);
     this._lastMove = null;
     this._pinchStartDist = 0;
+    if (this._activePointers.size === 0) this._unlatchGesture();
     this._cancelHold();
     this._tapHold.reset();
     this._activeMarker = null;
@@ -1125,6 +1255,30 @@ export class ApartmentViewCard extends LitElement {
         renderEffect(this.hass?.states?.[e.entity], e, this._cardWidth),
       )}
       ${tint ? html`<div class="weather-tint" style="background:${tint}"></div>` : nothing}`;
+  }
+
+  /**
+   * guard() dependencies for the scene subtree (spec P0-2 / L7): per-frame
+   * `_transform` renders must NOT re-evaluate base/light/effect layers —
+   * `_renderScene` provably reads none of the transform state. Same id list
+   * as `_relevantStateChanged` (sun + weather + floor entities), but keyed on
+   * the state OBJECTS, not a joined `.state` string: HA replaces the object
+   * on every update including attribute-only changes (brightness, rgb_color)
+   * that a state-string composite would miss. `config` covers options/images
+   * (editor live-preview), `_imgAspect`/`_cardWidth` cover geometry.
+   */
+  private _sceneDeps(): unknown[] {
+    const states = this.hass?.states ?? {};
+    const weather = this.config.options.weatherEntity;
+    return [
+      this.config,
+      this._floor,
+      this._cardWidth,
+      this._imgAspect,
+      states['sun.sun'],
+      weather ? states[weather] : undefined,
+      ...this._floorData.entities.map((e) => states[e.entity]),
+    ];
   }
 
   // ---------------------------------------------------------------------------
@@ -1163,7 +1317,9 @@ export class ApartmentViewCard extends LitElement {
       this.config.options.labels,
       this.hass,
       maxIconScale,
+      this._frozenLabels ?? undefined,
     );
+    this._lastViews = views; // snapshot source for the gesture label freeze
     const attentionCount = views.filter((v) => v.attention).length;
 
     const floors = this.config.floors ?? [];
@@ -1214,7 +1370,10 @@ export class ApartmentViewCard extends LitElement {
               ${lightsControl}
             </div>`
           : nothing}
-        <div class="wrapper" style="--av-icon-size:${iconSize}px">
+        <div
+          class="wrapper ${this._isAnimating ? 'is-animating' : ''} ${this._isGesturing ? 'is-gesturing' : ''}"
+          style="--av-icon-size:${iconSize}px"
+        >
           <div
             class="tilt"
             style="transform: ${this._focusedZone ? 'rotateX(11deg)' : 'none'};"
@@ -1224,8 +1383,10 @@ export class ApartmentViewCard extends LitElement {
               style="transform: translate(${t.panX}px, ${t.panY}px) scale(${t.scale});"
               @pointerdown=${this._onScenePointerDown}
             >
-              <!-- base-layer + light-layer come from Phase 2 render functions -->
-              ${this._renderScene()}
+              <!-- base-layer + light-layer come from Phase 2 render functions;
+                   guard()ed so per-frame transform renders skip re-evaluating
+                   the whole subtree (spec P0-2 / L7). -->
+              ${guard(this._sceneDeps(), () => this._renderScene())}
             </div>
             ${renderMarkerOverlay(views, this._onMarkerPointerDown, this._onMarkerActivate, this._pulse, this._revealed)}
             ${this._ripples.length
