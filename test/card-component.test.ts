@@ -828,6 +828,151 @@ describe('card-component: attention pill', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// The pill takes you there: camera to each attention item, cycling (spec P0-6)
+// ---------------------------------------------------------------------------
+
+describe('card-component: attention pill takes you there (P0-6)', () => {
+  // front_door (20,30) sits in Hall; balcony_door (70,60) sits in Living.
+  const ATT_CONFIG = {
+    ...BASE_CONFIG,
+    entities: [
+      { entity: 'binary_sensor.front_door', x: 20, y: 30, size: 'small', tap: 'more-info' },
+      { entity: 'binary_sensor.balcony_door', x: 70, y: 60, size: 'small', tap: 'more-info' },
+    ],
+    zones: [
+      { name: 'Hall', x: 10, y: 20, width: 30, height: 30 },
+      { name: 'Living', x: 55, y: 40, width: 40, height: 40 },
+    ],
+  };
+  const openDoor = (id: string) => ({ entity_id: id, state: 'on', attributes: { device_class: 'door' } });
+  function attHass() {
+    const hass = createMockHass();
+    (hass.states as any)['binary_sensor.front_door'] = openDoor('binary_sensor.front_door');
+    (hass.states as any)['binary_sensor.balcony_door'] = openDoor('binary_sensor.balcony_door');
+    return hass;
+  }
+  const pill = (card: Card) => card.shadowRoot!.querySelector('.attention-pill') as HTMLElement;
+
+  it('tapping the pill focuses the first attention item\'s zone and counts the tour', async () => {
+    const card = await mountCard(ATT_CONFIG as any, attHass());
+    expect(pill(card).getAttribute('aria-label')).toBe('Go to item needing attention');
+    pill(card).click();
+    await (card as any).updateComplete;
+    expect((card as any)._focusedZone?.name).toBe('Hall');
+    expect(pill(card).textContent).toContain('1 of 2');
+  });
+
+  it('a second tap advances to the next item; the cycle wraps', async () => {
+    const card = await mountCard(ATT_CONFIG as any, attHass());
+    pill(card).click();
+    await (card as any).updateComplete;
+    pill(card).click();
+    await (card as any).updateComplete;
+    expect((card as any)._focusedZone?.name).toBe('Living');
+    expect(pill(card).textContent).toContain('2 of 2');
+    pill(card).click(); // wraps back to the first item
+    await (card as any).updateComplete;
+    expect((card as any)._focusedZone?.name).toBe('Hall');
+    expect(pill(card).textContent).toContain('1 of 2');
+  });
+
+  it('the cycle resets on exit-focus', async () => {
+    const card = await mountCard(ATT_CONFIG as any, attHass());
+    pill(card).click();
+    await (card as any).updateComplete;
+    expect(pill(card).textContent).toContain('1 of 2');
+    (card as any)._exitFocus();
+    await (card as any).updateComplete;
+    expect(pill(card).textContent).toContain('2 need attention');
+    pill(card).click(); // the tour restarts at the first item
+    await (card as any).updateComplete;
+    expect((card as any)._focusedZone?.name).toBe('Hall');
+  });
+
+  it('the cycle resets when the attention count changes', async () => {
+    const hass = attHass();
+    const card = await mountCard(ATT_CONFIG as any, hass);
+    pill(card).click();
+    await (card as any).updateComplete;
+    expect(pill(card).textContent).toContain('1 of 2');
+    // The balcony closes — one less item needing attention.
+    card.hass = {
+      ...(hass as any),
+      states: {
+        ...hass.states,
+        'binary_sensor.balcony_door': { entity_id: 'binary_sensor.balcony_door', state: 'off', attributes: { device_class: 'door' } },
+      },
+    } as any;
+    await (card as any).updateComplete;
+    expect(pill(card).textContent).toContain('1 needs attention');
+  });
+
+  it('a zoneless attention item gets the 1.35x centered, cover-clamped camera', async () => {
+    const cfg = {
+      ...ATT_CONFIG,
+      entities: [{ entity: 'binary_sensor.front_door', x: 60, y: 55, size: 'small', tap: 'more-info' }],
+      zones: [],
+    };
+    const hass = createMockHass();
+    (hass.states as any)['binary_sensor.front_door'] = openDoor('binary_sensor.front_door');
+    const card = await mountCard(cfg as any, hass);
+    (card as any)._viewport = () => ({ width: 400, height: 200 });
+    pill(card).click();
+    await (card as any).updateComplete;
+    // center (60%,55%) of 400x200 = (240,110): pan = vp/2 - center*1.35,
+    // inside the cover-bounds [-140,0] / [-70,0] so unclamped here.
+    expect((card as any)._focusedZone).toBeNull();
+    expect((card as any)._transform.scale).toBeCloseTo(1.35, 6);
+    expect((card as any)._transform.panX).toBeCloseTo(-124, 6);
+    expect((card as any)._transform.panY).toBeCloseTo(-48.5, 6);
+    // The controller adopted the camera — the next gesture continues from it.
+    expect((card as any)._panZoom.transform.scale).toBeCloseTo(1.35, 6);
+  });
+
+  it('cycling from a zoned to a zoneless item leaves the focused state', async () => {
+    // front_door sits in Hall; the balcony sensor sits outside every zone.
+    const cfg = {
+      ...ATT_CONFIG,
+      entities: [
+        { entity: 'binary_sensor.front_door', x: 20, y: 30, size: 'small', tap: 'more-info' },
+        { entity: 'binary_sensor.balcony_door', x: 50, y: 5, size: 'small', tap: 'more-info' },
+      ],
+    };
+    const card = await mountCard(cfg as any, attHass());
+    pill(card).click();
+    await (card as any).updateComplete;
+    expect((card as any)._focusedZone?.name).toBe('Hall');
+    pill(card).click(); // zoneless item → free 1.35x camera, no stale focus
+    await (card as any).updateComplete;
+    expect((card as any)._focusedZone).toBeNull();
+    expect((card as any)._transform.scale).toBeCloseTo(1.35, 6);
+    // The target marker must not be dimmed while the camera centers on it.
+    const markers = Array.from(card.shadowRoot!.querySelectorAll('.marker-overlay .marker'));
+    expect(markers.some((m) => m.classList.contains('dimmed'))).toBe(false);
+    expect(pill(card).textContent).toContain('2 of 2');
+  });
+
+  it('the locate pulse fires once the camera settles (fallback timer)', async () => {
+    vi.useFakeTimers();
+    try {
+      const card = await mountCard(ATT_CONFIG as any, attHass());
+      pill(card).click();
+      await (card as any).updateComplete;
+      // In flight: no pulse yet — it is the arrival flourish.
+      expect(card.shadowRoot!.querySelector('.marker-overlay')!.classList.contains('pulse')).toBe(false);
+      vi.advanceTimersByTime(700); // camera fallback (CAMERA_MS + 80) fires
+      await (card as any).updateComplete;
+      expect(card.shadowRoot!.querySelector('.marker-overlay')!.classList.contains('pulse')).toBe(true);
+      vi.advanceTimersByTime(1400); // …and the pulse decays
+      await (card as any).updateComplete;
+      expect(card.shadowRoot!.querySelector('.marker-overlay')!.classList.contains('pulse')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('card-component: motion ripple', () => {
   it('a presence sensor turning off->on emits a ripple; none on first paint', async () => {
     const cfg = { ...BASE_CONFIG, entities: [{ entity: 'binary_sensor.hall_motion', x: 50, y: 50, size: 'small', tap: 'more-info' }] };

@@ -20,6 +20,7 @@ import {
 import { zoomToZone, markerScreenPos, type Viewport, type ZoomTransform } from './core/geometry';
 import { buildZoneChips, type ZoneChip } from './render/zone-controls';
 import { entityInFocusedZone } from './render/zone-focus';
+import { attentionFor } from './core/attention';
 import './render/control-surface';
 import { controlKind, controlTarget } from './core/entity-capabilities';
 
@@ -50,6 +51,9 @@ const SNAP_MS = 320;
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_RADIUS_PX = 24;
 const SINGLE_TAP_MS = 250;
+
+/** Camera scale for a zoneless attention marker (spec P0-6 / F16). */
+const ATTENTION_ZOOM = 1.35;
 
 /**
  * One-shot "modifier + scroll to zoom" hint (spec P0-3): module-level flag =
@@ -119,6 +123,15 @@ export class ApartmentViewCard extends LitElement {
   /** Transient: pulse the attention markers to help locate them. */
   @state() private _pulse = false;
   private _pulseTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * Attention-pill cycling (spec P0-6): number of pill taps so far — the
+   * index of the NEXT item to visit. Reactive because it drives the pill
+   * label ("2 of 3" while cycling). Reset by exit-focus, Escape, and a
+   * change in the attention count.
+   */
+  @state() private _attentionCycle = 0;
+  /** Attention count captured at the last pill tap; a change resets the cycle. */
+  private _attentionCycleCount = 0;
   /** Radial quick-actions menu open state. */
   @state() private _quickOpen = false;
   /** Active floor index (multi-floor) + a transient cross-fade flag. */
@@ -154,6 +167,8 @@ export class ApartmentViewCard extends LitElement {
   private _lastViews: MarkerView[] = [];
   private _animateFallback?: ReturnType<typeof setTimeout>;
   private _sceneEndUnsub?: () => void;
+  /** One-shot callback fired when the in-flight camera move settles (P0-6). */
+  private _onSettleCb?: () => void;
   /** Pending single-tap commit (the double-tap window, spec P0-5). */
   private _sceneTapTimer: ReturnType<typeof setTimeout> | null = null;
   /** Previous scene tap (client coords + timestamp) for double-tap detection. */
@@ -860,6 +875,16 @@ export class ApartmentViewCard extends LitElement {
 
   protected willUpdate(changed: PropertyValues): void {
     if (changed.has('hass')) this._detectMotion(changed.get('hass') as HassLike | undefined);
+    // Attention cycling is positional: when the attention set changes size,
+    // the pill restarts from "N need attention" (spec P0-6). Only checked
+    // while actively cycling and only on data changes — never per-frame.
+    if (
+      this._attentionCycle !== 0 &&
+      (changed.has('hass') || changed.has('config')) &&
+      this._attentionEntities().length !== this._attentionCycleCount
+    ) {
+      this._attentionCycle = 0;
+    }
   }
 
   private _reducedMotion(): boolean {
@@ -993,25 +1018,36 @@ export class ApartmentViewCard extends LitElement {
    */
   private _animateTransformTo(
     t: ZoomTransform,
-    opts: { snap?: boolean } = {},
+    opts: { snap?: boolean; onSettle?: () => void } = {},
   ): void {
     this._clearAnimating(); // restart cleanly if a move is already in flight
     this._animSnap = !!opts.snap;
+    this._onSettleCb = opts.onSettle;
     this._isAnimating = true;
     this._transform = t;
     const scene = this.renderRoot?.querySelector('.scene');
     if (scene) {
       const onEnd = (e: Event): void => {
         if (e.target !== scene) return; // bubbled child transition, not the camera
-        this._clearAnimating();
+        this._settleAnimating();
       };
       scene.addEventListener('transitionend', onEnd);
       this._sceneEndUnsub = () => scene.removeEventListener('transitionend', onEnd);
     }
     this._animateFallback = setTimeout(
-      () => this._clearAnimating(),
+      () => this._settleAnimating(),
       (opts.snap ? SNAP_MS : CAMERA_MS) + 80,
     );
+  }
+
+  /** The camera ARRIVED (transitionend or fallback, whichever first): clear
+   * the animation state, then fire the one-shot settle callback (spec P0-6).
+   * A restarted or torn-down move goes through _clearAnimating directly and
+   * never fires its settle. */
+  private _settleAnimating(): void {
+    const settled = this._onSettleCb;
+    this._clearAnimating();
+    settled?.();
   }
 
   private _clearAnimating(): void {
@@ -1019,18 +1055,23 @@ export class ApartmentViewCard extends LitElement {
     this._animateFallback = undefined;
     this._sceneEndUnsub?.();
     this._sceneEndUnsub = undefined;
+    this._onSettleCb = undefined; // superseded moves never fire their settle
     this._isAnimating = false;
     this._animSnap = false;
   }
 
-  private _focusZone(zone: ZoneConfig): void {
+  private _focusZone(zone: ZoneConfig, opts: { onSettle?: () => void } = {}): void {
     this._focusedZone = zone;
-    this._animateTransformTo(zoomToZone(zone, this._viewport(), this.config.options.zoomMax));
+    this._animateTransformTo(
+      zoomToZone(zone, this._viewport(), this.config.options.zoomMax),
+      opts,
+    );
     this._panZoom.setEnabled(false);
   }
 
   private _exitFocus(): void {
     this._focusedZone = null;
+    this._attentionCycle = 0; // leaving a room ends the attention tour (P0-6)
     this._animateTransformTo({ scale: 1, panX: 0, panY: 0 });
     // Resync (spec P0-5): the controller may still hold a stale pre-focus
     // transform; the next gesture or double-tap must continue from the
@@ -1207,6 +1248,7 @@ export class ApartmentViewCard extends LitElement {
   private _handleKeyDown = (e: KeyboardEvent): void => {
     if (e.key !== 'Escape') return;
     this._cancelSceneTap(); // Escape aborts a pending scene tap (F13)
+    this._attentionCycle = 0; // …and ends the attention tour (P0-6)
     if (this._quickOpen) {
       e.preventDefault();
       this._quickOpen = false;
@@ -1393,6 +1435,57 @@ export class ApartmentViewCard extends LitElement {
     this._pulseTimer = setTimeout(() => {
       this._pulse = false;
     }, 1400);
+  };
+
+  /**
+   * Entities needing attention, in render order — the same attentionFor
+   * decision computeMarkerViews makes per marker, so the pill's cycle count
+   * always equals the badge count on the glass.
+   */
+  private _attentionEntities(): EntityConfig[] {
+    const states = this.hass?.states ?? {};
+    return this._floorData.entities.filter((e) => attentionFor(states[e.entity]) !== null);
+  }
+
+  /**
+   * The pill is a promise, not a decoration (spec P0-6): each tap flies the
+   * camera to the next attention item — its containing zone when it has one,
+   * else a 1.35× camera centered on the marker (a zero-size zone through
+   * zoomToZone: same centering math, same cover-bounds clamp, F16) — and
+   * fires the locate pulse as the arrival flourish once the camera settles.
+   */
+  private _goToAttention = (): void => {
+    const items = this._attentionEntities();
+    if (!items.length) return;
+    if (items.length !== this._attentionCycleCount) {
+      // The attention set changed since the last tap — restart the tour.
+      this._attentionCycle = 0;
+      this._attentionCycleCount = items.length;
+    }
+    const item = items[this._attentionCycle % items.length];
+    const zone = zoneForPoint(item.x, item.y, this._floorData.zones);
+    const onSettle = (): void => this._pulseAttention();
+    if (zone) {
+      this._focusZone(zone, { onSettle });
+    } else {
+      // A zoneless item is viewed from the free camera: leave any focused
+      // state (NOT via _exitFocus — that would reset this very cycle and fly
+      // to identity) so the target marker is never dimmed and the pan/zoom
+      // gates match what is on screen.
+      this._focusedZone = null;
+      const camera = zoomToZone(
+        { name: item.entity, x: item.x, y: item.y, width: 0, height: 0 },
+        this._viewport(),
+        ATTENTION_ZOOM,
+      );
+      this._animateTransformTo(camera, { onSettle });
+      // A machine move outside the zone system: adopt it in the controller
+      // so a follow-up pan/double-tap continues from here, not from a stale
+      // transform (same sync rule as P0-4/P0-5).
+      this._panZoom.syncTo(camera);
+      this._panZoom.setEnabled(this.config.options.freePanZoom);
+    }
+    this._attentionCycle += 1;
   };
 
   /** Configured quick actions, plus a contextual "turn off this room" while a zone is focused. */
@@ -1744,15 +1837,19 @@ export class ApartmentViewCard extends LitElement {
     const floors = this.config.floors ?? [];
 
     // HUD row above the canvas: attention pill (left) + lights control (right).
+    // The pill label counts the tour while cycling ("2 of 3", spec P0-6).
     const attentionPill =
       attentionCount > 0 && !this._selectMode
         ? html`<button
             class="attention-pill"
-            @click=${this._pulseAttention}
-            title="Locate items that need attention"
+            @click=${this._goToAttention}
+            aria-label="Go to item needing attention"
+            title="Go to the next item that needs attention"
           >
             <ha-icon icon="mdi:alert-circle"></ha-icon>
-            <span>${attentionCount} need${attentionCount === 1 ? 's' : ''} attention</span>
+            <span>${this._attentionCycle > 0
+              ? `${((this._attentionCycle - 1) % attentionCount) + 1} of ${attentionCount}`
+              : `${attentionCount} need${attentionCount === 1 ? 's' : ''} attention`}</span>
           </button>`
         : nothing;
     const lightsControl = this._hasLights()

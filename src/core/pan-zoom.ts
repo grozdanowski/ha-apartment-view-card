@@ -126,6 +126,15 @@ export class PanZoomController {
     return this.transform;
   }
 
+  /**
+   * Adopt an externally-computed transform (a machine camera move, e.g. the
+   * attention camera — spec P0-6) so the next gesture continues from what is
+   * on screen instead of a stale internal state.
+   */
+  syncTo(t: ZoomTransform): void {
+    this._t = { ...t };
+  }
+
   private _applyZoom(factor: number, anchorX: number, anchorY: number): ZoomTransform {
     const oldScale = this._t.scale;
     const newScale = Math.min(
