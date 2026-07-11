@@ -358,6 +358,80 @@ describe('card-component: focused zone interactions (P0-1)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Marker precedence over zone focus (field bug): a tap that lands on a marker
+// chip must do the MARKER action, never zone focus — even when the chip's own
+// pointerdown didn't latch _activeMarker (small phone hit target), so the tap
+// arrives at the scene-tap resolution with _activeMarker === null.
+// ---------------------------------------------------------------------------
+
+describe('card-component: marker tap wins over zone focus', () => {
+  const ZONED_CONFIG = {
+    ...BASE_CONFIG,
+    zones: [
+      { name: 'Kitchen', x: 10, y: 20, width: 40, height: 40 },
+      { name: 'Living', x: 55, y: 40, width: 40, height: 40 },
+    ],
+  };
+
+  it('an overview tap that hits a marker (chip pointerdown missed) opens the surface, not zone focus', async () => {
+    const hass = createMockHass();
+    const card = await mountCard(ZONED_CONFIG as any, hass);
+    // kitchen_ceiling (30,40) sits inside the Kitchen zone (10,20,40,40).
+    const marker = card.shadowRoot!.querySelector(
+      '.marker[data-entity="light.kitchen_ceiling"]',
+    ) as HTMLElement;
+    expect(marker).toBeTruthy();
+
+    // Simulate the field failure: the browser resolves the touch to the scene
+    // gap (not the button), so _activeMarker never latches — but the marker is
+    // still topmost at the release point. Stub elementsFromPoint to surface it.
+    const root = card.shadowRoot!;
+    root.elementsFromPoint = ((_x: number, _y: number) => [marker]) as any;
+    const focusSpy = vi.spyOn(card as any, '_focusZone');
+
+    // Scene-origin pointerdown (NOT the marker) → _activeMarker stays null.
+    const scene = root.querySelector('.scene') as HTMLElement;
+    const c = { clientX: 50, clientY: 50, pointerId: 61, button: 0, pointerType: 'touch' };
+    scene.dispatchEvent(new PointerEvent('pointerdown', { ...c, bubbles: true }));
+    window.dispatchEvent(new PointerEvent('pointerup', { ...c, bubbles: true }));
+    await (card as any).updateComplete;
+
+    // Marker wins: control surface opens for the entity, no zone focus.
+    const surface = root.querySelector('av-control-surface') as any;
+    expect(surface).toBeTruthy();
+    expect(surface.entityIds).toEqual(['light.kitchen_ceiling']);
+    expect(focusSpy).not.toHaveBeenCalled();
+    expect((card as any)._focusedZone).toBeNull();
+  });
+
+  it('an overview tap that hits no marker still focuses the zone (wayfinding intact)', async () => {
+    vi.useFakeTimers();
+    try {
+      const hass = createMockHass();
+      const card = await mountCard(ZONED_CONFIG as any, hass);
+      const root = card.shadowRoot!;
+      // No marker under the point; the Kitchen zone-hit rect is topmost.
+      const zoneHit = root.querySelector('.zone-hit[data-zone-index="0"]') as HTMLElement;
+      expect(zoneHit).toBeTruthy();
+      root.elementsFromPoint = ((_x: number, _y: number) => [zoneHit]) as any;
+
+      const scene = root.querySelector('.scene') as HTMLElement;
+      const c = { clientX: 50, clientY: 50, pointerId: 62, button: 0, pointerType: 'touch' };
+      scene.dispatchEvent(new PointerEvent('pointerdown', { ...c, bubbles: true }));
+      window.dispatchEvent(new PointerEvent('pointerup', { ...c, bubbles: true }));
+      // Single-tap commits after SINGLE_TAP_MS (double-tap window).
+      vi.advanceTimersByTime(300);
+      await (card as any).updateComplete;
+
+      expect((card as any)._focusedZone?.name).toBe('Kitchen');
+      expect(root.querySelector('av-control-surface')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Camera engine (spec P0-2): gated transitions + frozen labels
 // ---------------------------------------------------------------------------
 

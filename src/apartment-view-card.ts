@@ -1381,6 +1381,38 @@ export class ApartmentViewCard extends LitElement {
     return zoneForPoint(xPct, yPct, zones);
   }
 
+  /**
+   * The interactive marker under a screen point, if any (spec §3: marker taps
+   * outrank zone focus at every zoom level). The marker overlay sits ABOVE the
+   * scene with each `.marker` button `pointer-events:auto`, so a tap on a chip
+   * hits the button — but a small chip on a phone can leave the button's own
+   * pointerdown un-latched (the touch centroid resolves to the overlay gap or
+   * the scene), so `_activeMarker` stays null and the scene-tap path would
+   * steal the tap for zone focus. Re-hit-testing here at RESOLUTION time makes
+   * the marker win regardless: `elementsFromPoint` reports the topmost `.marker`
+   * (or its `ha-icon`/glyph children) whenever the point is over the chip.
+   * `dimmed`/`select-dim` markers are `pointer-events:none`, so they correctly
+   * never appear here — the tap falls through to zone wayfinding, as intended.
+   */
+  private _markerViewAtPoint(x: number, y: number): MarkerView | null {
+    const root = this.shadowRoot;
+    if (!root || typeof root.elementsFromPoint !== 'function') return null;
+    for (const el of root.elementsFromPoint(x, y)) {
+      const btn = (el as HTMLElement).closest?.('.marker[data-entity]') as
+        | HTMLElement
+        | null;
+      const id = btn?.dataset?.entity;
+      if (id) {
+        const view = this._lastViews.find((v) => v.entity.entity === id);
+        if (view) return view;
+      }
+      // A zone-hit rect or the scene surfacing first means no marker is on top.
+      if ((el as HTMLElement).dataset?.zoneIndex !== undefined) break;
+      if ((el as HTMLElement).classList?.contains('scene')) break;
+    }
+    return null;
+  }
+
   private _onZoneChip(chip: ZoneChip): void {
     if (chip.kind === 'back') {
       this._exitFocus();
@@ -1903,9 +1935,18 @@ export class ApartmentViewCard extends LitElement {
       this._activeMarker === null &&
       this._activePointers.size === 0
     ) {
-      // Scene tap (spec P0-5): wayfinding + double-tap zoom. The size guard
-      // keeps the first-lifted finger of a multi-touch from reading as a tap.
-      this._onSceneTap(e.clientX, e.clientY, now);
+      // Marker precedence (spec §3): a tap that landed on a marker chip must do
+      // the MARKER action, never zone focus — even when the chip's own
+      // pointerdown didn't latch _activeMarker (small phone hit target). Re-hit-
+      // test the release point; a marker on top wins outright.
+      const marker = this.hass ? this._markerViewAtPoint(e.clientX, e.clientY) : null;
+      if (marker) {
+        this._activateEntity(marker.entity);
+      } else {
+        // Scene tap (spec P0-5): wayfinding + double-tap zoom. The size guard
+        // keeps the first-lifted finger of a multi-touch from reading as a tap.
+        this._onSceneTap(e.clientX, e.clientY, now);
+      }
     } else if (outcome === 'hold' && this._activeMarker && !this._holdFired) {
       // hold timer didn't fire (e.g. test/no-timer path) but release is late
       dispatchHoldAction(this._activeMarker.entity, this);
