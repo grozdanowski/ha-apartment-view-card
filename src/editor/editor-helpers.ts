@@ -230,6 +230,18 @@ export function entitySchema(directional: boolean, labelSource = 'inherit'): HaF
   return schema;
 }
 
+/** Quick-action row (radial ⚡ menu): name + icon + target. The entity
+ *  selector covers the common case (scenes/scripts/anything activatable via
+ *  homeassistant.turn_on); the service text field is the advanced override. */
+export function quickActionSchema(): HaFormSchema[] {
+  return [
+    { name: 'name', required: true, selector: { text: {} } },
+    { name: 'icon', selector: { icon: {} } },
+    { name: 'entity', selector: { entity: {} } },
+    { name: 'service', selector: { text: {} } },
+  ];
+}
+
 export function zoneSchema(): HaFormSchema[] {
   return [
     { name: 'name', required: true, selector: { text: {} } },

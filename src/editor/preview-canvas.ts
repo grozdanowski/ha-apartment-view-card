@@ -38,6 +38,48 @@ export class PreviewCanvas extends LitElement {
     .surface.drawing {
       cursor: crosshair;
     }
+    /* Drawing mode must be unmissable (rc.1 field feedback: "no indication
+       that I should now draw"): armed dashed outline + instruction banner,
+       and markers stop intercepting the drag. */
+    .surface.drawing .marker {
+      pointer-events: none;
+      opacity: 0.4;
+    }
+    .surface.drawing::after {
+      content: '';
+      position: absolute;
+      inset: 2px;
+      border: 2px dashed var(--primary-color, #03a9f4);
+      border-radius: 8px;
+      pointer-events: none;
+      animation: draw-armed 1.6s ease-in-out infinite;
+    }
+    @keyframes draw-armed {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.45; }
+    }
+    .draw-banner {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 2;
+      max-width: calc(100% - 32px);
+      padding: 8px 14px;
+      border-radius: 18px;
+      background: var(--primary-color, #03a9f4);
+      color: var(--text-primary-color, #fff);
+      font-size: 13px;
+      font-weight: 500;
+      text-align: center;
+      pointer-events: none;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .surface.drawing::after {
+        animation: none;
+      }
+    }
     .base {
       display: block;
       width: 100%;
@@ -147,6 +189,26 @@ export class PreviewCanvas extends LitElement {
     );
   }
 
+  /** Escape cancels an armed/ongoing zone draw. */
+  private _onKeyDown = (ev: KeyboardEvent) => {
+    if (ev.key !== 'Escape' || !this.drawingZone) return;
+    ev.stopPropagation();
+    this._dragMode = 'none';
+    this._drawStart = null;
+    this._drawCurrent = null;
+    this._emit('preview-zone-draw-cancelled', {});
+  };
+
+  connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener('keydown', this._onKeyDown);
+  }
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    window.removeEventListener('keydown', this._onKeyDown);
+  }
+
   protected render() {
     if (!this.base) {
       return html`<div class="empty">
@@ -173,6 +235,13 @@ export class PreviewCanvas extends LitElement {
         @pointercancel=${this._onUp}
       >
         <img class="base" src=${this.base} alt="Apartment preview" />
+        ${this.drawingZone
+          ? html`<div class="draw-banner">
+              ${this._dragMode === 'zone'
+                ? 'Release to create the zone'
+                : 'Draw the zone: click and drag a rectangle — Esc to cancel'}
+            </div>`
+          : nothing}
         ${this.zones.map(
           (z) => html`<div
             class="zone"

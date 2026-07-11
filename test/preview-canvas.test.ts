@@ -154,3 +154,29 @@ describe('preview-canvas', () => {
     expect(cancelled.length).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Drawing-mode indication (rc.2 field feedback #3)
+// ---------------------------------------------------------------------------
+
+describe('preview-canvas: drawing-mode indication', () => {
+  it('shows the instruction banner + disables marker hits while drawing', async () => {
+    const el = await mount();
+    expect(el.shadowRoot!.querySelector('.draw-banner')).toBeNull();
+    el.drawingZone = true;
+    await el.updateComplete;
+    const banner = el.shadowRoot!.querySelector('.draw-banner')!;
+    expect(banner.textContent).toContain('Draw the zone');
+    expect(el.shadowRoot!.querySelector('.surface')!.classList.contains('drawing')).toBe(true);
+  });
+
+  it('Escape cancels an armed draw', async () => {
+    const el = await mount();
+    el.drawingZone = true;
+    await el.updateComplete;
+    let cancelled = false;
+    el.addEventListener('preview-zone-draw-cancelled', () => (cancelled = true));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(cancelled).toBe(true);
+  });
+});

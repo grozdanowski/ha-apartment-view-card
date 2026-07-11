@@ -6,6 +6,7 @@ import {
   type ApartmentViewConfig,
   type EntityConfig,
   type ZoneConfig,
+  type QuickAction,
 } from '../core/config';
 import {
   IMAGE_FIELDS,
@@ -16,18 +17,20 @@ import {
   defaultEntity,
   isDirectional,
   zoneSchema,
+  quickActionSchema,
   defaultZone,
   labelsSchema,
   stageOptionsSchema,
   lightingOptionsSchema,
 } from './editor-helpers';
 
-type EditorTab = 'floorplan' | 'devices' | 'lighting' | 'zones';
+type EditorTab = 'floorplan' | 'devices' | 'lighting' | 'zones' | 'actions';
 const TABS: { id: EditorTab; label: string; icon: string }[] = [
   { id: 'floorplan', label: 'Floorplan', icon: 'mdi:floor-plan' },
   { id: 'devices', label: 'Devices', icon: 'mdi:devices' },
   { id: 'lighting', label: 'Lighting', icon: 'mdi:lightbulb-group' },
   { id: 'zones', label: 'Zones', icon: 'mdi:select-group' },
+  { id: 'actions', label: 'Quick actions', icon: 'mdi:flash' },
 ];
 import './preview-canvas';
 
@@ -40,6 +43,8 @@ export class ApartmentViewCardEditor extends LitElement {
   @state() private _uploadingKey: ImageFieldKey | null = null;
   @state() private _tab: EditorTab = 'devices';
   @state() private _entitySearch = '';
+  /** Local quick-actions draft; normalize would drop half-filled rows. */
+  @state() private _actionsDraft: QuickAction[] | null = null;
 
   static styles = css`
     .tabs {
@@ -551,7 +556,133 @@ export class ApartmentViewCardEditor extends LitElement {
             </div>
           `
         )}
-        <ha-button class="add-zone" @click=${this._startDrawZone}>Add zone</ha-button>
+        <ha-button
+          class="add-zone"
+          @click=${this._drawingZone ? this._onZoneDrawCancelled : this._startDrawZone}
+        >${this._drawingZone ? 'Cancel drawing' : 'Add zone'}</ha-button>
+        <p class="section-hint">
+          ${this._drawingZone
+            ? html`<b>Drawing mode is ON</b> — drag a rectangle on the floorplan
+                preview to place the zone (Esc cancels).`
+            : 'Add zone arms drawing mode: you then drag the zone rectangle directly on the preview.'}
+        </p>
+      </div>
+    `;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Quick actions (radial ⚡ menu) editing
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Draft kept locally: normalizeConfig DROPS actions without a name +
+   * entity/service, so a freshly-added row would vanish from the round-tripped
+   * config before the user finishes filling it in. Rows render from the draft;
+   * only valid rows are committed to the card config.
+   */
+  private _actions(): QuickAction[] {
+    return this._actionsDraft ?? this._config.quickActions ?? [];
+  }
+
+  private _commitActions(list: QuickAction[]): void {
+    this._actionsDraft = list;
+    const valid = list.filter((a) => a.name && (a.entity || a.service));
+    const config: ApartmentViewConfig = { ...this._config, quickActions: valid };
+    this._config = config;
+    fireEvent(this, 'config-changed', { config });
+  }
+
+  private _addAction(): void {
+    this._commitActions([...this._actions(), { name: 'New action', icon: 'mdi:flash' }]);
+  }
+
+  private _removeAction(index: number): void {
+    this._commitActions(this._actions().filter((_, i) => i !== index));
+  }
+
+  private _moveAction(index: number, delta: number): void {
+    const list = [...this._actions()];
+    const target = index + delta;
+    if (target < 0 || target >= list.length) return;
+    const [a] = list.splice(index, 1);
+    list.splice(target, 0, a);
+    this._commitActions(list);
+  }
+
+  private _onActionChanged(ev: CustomEvent, index: number): void {
+    ev.stopPropagation();
+    const v = ev.detail.value as Partial<QuickAction>;
+    const list = this._actions().map((a, i) => {
+      if (i !== index) return a;
+      const merged = { ...a, ...v } as QuickAction;
+      // ha-form leaves cleared fields as '' — strip them so normalize treats
+      // the action consistently (entity OR service, not empty husks).
+      (['icon', 'entity', 'service'] as const).forEach((k) => {
+        if (!merged[k]) delete merged[k];
+      });
+      return merged;
+    });
+    this._commitActions(list);
+  }
+
+  private _actionLabel = (schema: { name: string }): string => {
+    const labels: Record<string, string> = {
+      name: 'Name',
+      icon: 'Icon',
+      entity: 'Entity to activate (scene, script, light…)',
+      service: 'Service (advanced — overrides entity, e.g. light.turn_off)',
+    };
+    return labels[schema.name] ?? schema.name;
+  };
+
+  private _renderActions() {
+    const list = this._actions();
+    return html`
+      <div class="section">
+        <div class="section-title">Quick actions</div>
+        <p class="section-hint">
+          These live in the radial ⚡ button on the floorplan. Point each one at
+          a scene, script, or any entity to activate — or use an advanced
+          service call. An action appears once it has a name and a target.
+        </p>
+        ${list.map(
+          (a, i) => html`
+            <div class="zone-row action-row">
+              <div class="row-header">
+                <span class="row-title">${a.name || 'Unnamed action'}</span>
+                <div class="zone-actions">
+                  <ha-icon-button
+                    class="action-up"
+                    .label=${'Move action up'}
+                    .path=${'M7,15L12,10L17,15H7Z'}
+                    @click=${() => this._moveAction(i, -1)}
+                  ></ha-icon-button>
+                  <ha-icon-button
+                    class="action-down"
+                    .label=${'Move action down'}
+                    .path=${'M7,10L12,15L17,10H7Z'}
+                    @click=${() => this._moveAction(i, 1)}
+                  ></ha-icon-button>
+                  <ha-icon-button
+                    class="remove-action"
+                    .label=${'Delete action'}
+                    .path=${'M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z'}
+                    @click=${() => this._removeAction(i)}
+                  ></ha-icon-button>
+                </div>
+              </div>
+              <ha-form
+                class="action-form"
+                .hass=${this.hass}
+                .data=${a}
+                .schema=${quickActionSchema()}
+                .computeLabel=${this._actionLabel}
+                @value-changed=${(ev: CustomEvent) => this._onActionChanged(ev, i)}
+              ></ha-form>
+            </div>
+          `
+        )}
+        <ha-button class="add-action" @click=${this._addAction}>Add quick action</ha-button>
       </div>
     `;
   }
@@ -686,6 +817,9 @@ export class ApartmentViewCardEditor extends LitElement {
       </div>
       <div class="tab-pane tab-zones ${this._tab === 'zones' ? 'active' : ''}">
         ${this._renderZones()}
+      </div>
+      <div class="tab-pane tab-actions ${this._tab === 'actions' ? 'active' : ''}">
+        ${this._renderActions()}
       </div>
     `;
   }

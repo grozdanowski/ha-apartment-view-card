@@ -469,10 +469,10 @@ describe('apartment-view-card-editor: tabs + import + search', () => {
     return el;
   }
 
-  it('renders 4 tabs; switching changes the active pane', async () => {
+  it('renders 5 tabs; switching changes the active pane', async () => {
     const el = await mountEd();
     const tabs = Array.from(el.shadowRoot.querySelectorAll('.tab')) as HTMLElement[];
-    expect(tabs.length).toBe(4);
+    expect(tabs.length).toBe(5); // + Quick actions (rc.2)
     expect(el.shadowRoot.querySelector('.tab-devices.active')).toBeTruthy();
     (tabs.find((t) => /zones/i.test(t.textContent || '')) as HTMLElement).click();
     await el.updateComplete;
@@ -516,5 +516,75 @@ describe('apartment-view-card-editor: tabs + import + search', () => {
     el._entitySearch = 'special';
     await el.updateComplete;
     expect(el.shadowRoot.querySelectorAll('.entity-row').length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Quick actions tab (rc.2 field feedback #4)
+// ---------------------------------------------------------------------------
+
+describe('apartment-view-card-editor: quick actions', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  async function mountActions(quickActions: any[] = []) {
+    const el = document.createElement('apartment-view-card-editor') as any;
+    el.hass = { states: {}, localize: (k: string) => k };
+    el.setConfig({ ...baseConfig(), quickActions });
+    document.body.appendChild(el);
+    await el.updateComplete;
+    (Array.from(el.shadowRoot.querySelectorAll('.tab')) as HTMLElement[])
+      .find((t) => /quick actions/i.test(t.textContent || ''))!.click();
+    await el.updateComplete;
+    return el;
+  }
+
+  it('renders existing quick actions as editable rows', async () => {
+    const el = await mountActions([{ name: 'Movie', icon: 'mdi:movie', entity: 'scene.movie' }]);
+    const rows = el.shadowRoot.querySelectorAll('.action-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0].textContent).toContain('Movie');
+  });
+
+  it('Add quick action creates a DRAFT row that survives normalize round-trips', async () => {
+    const el = await mountActions();
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    (el.shadowRoot.querySelector('.add-action') as HTMLElement).click();
+    await el.updateComplete;
+    // The half-filled row renders (draft)…
+    expect(el.shadowRoot.querySelectorAll('.action-row').length).toBe(1);
+    // …but is NOT committed to the card config (no target yet).
+    expect(fired.quickActions).toEqual([]);
+  });
+
+  it('filling in an entity commits the action to the config', async () => {
+    const el = await mountActions();
+    (el.shadowRoot.querySelector('.add-action') as HTMLElement).click();
+    await el.updateComplete;
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    const form = el.shadowRoot.querySelector('.action-form') as any;
+    form.dispatchEvent(new CustomEvent('value-changed', {
+      detail: { value: { name: 'Dobro jutro', icon: 'mdi:weather-sunset-up', entity: 'scene.home_morning' } },
+      bubbles: true, composed: true,
+    }));
+    await el.updateComplete;
+    expect(fired.quickActions).toEqual([
+      { name: 'Dobro jutro', icon: 'mdi:weather-sunset-up', entity: 'scene.home_morning' },
+    ]);
+  });
+
+  it('remove + reorder work on the draft list', async () => {
+    const el = await mountActions([
+      { name: 'A', entity: 'scene.a' },
+      { name: 'B', entity: 'scene.b' },
+    ]);
+    let fired: any = null;
+    el.addEventListener('config-changed', (e: CustomEvent) => (fired = e.detail.config));
+    (el.shadowRoot.querySelectorAll('.action-down')[0] as HTMLElement).click();
+    expect(fired.quickActions.map((a: any) => a.name)).toEqual(['B', 'A']);
+    (el.shadowRoot.querySelectorAll('.remove-action')[0] as HTMLElement).click();
+    await el.updateComplete;
+    expect(fired.quickActions.map((a: any) => a.name)).toEqual(['A']);
   });
 });
