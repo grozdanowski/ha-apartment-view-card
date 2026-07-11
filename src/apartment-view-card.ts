@@ -593,7 +593,7 @@ export class ApartmentViewCard extends LitElement {
     this.addEventListener('wheel', this._onWheel, { passive: false });
     window.addEventListener('pointermove', this._onWindowPointerMove);
     window.addEventListener('pointerup', this._onWindowPointerUp);
-    window.addEventListener('pointercancel', this._onWindowPointerUp);
+    window.addEventListener('pointercancel', this._onWindowPointerCancel);
     window.addEventListener('keydown', this._handleKeyDown);
     if (!this.hasAttribute('tabindex')) this.setAttribute('tabindex', '0');
     if (typeof ResizeObserver !== 'undefined') {
@@ -611,7 +611,7 @@ export class ApartmentViewCard extends LitElement {
     this.removeEventListener('wheel', this._onWheel);
     window.removeEventListener('pointermove', this._onWindowPointerMove);
     window.removeEventListener('pointerup', this._onWindowPointerUp);
-    window.removeEventListener('pointercancel', this._onWindowPointerUp);
+    window.removeEventListener('pointercancel', this._onWindowPointerCancel);
     window.removeEventListener('keydown', this._handleKeyDown);
     clearTimeout(this._pulseTimer);
     clearTimeout(this._floorFadeTimer);
@@ -1031,6 +1031,23 @@ export class ApartmentViewCard extends LitElement {
       // hold timer didn't fire (e.g. test/no-timer path) but release is late
       dispatchHoldAction(this._activeMarker.entity, this);
     }
+    this._activeMarker = null;
+  };
+
+  /**
+   * pointercancel is an abort, never a tap (spec P0-0): when the browser
+   * claims the pointer stream (scroll takeover, palm rejection, system
+   * gesture), terminate the gesture with NO outcome — routing this through
+   * _onWindowPointerUp would let TapHoldTracker classify the short, still
+   * press as a tap and toggle a device.
+   */
+  private _onWindowPointerCancel = (e: PointerEvent) => {
+    if (!this._activePointers.has(e.pointerId)) return;
+    this._activePointers.delete(e.pointerId);
+    this._lastMove = null;
+    this._pinchStartDist = 0;
+    this._cancelHold();
+    this._tapHold.reset();
     this._activeMarker = null;
   };
 

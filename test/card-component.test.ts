@@ -228,6 +228,54 @@ describe('card-component: tap → opens control surface', () => {
 });
 
 // ---------------------------------------------------------------------------
+// pointercancel is an abort, never a tap (spec P0-0)
+// ---------------------------------------------------------------------------
+
+describe('card-component: pointercancel aborts the gesture (P0-0)', () => {
+  it('marker pointerdown → pointercancel fires no service and opens no surface', async () => {
+    const hass = createMockHass();
+    const card = await mountCard(BASE_CONFIG, hass);
+    const marker = card.shadowRoot!.querySelector('.marker-overlay .marker') as HTMLElement;
+    const c = { clientX: 50, clientY: 50, pointerId: 11, button: 0, pointerType: 'touch' };
+    marker.dispatchEvent(new PointerEvent('pointerdown', { ...c, bubbles: true }));
+    window.dispatchEvent(new PointerEvent('pointercancel', { ...c, bubbles: true }));
+    await (card as any).updateComplete;
+
+    // A browser-claimed scroll must terminate with NO outcome.
+    expect(hass.serviceCalls.length).toBe(0);
+    expect(card.shadowRoot!.querySelector('av-control-surface')).toBeNull();
+  });
+
+  it('scene pointerdown → pointercancel changes no focus and leaves no state', async () => {
+    const card = await mountCard();
+    const scene = card.shadowRoot!.querySelector('.scene') as HTMLElement;
+    const c = { clientX: 120, clientY: 90, pointerId: 12, button: 0, pointerType: 'touch' };
+    scene.dispatchEvent(new PointerEvent('pointerdown', { ...c, bubbles: true }));
+    window.dispatchEvent(new PointerEvent('pointercancel', { ...c, bubbles: true }));
+    await (card as any).updateComplete;
+
+    expect((card as any)._focusedZone).toBeNull();
+    expect((card as any)._activePointers.size).toBe(0);
+    expect((card as any)._activeMarker).toBeNull();
+  });
+
+  it('a single pointerdown after a pointercancel is not treated as a pinch', async () => {
+    const card = await mountCard();
+    const marker = card.shadowRoot!.querySelector('.marker-overlay .marker') as HTMLElement;
+    const first = { clientX: 50, clientY: 50, pointerId: 21, button: 0, pointerType: 'touch' };
+    marker.dispatchEvent(new PointerEvent('pointerdown', { ...first, bubbles: true }));
+    window.dispatchEvent(new PointerEvent('pointercancel', { ...first, bubbles: true }));
+
+    // The cancelled pointer must not linger and turn the next touch into a pinch.
+    const second = { clientX: 80, clientY: 80, pointerId: 22, button: 0, pointerType: 'touch' };
+    marker.dispatchEvent(new PointerEvent('pointerdown', { ...second, bubbles: true }));
+    expect((card as any)._activePointers.size).toBe(1);
+    expect((card as any)._pinchStartDist).toBe(0);
+    window.dispatchEvent(new PointerEvent('pointerup', { ...second, bubbles: true }));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Test 4: Light-overlay opacity matches the glow formula
 // ---------------------------------------------------------------------------
 
