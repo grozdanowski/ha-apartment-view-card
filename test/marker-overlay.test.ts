@@ -151,20 +151,20 @@ function makeView(over: Partial<MarkerView> = {}): MarkerView {
 const noop = (): void => {};
 
 describe('renderMarkerOverlay', () => {
-  it('positions each marker via a compositor translate3d transform (no left/top)', () => {
+  it('positions each marker via the compositor `translate` property (no left/top)', () => {
     const host = document.createElement('div');
     const view = makeView({ left: 300, top: 250, iconScale: 1.2 });
     render(renderMarkerOverlay([view], noop, noop), host);
 
     const marker = host.querySelector('.marker') as HTMLElement;
     expect(marker).toBeTruthy();
-    // Position lives in the transform (spec P0-2): left/top stay at the CSS
-    // default (0) so per-frame moves never touch layout.
+    // Position lives in the individual `translate` property (rc.2): it never
+    // touches layout AND composes BEFORE the press `scale`, so :active is a
+    // pure local shrink instead of scaling the coordinates (the rc.1 lunge).
     expect(marker.style.left).toBe('');
     expect(marker.style.top).toBe('');
-    expect(marker.style.transform).toContain('translate3d(300px, 250px, 0)');
-    expect(marker.style.transform).toContain('translate(-50%,-50%)');
-    expect(marker.style.transform).toContain('scale(1.2)');
+    expect(marker.getAttribute('style')).toContain('translate:calc(300px - 50%) calc(250px - 50%)');
+    expect(marker.style.transform).toBe('scale(1.2)');
   });
 
   it('positions the value label via translate3d, keeping --label-dy and the anchor offset', () => {

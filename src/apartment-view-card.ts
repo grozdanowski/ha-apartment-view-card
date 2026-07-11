@@ -368,6 +368,7 @@ export class ApartmentViewCard extends LitElement {
        token + curve as the scene so they never detach from their rooms. */
     .wrapper.is-animating .marker-overlay .marker {
       transition:
+        translate var(--av-dur-slow) var(--av-ease-out),
         transform var(--av-dur-slow) var(--av-ease-out),
         scale var(--av-dur-fast) var(--av-ease-spring),
         box-shadow 0.4s ease, opacity 0.3s ease, color 0.4s ease;
@@ -388,6 +389,7 @@ export class ApartmentViewCard extends LitElement {
     }
     .wrapper.is-animating-snap .marker-overlay .marker {
       transition:
+        translate var(--av-dur-med) var(--av-ease-snap),
         transform var(--av-dur-med) var(--av-ease-snap),
         scale var(--av-dur-fast) var(--av-ease-spring),
         box-shadow 0.4s ease, opacity 0.3s ease, color 0.4s ease;
@@ -415,8 +417,9 @@ export class ApartmentViewCard extends LitElement {
       backdrop-filter: none;
       background: var(--card-background-color, #1c1c1e);
     }
-    /* press feedback — the individual 'scale' property composes with the
-       positioning transform (translate + icon scale) without clobbering it. */
+    /* press feedback — position lives in the individual 'translate' property
+       (which composes BEFORE 'scale' per CSS property order), so this is a
+       pure local shrink around the chip's center: zero displacement. */
     .marker-overlay .marker:active {
       scale: 0.86;
     }
@@ -1516,6 +1519,11 @@ export class ApartmentViewCard extends LitElement {
    * zoomToZone: same centering math, same cover-bounds clamp, F16) — and
    * fires the locate pulse as the arrival flourish once the camera settles.
    */
+  /** Exit the attention tour: camera back to overview, cycle reset (rc.2). */
+  private _exitAttentionTour = (): void => {
+    this._exitFocus(); // resets _attentionCycle + animates to identity
+  };
+
   private _goToAttention = (): void => {
     const items = this._attentionEntities();
     if (!items.length) return;
@@ -1924,7 +1932,20 @@ export class ApartmentViewCard extends LitElement {
               : `${attentionCount} need${attentionCount === 1 ? 's' : ''} attention`}</span>
           </button>`
         : nothing;
-    const lightsControl = this._hasLights()
+    // While the attention tour is cycling, the right HUD slot becomes the way
+    // OUT (rc.1 field feedback: the tour had no exit). Exiting zooms back to
+    // the overview and resets the cycle via _exitFocus.
+    const tourActive = this._attentionCycle > 0 && attentionCount > 0;
+    const lightsControl = tourActive
+      ? html`<button
+          class="lights-control"
+          @click=${this._exitAttentionTour}
+          aria-label="Exit the attention tour and zoom back out"
+        >
+          <ha-icon icon="mdi:close"></ha-icon>
+          <span>Exit</span>
+        </button>`
+      : this._hasLights()
       ? html`<button
           class="lights-control ${this._selectMode ? 'active' : ''}"
           @click=${this._toggleSelectMode}

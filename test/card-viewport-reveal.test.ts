@@ -38,10 +38,12 @@ async function mountCard(rawConfig = BASE_CONFIG, hass = createMockHass()): Prom
 const firstMarker = (card: Card): HTMLElement =>
   card.shadowRoot!.querySelector('.marker-overlay .marker') as HTMLElement;
 
-/** Markers are compositor-positioned (spec P0-2): the screen position lives
- * in the inline `translate3d(Xpx, Ypx, 0)` transform, not left/top. */
+/** Markers are compositor-positioned (spec P0-2, rc.2): the screen position
+ * lives in the inline `translate: calc(Xpx - 50%) calc(Ypx - 50%)` property. */
 const markerTop = (el: HTMLElement): number => {
-  const m = /translate3d\((-?[\d.]+)px, (-?[\d.]+)px/.exec(el.style.transform);
+  const m = /calc\((-?[\d.]+)px - 50%\) calc\((-?[\d.]+)px - 50%\)/.exec(
+    el.getAttribute('style') ?? '',
+  );
   expect(m).toBeTruthy();
   return parseFloat(m![2]);
 };

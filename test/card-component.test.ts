@@ -60,10 +60,12 @@ function wheelEvent(init: WheelEventInit): WheelEvent {
   return e;
 }
 
-/** Markers are compositor-positioned (spec P0-2): read left/top back out of
- * the inline `translate3d(Xpx, Ypx, 0)` transform. */
+/** Markers are compositor-positioned (spec P0-2, rc.2): read left/top back
+ * out of the inline `translate: calc(Xpx - 50%) calc(Ypx - 50%)` property. */
 function markerPos(el: HTMLElement): { left: number; top: number } {
-  const m = /translate3d\((-?[\d.]+)px, (-?[\d.]+)px/.exec(el.style.transform);
+  const m = /calc\((-?[\d.]+)px - 50%\) calc\((-?[\d.]+)px - 50%\)/.exec(
+    el.getAttribute('style') ?? '',
+  );
   expect(m).toBeTruthy();
   return { left: parseFloat(m![1]), top: parseFloat(m![2]) };
 }

@@ -251,7 +251,14 @@ export function renderMarkerOverlay(
     >
       ${views.map((m) => {
         const style = [
-          `transform:translate3d(${m.left}px, ${m.top}px, 0) translate(-50%,-50%) scale(${m.iconScale})`,
+          // Position rides the individual `translate` property (compositor-
+          // accelerated, and by CSS property order it composes BEFORE the
+          // `scale` property) — so the :active/.selected press scale is a pure
+          // local shrink. With position inside `transform`, the press scale
+          // pre-multiplied the coordinates and the chip lunged toward the
+          // origin (rc.1 field bug: bouncy ~30px north-west displacement).
+          `translate:calc(${m.left}px - 50%) calc(${m.top}px - 50%)`,
+          `transform:scale(${m.iconScale})`,
           ...(m.glowColor ? [`--marker-glow:${m.glowColor}`] : []),
         ].join(';');
         const ariaLabel = m.state ? `${m.label}, ${m.state.state}` : m.label;

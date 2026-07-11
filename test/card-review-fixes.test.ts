@@ -138,6 +138,53 @@ describe('F-4: reduced-motion / no-op camera moves settle synchronously', () => 
   });
 });
 
+describe('rc.2: the attention tour has an exit', () => {
+  const ATT_CONFIG = {
+    ...BASE_CONFIG,
+    entities: [
+      { entity: 'light.kitchen_ceiling', x: 10, y: 10, size: 'small', tap: 'toggle' },
+      { entity: 'binary_sensor.front_door', x: 20, y: 20, size: 'small', tap: 'more-info' },
+    ],
+  };
+  const attHass = () => {
+    const hass = createMockHass();
+    (hass.states as any)['binary_sensor.front_door'] = {
+      entity_id: 'binary_sensor.front_door',
+      state: 'on',
+      attributes: { device_class: 'door' },
+    };
+    return hass;
+  };
+  const hudRight = (card: Card) =>
+    card.shadowRoot!.querySelector('.lights-control') as HTMLElement;
+
+  it('while touring, the right HUD button becomes Exit; tapping it zooms out + resets', async () => {
+    const card = await mountCard(ATT_CONFIG as any, attHass());
+    expect(hudRight(card).textContent).toContain('Lights control');
+    (card.shadowRoot!.querySelector('.attention-pill') as HTMLElement).click();
+    await (card as any).updateComplete;
+    expect((card as any)._attentionCycle).toBeGreaterThan(0); // tour running
+    expect(hudRight(card).textContent).toContain('Exit');
+    hudRight(card).click();
+    await (card as any).updateComplete;
+    expect((card as any)._attentionCycle).toBe(0);
+    expect((card as any)._focusedZone).toBeNull();
+    expect((card as any)._transform).toEqual({ scale: 1, panX: 0, panY: 0 });
+    expect(hudRight(card).textContent).toContain('Lights control'); // slot restored
+  });
+});
+
+describe('rc.2: press scale can never displace a marker', () => {
+  it('marker position lives in `translate`, transform carries ONLY the icon scale', async () => {
+    const card = await mountCard();
+    const m = marker(card);
+    // If position ever moves back into `transform`, the :active `scale`
+    // property would pre-multiply it and the chip lunges toward the origin.
+    expect(m.style.transform).toMatch(/^scale\([\d.]+\)$/);
+    expect(m.getAttribute('style')).toMatch(/translate:calc\([\d.-]+px - 50%\)/);
+  });
+});
+
 describe('F-5: a pass-through wheel cancels the armed single-tap timer', () => {
   it('scene tap armed, then plain wheel passes through → no stale zone focus', async () => {
     vi.useFakeTimers();
