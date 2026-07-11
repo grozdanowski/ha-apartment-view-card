@@ -845,6 +845,16 @@ export class ApartmentViewCard extends LitElement {
     this._clearAnimating();
     this._cancelHold();
     this._cancelSceneTap();
+    // A disconnect mid-gesture must not leak pointer state into the next
+    // mount (HA re-attaches cards when switching tabs): a leaked entry makes
+    // the first touch after reattach read size === 2 → phantom pinch, and a
+    // stuck is-gesturing keeps chips opaque with frozen labels (review F-3).
+    this._activePointers.clear();
+    this._pinchStartDist = 0;
+    this._lastMove = null;
+    this._tapHold.reset();
+    this._activeMarker = null;
+    this._unlatchGesture();
     this._ro?.disconnect();
     this._ro = undefined;
   }
@@ -1021,6 +1031,20 @@ export class ApartmentViewCard extends LitElement {
     opts: { snap?: boolean; onSettle?: () => void } = {},
   ): void {
     this._clearAnimating(); // restart cleanly if a move is already in flight
+    // Reduced motion (0ms tokens) and no-op moves produce no transition, so
+    // transitionend never fires and is-animating would park on the 640ms
+    // fallback — swallowing exit taps and flashing chips opaque (review F-4).
+    // Settle synchronously instead; onSettle still fires after the write.
+    const cur = this._transform;
+    if (
+      this._reducedMotion() ||
+      (cur.scale === t.scale && cur.panX === t.panX && cur.panY === t.panY)
+    ) {
+      this._transform = t;
+      const settled = opts.onSettle;
+      if (settled) requestAnimationFrame(() => settled());
+      return;
+    }
     this._animSnap = !!opts.snap;
     this._onSettleCb = opts.onSettle;
     this._isAnimating = true;
@@ -1313,11 +1337,18 @@ export class ApartmentViewCard extends LitElement {
         (this._transform.scale > 1 && this._focusedZone === null)
       )
     ) {
+      // Pass-through: the page is about to scroll under a possibly-armed
+      // single-tap timer — its stored client coords go stale, so the 250ms-
+      // late hit-test would resolve the wrong zone. Cancel it (review F-5).
+      this._cancelSceneTap();
       this._maybeShowWheelHint();
       return;
     }
     e.preventDefault();
     this._cancelSceneTap(); // a gated wheel zoom cancels a pending tap (F13)
+    // A wheel zoom is direct manipulation too: cancel any in-flight camera
+    // move so the write isn't eased through the 560ms curve (review F-2).
+    this._clearAnimating();
     // deltaMode 1 = lines (Firefox); normalize to px before the exp curve (F6).
     const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
     const r = this.getBoundingClientRect();
@@ -1353,8 +1384,18 @@ export class ApartmentViewCard extends LitElement {
     );
   }
 
-  private _onScenePointerDown = (e: PointerEvent) => {
-    if (e.button !== 0 && e.pointerType === 'mouse') return;
+  /**
+   * Shared pointer registration for scene AND marker pointerdowns. Returns
+   * true when this pointer became the second finger of a pinch — the
+   * pinch-begin branch must run regardless of which surface the second
+   * finger lands on (with 20+ chips covering the plan it often lands on a
+   * marker): otherwise the tap tracker is restarted for the second finger,
+   * pointermove feeds interleaved two-finger deltas through the single-
+   * pointer pan path (violent jitter instead of zoom), and a still
+   * two-finger press can release as outcome 'tap' with _activeMarker set —
+   * phantom device activation (spec §3: 2-finger anything → card owns it).
+   */
+  private _registerPointer(e: PointerEvent): boolean {
     this._cancelSceneTap(); // any new pointer cancels a pending single-tap (F13)
     this._activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (this._activePointers.size === 2) {
@@ -1363,12 +1404,20 @@ export class ApartmentViewCard extends LitElement {
       this._pinchStartDist = this._panZoom.pinchDistance(a.x, a.y, b.x, b.y);
       this._pinchStartScale = this._panZoom.transform.scale;
       this._cancelHold();
-      // A pinch is never a tap/hold: the pinch branch bypasses _tapHold.move,
-      // so without a reset the first finger's release could still classify
-      // 'tap' and fire a phantom scene tap / marker activation (spec P0-5).
+      // A pinch is never a tap/hold/marker gesture: the pinch branch bypasses
+      // _tapHold.move, so without a reset the first finger's release could
+      // still classify 'tap' and fire a phantom scene tap / marker
+      // activation (spec P0-5); _activeMarker must clear for the same reason.
       this._tapHold.reset();
-      return;
+      this._activeMarker = null;
+      return true;
     }
+    return false;
+  }
+
+  private _onScenePointerDown = (e: PointerEvent) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    if (this._registerPointer(e)) return;
     // single pointer: candidate tap/hold/pan on the SCENE (not a marker)
     this._activeMarker = null;
     this._beginGesture(e);
@@ -1377,8 +1426,7 @@ export class ApartmentViewCard extends LitElement {
   private _onMarkerPointerDown = (e: PointerEvent, m: MarkerView) => {
     e.stopPropagation();
     if (e.button !== 0 && e.pointerType === 'mouse') return;
-    this._cancelSceneTap(); // any new pointer cancels a pending single-tap (F13)
-    this._activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this._registerPointer(e)) return;
     this._activeMarker = m;
     this._beginGesture(e);
   };
@@ -1585,6 +1633,11 @@ export class ApartmentViewCard extends LitElement {
    */
   private _latchGesture(): void {
     if (this._isGesturing) return;
+    // The finger takes the glass: cancel any in-flight machine move NOW.
+    // Otherwise per-frame gesture writes are retargeted through the 560ms
+    // camera curve (rubber-lag, violating doctrine L2) and the fallback
+    // timer strips is-animating MID-DRAG — a visible snap under the finger.
+    this._clearAnimating();
     this._frozenLabels = new Map(
       this._lastViews.map((v) => [v.entity.entity, { text: v.labelText, anchor: v.labelAnchor }]),
     );
