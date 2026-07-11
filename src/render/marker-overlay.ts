@@ -206,9 +206,13 @@ export function renderMarkerOverlay(
   onPointerDown: (e: PointerEvent, m: MarkerView) => void,
   onActivate: (m: MarkerView) => void,
   pulse = false,
+  ready = true,
 ): TemplateResult {
   return html`
-    <div class="marker-overlay ${pulse ? 'pulse' : ''}" part="marker-overlay">
+    <div
+      class="marker-overlay ${pulse ? 'pulse' : ''} ${ready ? 'ready' : ''}"
+      part="marker-overlay"
+    >
       ${views.map((m) => {
         const style = [
           `left:${m.left}px`,

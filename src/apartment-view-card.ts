@@ -30,6 +30,17 @@ export class ApartmentViewCard extends LitElement {
   @property({ attribute: false }) public hass?: HassLike;
   @property({ attribute: false }) public config!: ApartmentViewConfig;
   @state() private _cardWidth = 600;
+  /**
+   * Base image aspect (naturalHeight / naturalWidth); null until the image
+   * loads. The overlay viewport height is DERIVED from this (width × aspect)
+   * because the image renders at `width:100%; height:auto` — marker math must
+   * never depend on wrapper-rect timing (the root cause of the marker drift
+   * on initial render / resize: the rect height was read once at render time
+   * and nothing re-rendered when the loaded image changed the wrapper height).
+   */
+  @state() private _imgAspect: number | null = null;
+  /** Markers stay hidden until image + geometry are ready, then fade in place. */
+  @state() private _revealed = false;
   @state() private _transform: ZoomTransform = { scale: 1, panX: 0, panY: 0 };
   @state() private _focusedZone: ZoneConfig | null = null;
   /** Entities currently driven by the control surface (empty = closed). */
@@ -65,6 +76,23 @@ export class ApartmentViewCard extends LitElement {
     css`
     :host {
       display: block;
+    }
+    /* The floorplan floats directly on the dashboard: no card chrome. */
+    ha-card {
+      background: none;
+      border: none;
+      box-shadow: none;
+    }
+    /* HUD row above the canvas (attention + lights control live here, never
+       overlaying the floorplan). */
+    .hud {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 2px 10px;
+    }
+    .hud-spacer {
+      flex: 1;
     }
     .wrapper {
       position: relative;
@@ -153,6 +181,17 @@ export class ApartmentViewCard extends LitElement {
       position: absolute;
       inset: 0;
       pointer-events: none; /* container transparent; buttons re-enable */
+      /* Hidden until image + geometry are ready, then fades in already in
+         place (positions are committed one frame before .ready flips). */
+      opacity: 0;
+      transition: opacity 0.45s ease;
+    }
+    .marker-overlay.ready {
+      opacity: 1;
+    }
+    .marker-overlay:not(.ready) .marker {
+      transition: none;
+      pointer-events: none;
     }
     .marker-overlay .marker {
       position: absolute;
@@ -312,10 +351,6 @@ export class ApartmentViewCard extends LitElement {
       50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--warning-color, #ffa600) 55%, transparent), 0 4px 14px rgba(0, 0, 0, 0.42); }
     }
     .attention-pill {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      z-index: 6;
       display: inline-flex;
       align-items: center;
       gap: 7px;
@@ -359,10 +394,6 @@ export class ApartmentViewCard extends LitElement {
       to { opacity: 0; scale: 4.5; }
     }
     .lights-control {
-      position: absolute;
-      top: 10px;
-      right: 10px;
-      z-index: 6;
       display: inline-flex;
       align-items: center;
       gap: 7px;
@@ -663,6 +694,15 @@ export class ApartmentViewCard extends LitElement {
     // Sync focus class on host so `:host(.is-focused)` CSS selector works.
     this.classList.toggle('is-focused', this._focusedZone !== null);
     this._syncAspect();
+    // Reveal choreography: this frame committed correct positions while the
+    // overlay is still hidden (and transition-suppressed); flip `ready` on the
+    // NEXT frame so markers fade in already in place instead of sliding from
+    // stale coordinates.
+    if (!this._revealed && this._imgAspect !== null) {
+      requestAnimationFrame(() => {
+        this._revealed = true;
+      });
+    }
   }
 
   /**
@@ -677,6 +717,9 @@ export class ApartmentViewCard extends LitElement {
     const apply = (): void => {
       if (img.naturalWidth > 0 && img.naturalHeight > 0) {
         this.style.setProperty('--av-aspect', `${img.naturalWidth} / ${img.naturalHeight}`);
+        // Reactive: marker positions derive their viewport height from this,
+        // so the load must trigger a re-render (Lit dedups unchanged values).
+        this._imgAspect = img.naturalHeight / img.naturalWidth;
       }
     };
     if (img.complete && img.naturalWidth > 0) {
@@ -692,14 +735,18 @@ export class ApartmentViewCard extends LitElement {
   // ---------------------------------------------------------------------------
 
   /**
-   * Returns the .wrapper / scene image-box size.
-   * width === this._cardWidth (same width passed to renderLightLayer and
-   * markerScreenPos so zoomToZone's clamp and marker mapping agree).
+   * Returns the scene image-box size. width === this._cardWidth (the same
+   * width passed to renderLightLayer and markerScreenPos so zoomToZone's
+   * clamp and marker mapping agree). Height is DERIVED (width × aspect):
+   * the image box is always `width / naturalAspect` because it renders at
+   * `width:100%; height:auto`, so this is exact regardless of when the
+   * wrapper's own rect settles — no live DOM reads, fully reactive.
    */
   private _viewport(): Viewport {
-    const wrapper = this.renderRoot?.querySelector('.wrapper') as HTMLElement | null;
-    const r = wrapper?.getBoundingClientRect();
-    return { width: this._cardWidth, height: r?.height ?? 0 };
+    return {
+      width: this._cardWidth,
+      height: this._cardWidth * (this._imgAspect ?? 9 / 16),
+    };
   }
 
   /** Apply zoomMax + freePanZoom gate whenever config changes. */
@@ -878,6 +925,9 @@ export class ApartmentViewCard extends LitElement {
     this._controlled = [];
     this._selectMode = false;
     this._floor = i;
+    // New floor image: hide markers until its aspect is known, then re-reveal.
+    this._revealed = false;
+    this._imgAspect = null;
     this._floorFading = true;
     clearTimeout(this._floorFadeTimer);
     this._floorFadeTimer = setTimeout(() => {
@@ -1057,6 +1107,29 @@ export class ApartmentViewCard extends LitElement {
 
     const floors = this.config.floors ?? [];
 
+    // HUD row above the canvas: attention pill (left) + lights control (right).
+    const attentionPill =
+      attentionCount > 0 && !this._selectMode
+        ? html`<button
+            class="attention-pill"
+            @click=${this._pulseAttention}
+            title="Locate items that need attention"
+          >
+            <ha-icon icon="mdi:alert-circle"></ha-icon>
+            <span>${attentionCount} need${attentionCount === 1 ? 's' : ''} attention</span>
+          </button>`
+        : nothing;
+    const lightsControl = this._hasLights()
+      ? html`<button
+          class="lights-control ${this._selectMode ? 'active' : ''}"
+          @click=${this._toggleSelectMode}
+          aria-pressed=${this._selectMode}
+        >
+          <ha-icon icon="mdi:tune-variant"></ha-icon>
+          <span>${this._selectMode ? 'Done' : 'Lights control'}</span>
+        </button>`
+      : nothing;
+
     return html`
       <ha-card>
         ${floors.length > 1
@@ -1073,6 +1146,13 @@ export class ApartmentViewCard extends LitElement {
               )}
             </div>`
           : nothing}
+        ${attentionPill !== nothing || lightsControl !== nothing
+          ? html`<div class="hud">
+              ${attentionPill}
+              <span class="hud-spacer"></span>
+              ${lightsControl}
+            </div>`
+          : nothing}
         <div class="wrapper" style="--av-icon-size:${iconSize}px">
           <div
             class="tilt"
@@ -1086,7 +1166,7 @@ export class ApartmentViewCard extends LitElement {
               <!-- base-layer + light-layer come from Phase 2 render functions -->
               ${this._renderScene()}
             </div>
-            ${renderMarkerOverlay(views, this._onMarkerPointerDown, this._onMarkerActivate, this._pulse)}
+            ${renderMarkerOverlay(views, this._onMarkerPointerDown, this._onMarkerActivate, this._pulse, this._revealed)}
             ${this._ripples.length
               ? html`<div class="ripple-layer">
                   ${repeat(
@@ -1097,26 +1177,6 @@ export class ApartmentViewCard extends LitElement {
                 </div>`
               : nothing}
           </div>
-          ${attentionCount > 0 && !this._selectMode
-            ? html`<button
-                class="attention-pill"
-                @click=${this._pulseAttention}
-                title="Locate items that need attention"
-              >
-                <ha-icon icon="mdi:alert-circle"></ha-icon>
-                <span>${attentionCount} need${attentionCount === 1 ? 's' : ''} attention</span>
-              </button>`
-            : nothing}
-          ${this._hasLights()
-            ? html`<button
-                class="lights-control ${this._selectMode ? 'active' : ''}"
-                @click=${this._toggleSelectMode}
-                aria-pressed=${this._selectMode}
-              >
-                <ha-icon icon="mdi:tune-variant"></ha-icon>
-                <span>${this._selectMode ? 'Done' : 'Lights control'}</span>
-              </button>`
-            : nothing}
           ${this._renderQuickActions()}
         </div>
         <div class="zone-controls" role="toolbar" aria-label="Zones">
