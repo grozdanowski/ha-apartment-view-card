@@ -53,6 +53,10 @@ const SNAP_MS = 320;
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_RADIUS_PX = 24;
 const SINGLE_TAP_MS = 250;
+/** Idle gap after the last gated wheel event before the gesture unlatches:
+ * long enough to span a ~60-120Hz trackpad-pinch stream, short enough that a
+ * single discrete notch unlatches invisibly (spec L7 / P0-2). */
+const WHEEL_IDLE_MS = 160;
 
 /** Camera scale for a zoneless attention marker (spec P0-6 / F16). */
 const ATTENTION_ZOOM = 1.35;
@@ -176,6 +180,10 @@ export class ApartmentViewCard extends LitElement {
   private _onSettleCb?: () => void;
   /** Pending single-tap commit (the double-tap window, spec P0-5). */
   private _sceneTapTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Idle timer that unlatches the gesture after a gated-wheel stream stops
+   * (trackpad pinch / kiosk plain-wheel arrive as a sustained ctrl-wheel
+   * stream; the whole stream must share one latch — spec L7 / P0-2). */
+  private _wheelIdleTimer: ReturnType<typeof setTimeout> | null = null;
   /** Previous scene tap (client coords + timestamp) for double-tap detection. */
   private _lastSceneTap: { x: number; y: number; t: number } | null = null;
 
@@ -891,6 +899,7 @@ export class ApartmentViewCard extends LitElement {
     this._clearAnimating();
     this._cancelHold();
     this._cancelSceneTap();
+    this._cancelWheelIdle();
     // A disconnect mid-gesture must not leak pointer state into the next
     // mount (HA re-attaches cards when switching tabs): a leaked entry makes
     // the first touch after reattach read size === 2 → phantom pinch, and a
@@ -1397,6 +1406,15 @@ export class ApartmentViewCard extends LitElement {
     // A wheel zoom is direct manipulation too: cancel any in-flight camera
     // move so the write isn't eased through the 560ms curve (review F-2).
     this._clearAnimating();
+    // Latch the gesture engine for the whole gated-wheel stream (spec L7):
+    // trackpad pinch and kiosk plain-wheel arrive as a ~60-120Hz ctrl-wheel
+    // stream, so without latching, computeMarkerViews runs UN-frozen (fresh
+    // Intl.NumberFormat + O(n²) label cull per event) and 20+ frosted markers
+    // keep backdrop-filter blur live under a transforming scene. _latchGesture
+    // is a no-op if a pointer gesture already latched (its unlatch wins). A
+    // wheel-idle timeout unlatches ~160ms after the last gated wheel event; a
+    // single discrete notch unlatches invisibly.
+    this._armWheelIdle();
     // deltaMode 1 = lines (Firefox); normalize to px before the exp curve (F6).
     const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
     // Anchor on the CANVAS rect, not the host (host includes the HUD row —
@@ -1410,6 +1428,33 @@ export class ApartmentViewCard extends LitElement {
       e.clientY - r.top
     );
   };
+
+  /**
+   * Latch the gesture engine (frozen labels + is-gesturing) for a gated-wheel
+   * stream and (re)arm the idle timeout that unlatches it. Each gated wheel
+   * event refreshes the timer, so the whole ~60-120Hz ctrl-wheel stream shares
+   * one latch; ~160ms after the last event it unlatches. Idempotent latch —
+   * a pointer gesture already in flight owns the latch, and the idle callback
+   * defers to it (never unlatches while pointers are down, so it can't
+   * double-unlatch or steal the pointer path's latch).
+   */
+  private _armWheelIdle(): void {
+    this._latchGesture();
+    if (this._wheelIdleTimer !== null) clearTimeout(this._wheelIdleTimer);
+    this._wheelIdleTimer = setTimeout(() => {
+      this._wheelIdleTimer = null;
+      // A pointer gesture may have started mid-stream; its latch/unlatch wins.
+      if (this._activePointers.size === 0) this._unlatchGesture();
+    }, WHEEL_IDLE_MS);
+  }
+
+  /** Cancel a pending wheel-idle unlatch (disconnect / pointer takeover). */
+  private _cancelWheelIdle(): void {
+    if (this._wheelIdleTimer !== null) {
+      clearTimeout(this._wheelIdleTimer);
+      this._wheelIdleTimer = null;
+    }
+  }
 
   /**
    * One-shot hint when a plain wheel passes through at overview (modifier
@@ -1668,6 +1713,9 @@ export class ApartmentViewCard extends LitElement {
   }
 
   private _beginGesture(e: PointerEvent) {
+    // A pointer stream takes over the latch lifecycle: drop any pending
+    // wheel-idle unlatch so it can't fire mid-drag or double-unlatch.
+    this._cancelWheelIdle();
     this._tapHold.start(e.clientX, e.clientY, performance.now());
     this._holdFired = false;
     this._cancelHold();

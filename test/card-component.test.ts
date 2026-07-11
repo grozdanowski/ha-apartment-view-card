@@ -528,6 +528,116 @@ describe('card-component: wheel gate + touch-action (P0-3)', () => {
     expect((lineCard as any)._transform.scale).toBeGreaterThan(1);
   });
 
+  it('a gated-wheel stream latches the gesture engine once and holds it across the stream (spec L7)', async () => {
+    vi.useFakeTimers();
+    try {
+      const card = await mountCard();
+      // First gated wheel event latches is-gesturing + freezes labels.
+      (card as any)._onWheel(wheelEvent({ deltaY: -100, ctrlKey: true }));
+      expect((card as any)._isGesturing).toBe(true);
+      const snapshot = (card as any)._frozenLabels;
+      expect(snapshot).not.toBeNull();
+
+      // A sustained ~60-120Hz ctrl-wheel stream (trackpad pinch): each event
+      // stays latched and REUSES the pre-zoom snapshot — the frozen Map is not
+      // rebuilt per event (that is what freezes the O(n²) cull + Intl.format).
+      for (let i = 0; i < 8; i++) {
+        vi.advanceTimersByTime(20); // faster than the 160ms idle gap
+        (card as any)._onWheel(wheelEvent({ deltaY: -100, ctrlKey: true }));
+        expect((card as any)._isGesturing).toBe(true);
+        expect((card as any)._frozenLabels).toBe(snapshot); // same object
+      }
+
+      // Idle: after the last gated wheel event, ~160ms later it unlatches.
+      vi.advanceTimersByTime(200);
+      expect((card as any)._isGesturing).toBe(false);
+      expect((card as any)._frozenLabels).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the frozen snapshot is actually passed to computeMarkerViews during the stream (labels do not reformat mid-zoom)', async () => {
+    vi.useFakeTimers();
+    try {
+      const hass = createMockHass();
+      // A sensor whose value label would reformat every event if un-frozen.
+      const config = {
+        ...BASE_CONFIG,
+        entities: [
+          {
+            entity: 'sensor.temp',
+            x: 40,
+            y: 40,
+            label: { source: 'sensor', visibility: 'always' },
+          },
+        ],
+      };
+      (hass as any).states['sensor.temp'] = {
+        entity_id: 'sensor.temp',
+        state: '20.0',
+        attributes: { unit_of_measurement: '°C', friendly_name: 'Temp' },
+      };
+      const card = await mountCard(config as any, hass);
+      const labelText = () =>
+        card.shadowRoot!.querySelector('.marker-label')?.textContent?.trim() ?? '';
+      expect(labelText()).toContain('20');
+
+      // Latch via a gated wheel event, then mutate the underlying value.
+      (card as any)._onWheel(wheelEvent({ deltaY: -100, ctrlKey: true }));
+      expect((card as any)._isGesturing).toBe(true);
+      (hass as any).states['sensor.temp'] = {
+        ...(hass as any).states['sensor.temp'],
+        state: '99.9',
+      };
+      card.hass = { ...(hass as any) };
+      await (card as any).updateComplete;
+      // Frozen: the pre-zoom text stays, the new value does NOT reformat in.
+      expect(labelText()).toContain('20');
+      expect(labelText()).not.toContain('99');
+
+      // After the idle unlatch, labels re-resolve to the live value.
+      vi.advanceTimersByTime(200);
+      await (card as any).updateComplete;
+      expect(labelText()).toContain('99');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a pointer gesture starting mid-wheel-stream owns the latch: the wheel-idle timer never double-unlatches it', async () => {
+    vi.useFakeTimers();
+    try {
+      const card = await mountCard();
+      (card as any)._onWheel(wheelEvent({ deltaY: -100, ctrlKey: true }));
+      expect((card as any)._isGesturing).toBe(true);
+
+      // A pointer stream takes over before the idle gap elapses.
+      const scene = card.shadowRoot!.querySelector('.scene') as HTMLElement;
+      const c = { pointerId: 77, button: 0, pointerType: 'touch' };
+      scene.dispatchEvent(
+        new PointerEvent('pointerdown', { ...c, clientX: 100, clientY: 100, bubbles: true }),
+      );
+      window.dispatchEvent(
+        new PointerEvent('pointermove', { ...c, clientX: 140, clientY: 100, bubbles: true }),
+      );
+      expect((card as any)._isGesturing).toBe(true);
+
+      // The (cancelled) wheel-idle window passes; the pointer still owns the latch.
+      vi.advanceTimersByTime(300);
+      expect((card as any)._isGesturing).toBe(true);
+
+      // Only the pointerup unlatches.
+      window.dispatchEvent(
+        new PointerEvent('pointerup', { ...c, clientX: 140, clientY: 100, bubbles: true }),
+      );
+      await (card as any).updateComplete;
+      expect((card as any)._isGesturing).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('touch-action is three-state: pan-y at overview, none free-zoomed, pan-y focused', async () => {
     const card = await mountCard({
       ...BASE_CONFIG,
