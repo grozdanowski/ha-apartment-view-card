@@ -276,6 +276,63 @@ describe('card-component: pointercancel aborts the gesture (P0-0)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Focused-zone interactions (spec P0-1): markers stay live, pointers don't leak
+// ---------------------------------------------------------------------------
+
+describe('card-component: focused zone interactions (P0-1)', () => {
+  const ZONED_CONFIG = {
+    ...BASE_CONFIG,
+    zones: [
+      { name: 'Kitchen', x: 10, y: 20, width: 40, height: 40 },
+      { name: 'Living', x: 55, y: 40, width: 40, height: 40 },
+    ],
+  };
+
+  it('tapping a marker while a zone is focused opens the control surface', async () => {
+    const hass = createMockHass();
+    const card = await mountCard(ZONED_CONFIG as any, hass);
+    (card as any)._focusZone((card as any)._floorData.zones[0]);
+    await (card as any).updateComplete;
+
+    const marker = card.shadowRoot!.querySelector('.marker-overlay .marker') as HTMLElement;
+    const c = { clientX: 50, clientY: 50, pointerId: 31, button: 0, pointerType: 'touch' };
+    marker.dispatchEvent(new PointerEvent('pointerdown', { ...c, bubbles: true }));
+    window.dispatchEvent(new PointerEvent('pointerup', { ...c, bubbles: true }));
+    await (card as any).updateComplete;
+
+    const surface = card.shadowRoot!.querySelector('av-control-surface') as any;
+    expect(surface).toBeTruthy();
+    expect(surface.entityIds).toEqual(['light.kitchen_ceiling']);
+    expect(hass.serviceCalls.length).toBe(0);
+  });
+
+  it('does not leak _activePointers across focus transitions (no phantom pinch)', async () => {
+    const card = await mountCard(ZONED_CONFIG as any);
+    (card as any)._focusZone((card as any)._floorData.zones[0]);
+    await (card as any).updateComplete;
+
+    // A pointer released while focused must be unregistered (the old blanket
+    // guard swallowed this pointerup and leaked the entry).
+    const marker = card.shadowRoot!.querySelector('.marker-overlay .marker') as HTMLElement;
+    const c = { clientX: 50, clientY: 50, pointerId: 41, button: 0, pointerType: 'touch' };
+    marker.dispatchEvent(new PointerEvent('pointerdown', { ...c, bubbles: true }));
+    window.dispatchEvent(new PointerEvent('pointerup', { ...c, bubbles: true }));
+    expect((card as any)._activePointers.size).toBe(0);
+
+    (card as any)._exitFocus();
+    await (card as any).updateComplete;
+
+    // The next single touch is one pointer — not the second leg of a pinch.
+    const scene = card.shadowRoot!.querySelector('.scene') as HTMLElement;
+    const d = { clientX: 60, clientY: 60, pointerId: 42, button: 0, pointerType: 'touch' };
+    scene.dispatchEvent(new PointerEvent('pointerdown', { ...d, bubbles: true }));
+    expect((card as any)._activePointers.size).toBe(1);
+    expect((card as any)._pinchStartDist).toBe(0);
+    window.dispatchEvent(new PointerEvent('pointerup', { ...d, bubbles: true }));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Test 4: Light-overlay opacity matches the glow formula
 // ---------------------------------------------------------------------------
 

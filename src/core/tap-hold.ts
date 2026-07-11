@@ -32,6 +32,11 @@ export class TapHoldTracker {
     this.moved = false;
   }
 
+  /** Gesture-start coordinates + timestamp (ms), for swipe classification. */
+  get startPoint(): { x: number; y: number; t: number } {
+    return { x: this.startX, y: this.startY, t: this.startT };
+  }
+
   /** Returns whether the (latched) move threshold has been exceeded. */
   move(x: number, y: number): { exceededThreshold: boolean } {
     if (!this.active) return { exceededThreshold: this.moved };

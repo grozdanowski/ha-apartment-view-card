@@ -21,6 +21,10 @@ import { entityInFocusedZone } from './render/zone-focus';
 import './render/control-surface';
 import { controlKind, controlTarget } from './core/entity-capabilities';
 
+/** Room-swipe recognition while focused (spec P0-1): min horizontal travel + max duration. */
+const SWIPE_MIN_PX = 56;
+const SWIPE_MAX_MS = 350;
+
 @customElement('apartment-view-card')
 export class ApartmentViewCard extends LitElement {
   // MIGRATION (v1 -> v2): v1 used ad-hoc `_scale` (clamped 0.5..3) + `_position`
@@ -775,6 +779,28 @@ export class ApartmentViewCard extends LitElement {
     this._panZoom.setEnabled(this.config.options.freePanZoom);
   }
 
+  /** Zones ordered left-to-right (center-x, ties by center-y) for room swipe. */
+  private _zonesByCenterX(): ZoneConfig[] {
+    return [...this._floorData.zones].sort(
+      (a, b) =>
+        a.x + a.width / 2 - (b.x + b.width / 2) ||
+        a.y + a.height / 2 - (b.y + b.height / 2),
+    );
+  }
+
+  /**
+   * Room swipe (spec P0-1): swipe left pages to the next zone by center-x,
+   * swipe right to the previous. Clamped at the ends — no wrap.
+   */
+  private _swipeToNeighborZone(dx: number): void {
+    if (this._focusedZone === null) return;
+    const ordered = this._zonesByCenterX();
+    const i = ordered.indexOf(this._focusedZone);
+    if (i < 0) return;
+    const j = Math.min(ordered.length - 1, Math.max(0, i + (dx < 0 ? 1 : -1)));
+    if (j !== i) this._focusZone(ordered[j]);
+  }
+
   private _onZoneChip(chip: ZoneChip): void {
     if (chip.kind === 'back') {
       this._exitFocus();
@@ -817,7 +843,6 @@ export class ApartmentViewCard extends LitElement {
   };
 
   private _onScenePointerDown = (e: PointerEvent) => {
-    if (this._focusedZone !== null) return;
     if (e.button !== 0 && e.pointerType === 'mouse') return;
     this._activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (this._activePointers.size === 2) {
@@ -984,11 +1009,14 @@ export class ApartmentViewCard extends LitElement {
   }
 
   private _onWindowPointerMove = (e: PointerEvent) => {
-    if (this._focusedZone !== null) return;
     if (!this._activePointers.has(e.pointerId)) return;
     this._activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
     if (this._activePointers.size >= 2 && this._pinchStartDist > 0) {
+      // Focused: the controller is disabled AND its internal transform is not
+      // the zone camera — writing its return value back would clobber the
+      // focused view, so skip the pinch math entirely (spec P0-1).
+      if (this._focusedZone !== null) return;
       const [a, b] = [...this._activePointers.values()];
       const dist = this._panZoom.pinchDistance(a.x, a.y, b.x, b.y);
       if (Math.abs(dist - this._pinchStartDist) <= MOVE_THRESHOLD_PX) return; // below per-gesture threshold
@@ -1009,27 +1037,43 @@ export class ApartmentViewCard extends LitElement {
     const moved = this._tapHold.move(e.clientX, e.clientY);
     if (moved.exceededThreshold) {
       this._cancelHold();
-      // pan: translate by the per-event delta
-      const prev = this._lastMove ?? { x: e.clientX, y: e.clientY };
-      this._transform = this._panZoom.panBy(e.clientX - prev.x, e.clientY - prev.y);
+      // pan: translate by the per-event delta. While focused the movement only
+      // feeds swipe classification — never the (disabled) pan controller.
+      if (this._focusedZone === null) {
+        const prev = this._lastMove ?? { x: e.clientX, y: e.clientY };
+        this._transform = this._panZoom.panBy(e.clientX - prev.x, e.clientY - prev.y);
+      }
     }
     this._lastMove = { x: e.clientX, y: e.clientY };
   };
 
   private _onWindowPointerUp = (e: PointerEvent) => {
-    if (this._focusedZone !== null) return;
     if (!this._activePointers.has(e.pointerId)) return;
     this._activePointers.delete(e.pointerId);
     this._lastMove = null;
     if (this._activePointers.size < 2) this._pinchStartDist = 0;
 
-    const outcome = this._tapHold.end(performance.now());
+    const start = this._tapHold.startPoint;
+    const now = performance.now();
+    const outcome = this._tapHold.end(now);
     this._cancelHold();
     if (outcome === 'tap' && this._activeMarker && this.hass) {
       this._activateEntity(this._activeMarker.entity);
     } else if (outcome === 'hold' && this._activeMarker && !this._holdFired) {
       // hold timer didn't fire (e.g. test/no-timer path) but release is late
       dispatchHoldAction(this._activeMarker.entity, this);
+    } else if (outcome === 'drag' && this._focusedZone !== null && this._activeMarker === null) {
+      // Room swipe (spec P0-1): a fast, mostly-horizontal scene drag while
+      // focused pages to the neighbouring zone; vertical drags do nothing.
+      const dx = e.clientX - start.x;
+      const dy = e.clientY - start.y;
+      if (
+        Math.abs(dx) > SWIPE_MIN_PX &&
+        Math.abs(dx) > 2 * Math.abs(dy) &&
+        now - start.t < SWIPE_MAX_MS
+      ) {
+        this._swipeToNeighborZone(dx);
+      }
     }
     this._activeMarker = null;
   };

@@ -83,3 +83,63 @@ describe('ApartmentViewCard zone focus state machine', () => {
     expect((card as any)._transform).toEqual(before);
   });
 });
+
+describe('ApartmentViewCard room swipe while focused (P0-1)', () => {
+  let card: ApartmentViewCard;
+  beforeEach(() => {
+    card = makeCard();
+  });
+
+  // Drive the pointer handlers directly (the card is not mounted here, so
+  // window listeners are not attached — same pattern as _onWheel above).
+  const down = (x: number, y: number, id = 1) =>
+    (card as any)._onScenePointerDown(
+      new PointerEvent('pointerdown', { pointerId: id, clientX: x, clientY: y, button: 0 }),
+    );
+  const move = (x: number, y: number, id = 1) =>
+    (card as any)._onWindowPointerMove(
+      new PointerEvent('pointermove', { pointerId: id, clientX: x, clientY: y }),
+    );
+  const up = (x: number, y: number, id = 1) =>
+    (card as any)._onWindowPointerUp(
+      new PointerEvent('pointerup', { pointerId: id, clientX: x, clientY: y }),
+    );
+
+  it('a fast horizontal swipe left advances to the next zone by center-x', () => {
+    (card as any)._focusZone(kitchen); // center-x 15 → next by center-x is living (50)
+    down(400, 300);
+    move(300, 310); // dx -100 (>56), dy 10 → mostly horizontal
+    up(300, 310);
+    expect((card as any)._focusedZone).toBe(living);
+  });
+
+  it('swipe right goes to the previous zone and clamps at the ends (no wrap)', () => {
+    (card as any)._focusZone(living);
+    down(300, 300);
+    move(400, 290);
+    up(400, 290);
+    expect((card as any)._focusedZone).toBe(kitchen);
+    // kitchen is leftmost — a further swipe right stays put.
+    down(300, 300, 2);
+    move(400, 290, 2);
+    up(400, 290, 2);
+    expect((card as any)._focusedZone).toBe(kitchen);
+  });
+
+  it('a vertical drag while focused does not change the zone', () => {
+    (card as any)._focusZone(kitchen);
+    down(400, 300);
+    move(395, 420); // dy 120 dominates → not a room swipe
+    up(395, 420);
+    expect((card as any)._focusedZone).toBe(kitchen);
+  });
+
+  it('a drag while focused never clobbers the zone transform', () => {
+    (card as any)._focusZone(kitchen);
+    const before = { ...(card as any)._transform };
+    down(400, 300);
+    move(395, 420);
+    up(395, 420);
+    expect((card as any)._transform).toEqual(before);
+  });
+});
