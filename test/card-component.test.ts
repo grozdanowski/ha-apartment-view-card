@@ -856,7 +856,8 @@ describe('card-component: attention pill takes you there (P0-6)', () => {
 
   it('tapping the pill focuses the first attention item\'s zone and counts the tour', async () => {
     const card = await mountCard(ATT_CONFIG as any, attHass());
-    expect(pill(card).getAttribute('aria-label')).toBe('Go to item needing attention');
+    // Dynamic label (review a11y fix): carries the live count, not a static string.
+    expect(pill(card).getAttribute('aria-label')).toBe('2 need attention — go to the next one');
     pill(card).click();
     await (card as any).updateComplete;
     expect((card as any)._focusedZone?.name).toBe('Hall');

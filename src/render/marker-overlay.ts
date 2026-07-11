@@ -279,8 +279,8 @@ export function renderMarkerOverlay(
             title=${m.label}
             aria-label=${ariaLabel}
             aria-pressed=${ifDefined(pressed)}
-            tabindex=${interactive ? '0' : '-1'}
-            aria-hidden=${ifDefined(interactive ? undefined : 'true')}
+            tabindex=${ready && interactive ? '0' : '-1'}
+            aria-hidden=${ifDefined(ready && interactive ? undefined : 'true')}
             style=${style}
             @pointerdown=${(e: PointerEvent) => onPointerDown(e, m)}
             @click=${(e: MouseEvent) => {

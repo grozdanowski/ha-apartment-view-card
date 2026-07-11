@@ -539,7 +539,16 @@ export class ApartmentViewCard extends LitElement {
       0%, 100% { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.42), inset 0 0 0 1px rgba(255, 255, 255, 0.14); }
       50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--warning-color, #ffa600) 55%, transparent), 0 4px 14px rgba(0, 0, 0, 0.42); }
     }
+    /* 34px visual height; the ::after inset extends the effective hit target
+       to 44px (a11y guardrail) without changing the calm HUD look. */
+    .attention-pill::after,
+    .lights-control::after {
+      content: '';
+      position: absolute;
+      inset: -5px;
+    }
     .attention-pill {
+      position: relative;
       display: inline-flex;
       align-items: center;
       gap: 7px;
@@ -615,6 +624,7 @@ export class ApartmentViewCard extends LitElement {
       to { opacity: 0; scale: 4.5; }
     }
     .lights-control {
+      position: relative;
       display: inline-flex;
       align-items: center;
       gap: 7px;
@@ -1351,7 +1361,11 @@ export class ApartmentViewCard extends LitElement {
     this._clearAnimating();
     // deltaMode 1 = lines (Firefox); normalize to px before the exp curve (F6).
     const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-    const r = this.getBoundingClientRect();
+    // Anchor on the CANVAS rect, not the host (host includes the HUD row —
+    // anchoring there zooms toward a point ~44px below the cursor).
+    const r =
+      (this.renderRoot?.querySelector('.wrapper') as HTMLElement | null)?.getBoundingClientRect() ??
+      this.getBoundingClientRect();
     this._transform = this._panZoom.wheelZoom(
       dy,
       e.clientX - r.left,
@@ -1665,7 +1679,12 @@ export class ApartmentViewCard extends LitElement {
       if (Math.abs(dist - this._pinchStartDist) <= MOVE_THRESHOLD_PX) return; // below per-gesture threshold
       this._latchGesture();
       const factor = dist / this._pinchStartDist;
-      const r = this.getBoundingClientRect();
+      // Anchor on the CANVAS rect, not the host: the host includes the HUD
+      // row (and floor tabs) above the wrapper, which would shift the pinch
+      // anchor down by their height (review: anchor-offset finding).
+      const r =
+        (this.renderRoot?.querySelector('.wrapper') as HTMLElement | null)?.getBoundingClientRect() ??
+        this.getBoundingClientRect();
       const cx = (a.x + b.x) / 2 - r.left;
       const cy = (a.y + b.y) / 2 - r.top;
       // apply relative to the pinch-start scale
@@ -1896,7 +1915,7 @@ export class ApartmentViewCard extends LitElement {
         ? html`<button
             class="attention-pill"
             @click=${this._goToAttention}
-            aria-label="Go to item needing attention"
+            aria-label="${attentionCount} need${attentionCount === 1 ? 's' : ''} attention — go to the next one"
             title="Go to the next item that needs attention"
           >
             <ha-icon icon="mdi:alert-circle"></ha-icon>
