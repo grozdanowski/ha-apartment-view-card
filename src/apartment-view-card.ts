@@ -1326,8 +1326,26 @@ export class ApartmentViewCard extends LitElement {
     }
   }
 
+  /**
+   * True when a Home Assistant dialog is topmost (a hold-opened more-info, or
+   * any other dashboard dialog). HA renders these as `ha-dialog[open]` inside
+   * the `home-assistant` element's shadow root (`ha-more-info-dialog` wraps its
+   * own `ha-dialog`), so a single `ha-dialog[open]` query catches all of them.
+   */
+  private _hasOpenHaDialog(): boolean {
+    const root = document.querySelector('home-assistant')?.shadowRoot;
+    return !!root?.querySelector('ha-dialog[open]');
+  }
+
   private _handleKeyDown = (e: KeyboardEvent): void => {
     if (e.key !== 'Escape') return;
+    // F10: Escape is a no-op when a HA dialog is topmost and the keystroke did
+    // not originate inside this card. The card's hold gesture opens a native
+    // more-info dialog; pressing Escape to close THAT dialog (or one from any
+    // other dashboard card) must not tear down card state behind it. The
+    // window listener stays (Esc must work after a click moved focus away),
+    // but is scoped to the host via composedPath when a dialog is open.
+    if (!e.composedPath().includes(this) && this._hasOpenHaDialog()) return;
     this._cancelSceneTap(); // Escape aborts a pending scene tap (F13)
     this._attentionCycle = 0; // …and ends the attention tour (P0-6)
     if (this._quickOpen) {

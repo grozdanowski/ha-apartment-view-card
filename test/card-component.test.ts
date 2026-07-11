@@ -661,6 +661,74 @@ describe('card-component: wheel gate + touch-action (P0-3)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Escape is a no-op under an open HA dialog (spec §3 / F10 / §8.10)
+// ---------------------------------------------------------------------------
+
+describe('card-component: Escape scoped to host under an HA dialog (F10)', () => {
+  const ZONED = {
+    ...BASE_CONFIG,
+    zones: [{ name: 'Kitchen', x: 10, y: 20, width: 40, height: 40 }],
+  };
+
+  /** Simulate HA's more-info: a <home-assistant> with an open ha-dialog in
+   * its shadow root. Returns a teardown fn. */
+  function openHaDialog(): () => void {
+    const ha = document.createElement('home-assistant');
+    const root = ha.attachShadow({ mode: 'open' });
+    const dialog = document.createElement('ha-dialog');
+    dialog.setAttribute('open', '');
+    root.appendChild(dialog);
+    document.body.appendChild(ha);
+    return () => ha.remove();
+  }
+
+  it('Escape with an open HA dialog + event path NOT including the card leaves card state unchanged', async () => {
+    const card = await mountCard(ZONED as any);
+    (card as any)._focusZone((card as any)._floorData.zones[0]);
+    await (card as any).updateComplete;
+    expect((card as any)._focusedZone).not.toBeNull();
+
+    const teardown = openHaDialog();
+    try {
+      // A window-dispatched Escape (composedPath omits the card).
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      await (card as any).updateComplete;
+      // The focused zone stays — Escape belonged to the HA dialog on top.
+      expect((card as any)._focusedZone).not.toBeNull();
+    } finally {
+      teardown();
+    }
+  });
+
+  it('Escape originating in-card (path includes host) still exits even with a dialog open', async () => {
+    const card = await mountCard(ZONED as any);
+    (card as any)._focusZone((card as any)._floorData.zones[0]);
+    await (card as any).updateComplete;
+
+    const teardown = openHaDialog();
+    try {
+      // composedPath includes the card → the in-card Escape ladder runs.
+      const e = new KeyboardEvent('keydown', { key: 'Escape' });
+      Object.defineProperty(e, 'composedPath', { value: () => [card, window] });
+      (card as any)._handleKeyDown(e);
+      await (card as any).updateComplete;
+      expect((card as any)._focusedZone).toBeNull();
+    } finally {
+      teardown();
+    }
+  });
+
+  it('Escape with no dialog open exits as before (existing zone-focus behavior preserved)', async () => {
+    const card = await mountCard(ZONED as any);
+    (card as any)._focusZone((card as any)._floorData.zones[0]);
+    await (card as any).updateComplete;
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await (card as any).updateComplete;
+    expect((card as any)._focusedZone).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Pan release: rubber-band snap-back + snap-to-fit (spec P0-4)
 // ---------------------------------------------------------------------------
 
