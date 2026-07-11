@@ -68,6 +68,15 @@ export interface CardOptions {
    *  values above when unset, so a single number stays valid. */
   iconSizeMobile?: number;
   iconSizeMaxMobile?: number;
+  /** Mobile-screen floorplan frame aspect (width/height), applied only under
+   *  the mobile breakpoint. A wide floorplan renders as a short box at
+   *  width:100%; a taller frame (default 1/1 = square) gives the plan real
+   *  vertical space — the floorplan is scaled to fill the taller box
+   *  (fit-to-height, horizontally centered), never letterboxed. Accepts a
+   *  "w/h" string ("1/1", "4/5", "3/4") or a bare number; stored as the
+   *  numeric width/height ratio. Markers stay pinned (the whole floorplan +
+   *  overlay scale as one unit; viewport math is unchanged). */
+  aspectMobile: number;
   /** A weather.* entity to drive a subtle ambient tint over the floorplan. */
   weatherEntity?: string;
   /** Input-behavior toggles (spec v2.5 §7). */
@@ -256,6 +265,26 @@ function normalizeInteraction(raw: any): InteractionOptions {
   };
 }
 
+/**
+ * Parse a floorplan frame aspect into a numeric width/height ratio.
+ * Accepts "w/h" strings ("1/1", "4/5", "3/4"), "w:h", or a bare positive
+ * number. Falls back to 1 (square) for anything invalid or non-positive.
+ */
+function parseAspect(value: unknown, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  if (typeof value === 'string') {
+    const m = /^\s*([\d.]+)\s*[/:]\s*([\d.]+)\s*$/.exec(value);
+    if (m) {
+      const w = parseFloat(m[1]);
+      const h = parseFloat(m[2]);
+      if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) return w / h;
+    }
+    const n = parseFloat(value);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return fallback;
+}
+
 function normalizeOptions(raw: any): CardOptions {
   const o = raw?.options ?? {};
   return {
@@ -276,6 +305,7 @@ function normalizeOptions(raw: any): CardOptions {
     ...(typeof o.iconSizeMaxMobile === 'number' && o.iconSizeMaxMobile > 0
       ? { iconSizeMaxMobile: o.iconSizeMaxMobile }
       : {}),
+    aspectMobile: parseAspect(o.aspectMobile, 1),
     interaction: normalizeInteraction(o.interaction),
     idleTimeout:
       typeof o.idleTimeout === 'number' &&

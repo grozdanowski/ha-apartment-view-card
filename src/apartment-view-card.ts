@@ -242,6 +242,25 @@ export class ApartmentViewCard extends LitElement {
       perspective: 1300px;
       perspective-origin: 50% 44%;
     }
+    /* Mobile taller-frame (Fix 3 / options.aspectMobile). Wraps the tilt (scene
+       + marker overlay) as ONE body; a wide floorplan renders short at
+       width:100%, so on phones we grow the whole floorplan to fill a taller
+       wrapper (fit-to-height, horizontally centered). The scale rides this
+       element so scene and overlay scale in lockstep — _viewport() and every
+       marker coordinate are unchanged, so markers can't drift. Scale from the
+       TOP-CENTER: the image is top-anchored, so it grows downward to fill the
+       height and stays horizontally centered; the sides overflow (clipped by
+       the wrapper) and pan reveals them. */
+    .frame {
+      position: absolute;
+      inset: 0;
+      transform-origin: 50% 0;
+      transform-style: preserve-3d;
+    }
+    .wrapper.is-animating .frame {
+      /* the frame scale is static per breakpoint; never animate it */
+      transition: none;
+    }
     /* Tilts the scene + marker overlay together on zone focus (they stay aligned;
        markers remain crisp). The Lights-control button sits outside, staying flat. */
     .tilt {
@@ -971,6 +990,30 @@ export class ApartmentViewCard extends LitElement {
       iconSize: (mobile && o.iconSizeMobile) || o.iconSize,
       iconSizeMax: (mobile && o.iconSizeMaxMobile) || o.iconSizeMax,
     };
+  }
+
+  /**
+   * Mobile floorplan frame (Fix 3 / options.aspectMobile). A wide plan renders
+   * as a short box at width:100%; on phones we give it a taller frame (default
+   * 1/1 square) and scale the WHOLE floorplan — base image, scene, marker
+   * overlay — up to fill it (fit-to-height, horizontally centered). Because the
+   * scale rides a `.frame` element wrapping both the scene and the overlay, the
+   * two scale as one body: `_viewport()` (and therefore every marker/zoom
+   * coordinate) is UNCHANGED, so markers can't drift — they scale in lockstep
+   * with the image they sit on.
+   *
+   * `aspect` = the wrapper's w/h ratio (drives CSS `aspect-ratio`). `scale` =
+   * how much to grow the natural (width:100%) floorplan so its height fills the
+   * taller box: 1 / (aspect · imgAspect). Returns null (no frame) on desktop,
+   * before the image aspect is known, or when the requested frame isn't taller
+   * than the image would naturally render (scale ≤ 1 = nothing to gain).
+   */
+  private _mobileFrame(): { aspect: number; scale: number } | null {
+    if (!this._isMobileScreen || this._imgAspect === null) return null;
+    const aspect = this.config.options.aspectMobile; // desired w/h
+    const scale = 1 / (aspect * this._imgAspect);
+    if (!(scale > 1.0001)) return null; // frame no taller than the image: skip
+    return { aspect, scale };
   }
 
   public disconnectedCallback(): void {
@@ -2130,6 +2173,9 @@ export class ApartmentViewCard extends LitElement {
 
     const { iconSize, iconSizeMax } = this._resolveIconSizes();
     const maxIconScale = iconSize > 0 ? iconSizeMax / iconSize : 2;
+    // Mobile taller-frame (Fix 3): overrides the wrapper aspect + scales the
+    // whole floorplan (via .frame) to fill it. null on desktop / no gain.
+    const frame = this._mobileFrame();
     const views = computeMarkerViews(
       this._floorData.entities,
       this.hass?.states ?? {},
@@ -2228,11 +2274,17 @@ export class ApartmentViewCard extends LitElement {
           class="wrapper ${this._isAnimating
             ? `is-animating${this._animSnap ? ' is-animating-snap' : ''}`
             : ''} ${this._isGesturing ? 'is-gesturing' : ''}"
-          style="--av-icon-size:${iconSize}px; touch-action:${t.scale > 1 &&
+          style="--av-icon-size:${iconSize}px;${frame
+            ? ` aspect-ratio:${frame.aspect};`
+            : ''} touch-action:${t.scale > 1 &&
           this._focusedZone === null
             ? 'none' /* free-zoomed: the card owns single-finger pan */
             : 'pan-y' /* overview + focused: vertical swipes scroll the dashboard */}"
         >
+          <div
+            class="frame ${frame ? 'framed' : ''}"
+            style=${frame ? `transform: scale(${frame.scale})` : ''}
+          >
           <div
             class="tilt"
             style="transform: ${this._focusedZone ? 'rotateX(11deg)' : 'none'};"
@@ -2258,6 +2310,7 @@ export class ApartmentViewCard extends LitElement {
                   )}
                 </div>`
               : nothing}
+          </div>
           </div>
           ${this._renderQuickActions()}
           ${this._wheelHintPhase !== 'off'

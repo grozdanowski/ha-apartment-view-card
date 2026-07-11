@@ -135,3 +135,97 @@ describe('HUD row above the canvas', () => {
     expect(cssText).toMatch(/ha-card\s*\{[^}]*box-shadow:\s*none/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Mobile taller-frame (Fix 3 / options.aspectMobile). A wide floorplan renders
+// short at width:100%; on phones a taller frame + a matching floorplan scale
+// gives it real vertical space. The frame scale rides a wrapper element around
+// BOTH the scene and the marker overlay, so _viewport() (and thus every marker
+// coordinate) is UNCHANGED — markers can never drift.
+// ---------------------------------------------------------------------------
+
+const frameEl = (card: Card): HTMLElement | null =>
+  card.shadowRoot!.querySelector('.frame') as HTMLElement | null;
+const wrapperEl = (card: Card): HTMLElement =>
+  card.shadowRoot!.querySelector('.wrapper') as HTMLElement;
+
+describe('mobile taller-frame (Fix 3 / aspectMobile)', () => {
+  it('defaults to a square (1/1) frame that fills the box on a mobile mount', async () => {
+    // Wide floorplan (imgAspect 0.5 => natural box is 2:1, very short).
+    const card = await mountCard();
+    (card as any)._cardWidth = 375;
+    (card as any)._imgAspect = 0.5;
+    (card as any)._isMobileScreen = true;
+    await (card as any).updateComplete;
+
+    // Wrapper aspect overridden to the square default (1).
+    expect(wrapperEl(card).getAttribute('style')).toContain('aspect-ratio:1');
+    // Frame is active and scales the floorplan to fill: 1/(1 * 0.5) = 2.
+    const frame = frameEl(card)!;
+    expect(frame.classList.contains('framed')).toBe(true);
+    const m = /scale\(([\d.]+)\)/.exec(frame.getAttribute('style') ?? '');
+    expect(m).toBeTruthy();
+    expect(parseFloat(m![1])).toBeCloseTo(2, 4);
+  });
+
+  it('honours a taller custom aspectMobile (4/5) with the matching fill scale', async () => {
+    const card = await mountCard({
+      ...BASE_CONFIG,
+      options: { aspectMobile: '4/5' },
+    } as any);
+    (card as any)._cardWidth = 375;
+    (card as any)._imgAspect = 0.5; // natural 2:1
+    (card as any)._isMobileScreen = true;
+    await (card as any).updateComplete;
+
+    expect(wrapperEl(card).getAttribute('style')).toContain('aspect-ratio:0.8');
+    // scale = 1 / (0.8 * 0.5) = 2.5.
+    const m = /scale\(([\d.]+)\)/.exec(frameEl(card)!.getAttribute('style') ?? '');
+    expect(parseFloat(m![1])).toBeCloseTo(2.5, 4);
+  });
+
+  it('markers do NOT drift: positions are identical framed vs unframed', async () => {
+    const card = await mountCard();
+    (card as any)._cardWidth = 375;
+    (card as any)._imgAspect = 0.5;
+
+    // Desktop (no frame): capture the marker position.
+    (card as any)._isMobileScreen = false;
+    await (card as any).updateComplete;
+    expect(frameEl(card)!.classList.contains('framed')).toBe(false);
+    const topUnframed = markerTop(firstMarker(card));
+
+    // Mobile (framed): the marker sits at the SAME viewport coordinate — the
+    // frame scale wraps scene + overlay together, so the coordinate math (and
+    // therefore the inline translate) is byte-identical.
+    (card as any)._isMobileScreen = true;
+    await (card as any).updateComplete;
+    expect(frameEl(card)!.classList.contains('framed')).toBe(true);
+    const topFramed = markerTop(firstMarker(card));
+
+    expect(topFramed).toBeCloseTo(topUnframed, 6);
+    // And it matches the pure viewport projection (width x imgAspect), unchanged.
+    const expected = markerScreenPos(30, 40, { scale: 1, panX: 0, panY: 0 }, {
+      width: 375,
+      height: 375 * 0.5,
+    });
+    expect(topFramed).toBeCloseTo(expected.top, 1);
+  });
+
+  it('no frame on desktop, or when the requested aspect is not taller than the image', async () => {
+    // Desktop: never framed regardless of aspectMobile.
+    const card = await mountCard({ ...BASE_CONFIG, options: { aspectMobile: '1/1' } } as any);
+    (card as any)._imgAspect = 0.5;
+    (card as any)._isMobileScreen = false;
+    await (card as any).updateComplete;
+    expect(frameEl(card)!.classList.contains('framed')).toBe(false);
+
+    // Mobile but the image is already TALLER than the requested frame
+    // (imgAspect 1.4 => natural box taller than 1/1): scale <= 1, skip.
+    (card as any)._imgAspect = 1.4;
+    (card as any)._isMobileScreen = true;
+    await (card as any).updateComplete;
+    expect(frameEl(card)!.classList.contains('framed')).toBe(false);
+    expect(wrapperEl(card).getAttribute('style')).not.toContain('aspect-ratio');
+  });
+});

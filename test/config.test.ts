@@ -33,6 +33,7 @@ describe('normalizeConfig', () => {
       labels: { source: 'none', visibility: 'auto', densityCap: 14 },
       iconSize: 44,
       iconSizeMax: 88,
+      aspectMobile: 1,
       interaction: {
         wheel: 'modifier',
         doubleTapZoom: true,
@@ -43,6 +44,21 @@ describe('normalizeConfig', () => {
     });
     expect(cfg.entities).toEqual([]);
     expect(cfg.zones).toEqual([]);
+  });
+
+  it('parses options.aspectMobile from a w/h string, ratio, or bare number', () => {
+    const s = (v: unknown) =>
+      normalizeConfig({ images: { base: '/b.png' }, options: { aspectMobile: v } }).options.aspectMobile;
+    expect(s('1/1')).toBe(1);
+    expect(s('4/5')).toBeCloseTo(0.8, 6);
+    expect(s('3/4')).toBeCloseTo(0.75, 6);
+    expect(s('3:4')).toBeCloseTo(0.75, 6);
+    expect(s(0.75)).toBe(0.75);
+    // Invalid / non-positive → square fallback.
+    expect(s('garbage')).toBe(1);
+    expect(s(0)).toBe(1);
+    expect(s(-2)).toBe(1);
+    expect(s(undefined)).toBe(1);
   });
 
   it('parses a per-entity label object + string shorthands', () => {

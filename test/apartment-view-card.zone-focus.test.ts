@@ -22,6 +22,7 @@ function makeConfig(): ApartmentViewConfig {
       labels: { source: 'none', visibility: 'auto', densityCap: 14 },
       iconSize: 44,
       iconSizeMax: 88,
+      aspectMobile: 1,
       interaction: { wheel: 'modifier', doubleTapZoom: true, roomSwipe: true, inertia: true },
       idleTimeout: 0,
     },
