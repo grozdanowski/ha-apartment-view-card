@@ -48,6 +48,11 @@ const rawConfig = {
     { name: 'Kitchen', icon: 'mdi:silverware-fork-knife', x: 20, y: 5, width: 35, height: 35 },
     { name: 'Living room', icon: 'mdi:sofa', x: 50, y: 35, width: 45, height: 50 },
   ],
+  quickActions: [
+    { name: 'Večer', icon: 'mdi:weather-sunset', service: 'scene.turn_on', data: { entity_id: 'scene.vecer' } },
+    { name: 'Noć', icon: 'mdi:weather-night', service: 'scene.turn_on', data: { entity_id: 'scene.noc' } },
+    { name: 'Ugasi Naim', icon: 'mdi:speaker-off', service: 'media_player.turn_off', data: { entity_id: 'media_player.tv' } },
+  ],
   options: {
     view: 'auto',
     lightStyle: 'lit',

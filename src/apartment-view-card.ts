@@ -217,9 +217,14 @@ export class ApartmentViewCard extends LitElement {
       align-items: center;
       gap: 8px;
       padding: 0 2px 10px;
+      /* Narrow phones (~375px): wrap to a second line rather than clip the
+         right pill off-screen. The spacer collapses when wrapped so the
+         second-line pill aligns left. */
+      flex-wrap: wrap;
     }
     .hud-spacer {
-      flex: 1;
+      flex: 1 1 0;
+      min-width: 0;
     }
     .wrapper {
       position: relative;
@@ -668,16 +673,39 @@ export class ApartmentViewCard extends LitElement {
     .lights-control:active {
       scale: 0.96;
     }
-    /* radial quick-actions menu */
+    /* quick-actions: FAB + anchored labeled sheet (bottom-right, rising up).
+       Replaces the old radial spray — labeled pills read cleanly on phones and
+       the scrim separates them from the marker field. */
     .quick {
       position: absolute;
-      bottom: 12px;
-      right: 12px;
+      inset: 0;
       z-index: 7;
       pointer-events: none;
     }
+    /* Dim scrim over the whole card; taps close the menu. Opacity-only fade so
+       reduced-motion (which zeroes the duration token) collapses it instantly. */
+    .quick-scrim {
+      position: absolute;
+      inset: 0;
+      border: none;
+      margin: 0;
+      padding: 0;
+      cursor: default;
+      background: rgba(0, 0, 0, 0.44);
+      -webkit-backdrop-filter: blur(2px);
+      backdrop-filter: blur(2px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--av-dur-fast) var(--av-ease-out);
+    }
+    .quick.open .quick-scrim {
+      opacity: 1;
+      pointer-events: auto;
+    }
     .quick-fab {
-      position: relative;
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
       z-index: 2;
       width: 48px;
       height: 48px;
@@ -694,34 +722,71 @@ export class ApartmentViewCard extends LitElement {
       transition: transform var(--av-dur-fast) var(--av-ease-spring);
     }
     .quick.open .quick-fab {
-      transform: rotate(135deg);
+      transform: rotate(90deg);
+    }
+    /* Vertical column of labeled pills, right-aligned above the FAB. Anchored to
+       the FAB (bottom: 72px = 48px FAB + 12px inset + 12px gap). Scrolls
+       internally if the actions exceed the available height (narrow phones). */
+    .quick-menu {
+      position: absolute;
+      right: 12px;
+      bottom: 72px;
+      z-index: 3;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 8px;
+      max-width: calc(100% - 24px);
+      max-height: calc(100% - 96px);
+      overflow-y: auto;
+      pointer-events: none;
+      scrollbar-width: thin;
+    }
+    .quick.open .quick-menu {
+      pointer-events: auto;
     }
     .quick-action {
-      position: absolute;
-      right: 4px;
-      bottom: 4px;
-      width: 40px;
-      height: 40px;
-      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 44px;
+      max-width: 100%;
+      padding: 0 16px;
       border: none;
+      border-radius: 22px;
       cursor: pointer;
-      pointer-events: auto;
-      display: grid;
-      place-items: center;
+      pointer-events: inherit;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 500;
+      text-align: left;
       color: var(--primary-text-color);
-      background: color-mix(in srgb, var(--card-background-color, #1c1e24) 78%, transparent);
-      -webkit-backdrop-filter: blur(12px) saturate(1.4);
-      backdrop-filter: blur(12px) saturate(1.4);
-      box-shadow: inset 0 0 0 1px var(--divider-color, rgba(255, 255, 255, 0.16)), 0 4px 12px rgba(0, 0, 0, 0.4);
+      background: color-mix(in srgb, var(--card-background-color, #1c1e24) 82%, transparent);
+      -webkit-backdrop-filter: blur(14px) saturate(1.5);
+      backdrop-filter: blur(14px) saturate(1.5);
+      box-shadow: inset 0 0 0 1px var(--divider-color, rgba(255, 255, 255, 0.16)), 0 4px 14px rgba(0, 0, 0, 0.42);
       --mdc-icon-size: 20px;
-      transform: translate(0, 0) scale(0.3);
+      transform: translateY(10px) scale(0.94);
       opacity: 0;
-      transition: transform var(--av-dur-fast) var(--av-ease-spring), opacity var(--av-dur-fast) var(--av-ease-out);
+      transition: transform var(--av-dur-fast) var(--av-ease-spring),
+        opacity var(--av-dur-fast) var(--av-ease-out);
       transition-delay: var(--qd, 0s);
     }
+    .quick-action ha-icon {
+      flex: none;
+      color: var(--primary-color, #03a9f4);
+    }
+    .quick-action .quick-action-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .quick.open .quick-action {
-      transform: translate(var(--qx, 0), var(--qy, 0)) scale(1);
+      transform: translateY(0) scale(1);
       opacity: 1;
+    }
+    .quick-action:active {
+      scale: 0.97;
     }
     .zone-controls {
       display: flex;
@@ -2146,23 +2211,35 @@ export class ApartmentViewCard extends LitElement {
   private _renderQuickActions(): TemplateResult | typeof nothing {
     const actions = this._quickActionList();
     if (!actions.length || this._selectMode) return nothing;
-    const R = 80;
+    // Rows are laid out top-to-bottom but rise from the FAB, so the bottom-most
+    // (last) row leads the stagger. flex-direction stays natural (source order);
+    // the delay counts up from the bottom for a bottom-up ripple.
+    const n = actions.length;
     return html`
       <div class="quick ${this._quickOpen ? 'open' : ''}">
-        ${actions.map((qa, i) => {
-          const t = actions.length === 1 ? 0.5 : i / (actions.length - 1);
-          const ang = Math.PI + t * (Math.PI / 2); // 180° (left) -> 270° (up)
-          const dx = Math.cos(ang) * R;
-          const dy = Math.sin(ang) * R;
-          return html`<button
-            class="quick-action"
-            style="--qx:${dx.toFixed(1)}px;--qy:${dy.toFixed(1)}px;--qd:${(i * 0.03).toFixed(2)}s"
-            title=${qa.name}
-            aria-label=${qa.name}
-            tabindex=${this._quickOpen ? '0' : '-1'}
-            @click=${() => this._runQuickAction(qa)}
-          ><ha-icon icon=${qa.icon ?? 'mdi:flash'}></ha-icon></button>`;
-        })}
+        <button
+          class="quick-scrim"
+          aria-label="Close quick actions"
+          tabindex=${this._quickOpen ? '0' : '-1'}
+          @click=${() => {
+            this._quickOpen = false;
+          }}
+        ></button>
+        <div class="quick-menu" role="menu" aria-label="Quick actions">
+          ${actions.map(
+            (qa, i) => html`<button
+              class="quick-action"
+              role="menuitem"
+              style="--qd:${((n - 1 - i) * 0.03).toFixed(2)}s"
+              title=${qa.name}
+              tabindex=${this._quickOpen ? '0' : '-1'}
+              @click=${() => this._runQuickAction(qa)}
+            >
+              <ha-icon icon=${qa.icon ?? 'mdi:flash'}></ha-icon>
+              <span class="quick-action-label">${qa.name}</span>
+            </button>`,
+          )}
+        </div>
         <button
           class="quick-fab"
           aria-label="Quick actions"

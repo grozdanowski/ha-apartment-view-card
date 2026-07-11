@@ -1170,7 +1170,7 @@ describe('card-component: motion ripple', () => {
 });
 
 describe('card-component: quick actions', () => {
-  it('a FAB opens the radial menu and an action runs its service, then closes', async () => {
+  it('a FAB opens the labeled menu and an action runs its service, then closes', async () => {
     const cfg = { ...BASE_CONFIG, quickActions: [{ name: 'Movie', service: 'scene.turn_on', data: { entity_id: 'scene.movie' } }] };
     const card = await mountCard(cfg);
     const fab = card.shadowRoot!.querySelector('.quick-fab') as HTMLElement;
@@ -1185,6 +1185,43 @@ describe('card-component: quick actions', () => {
     expect(calls.at(-1)).toMatchObject({ domain: 'scene', service: 'turn_on' });
     expect(calls.at(-1).data).toMatchObject({ entity_id: 'scene.movie' });
     expect(card.shadowRoot!.querySelector('.quick.open')).toBeNull();
+  });
+  it('each action renders its label text (icon + name)', async () => {
+    const cfg = {
+      ...BASE_CONFIG,
+      quickActions: [
+        { name: 'Večer', icon: 'mdi:weather-sunset', service: 'scene.turn_on', data: { entity_id: 'scene.vecer' } },
+        { name: 'Noć', icon: 'mdi:weather-night', entity: 'scene.noc' },
+      ],
+    };
+    const card = await mountCard(cfg);
+    (card.shadowRoot!.querySelector('.quick-fab') as HTMLElement).click();
+    await (card as any).updateComplete;
+    const labels = [...card.shadowRoot!.querySelectorAll('.quick-action .quick-action-label')].map((n) => n.textContent);
+    expect(labels).toEqual(['Večer', 'Noć']);
+  });
+  it('an entity-scene action fires homeassistant.turn_on, then closes', async () => {
+    const cfg = { ...BASE_CONFIG, quickActions: [{ name: 'Noć', entity: 'scene.noc' }] };
+    const card = await mountCard(cfg);
+    (card.shadowRoot!.querySelector('.quick-fab') as HTMLElement).click();
+    await (card as any).updateComplete;
+    (card.shadowRoot!.querySelector('.quick-action') as HTMLElement).click();
+    await (card as any).updateComplete;
+    const calls = (card.hass as any).serviceCalls ?? [];
+    expect(calls.at(-1)).toMatchObject({ domain: 'homeassistant', service: 'turn_on' });
+    expect(calls.at(-1).data).toMatchObject({ entity_id: 'scene.noc' });
+    expect(card.shadowRoot!.querySelector('.quick.open')).toBeNull();
+  });
+  it('tapping the scrim closes the menu without firing any action', async () => {
+    const cfg = { ...BASE_CONFIG, quickActions: [{ name: 'Movie', service: 'scene.turn_on', data: { entity_id: 'scene.movie' } }] };
+    const card = await mountCard(cfg);
+    (card.shadowRoot!.querySelector('.quick-fab') as HTMLElement).click();
+    await (card as any).updateComplete;
+    const before = ((card.hass as any).serviceCalls ?? []).length;
+    (card.shadowRoot!.querySelector('.quick-scrim') as HTMLElement).click();
+    await (card as any).updateComplete;
+    expect(card.shadowRoot!.querySelector('.quick.open')).toBeNull();
+    expect(((card.hass as any).serviceCalls ?? []).length).toBe(before);
   });
   it('no FAB when no quick actions are configured', async () => {
     const card = await mountCard();
