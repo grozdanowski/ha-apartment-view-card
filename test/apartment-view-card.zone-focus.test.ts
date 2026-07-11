@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import '../src/apartment-view-card';
 import type { ApartmentViewCard } from '../src/apartment-view-card';
 import type { ApartmentViewConfig, ZoneConfig } from '../src/core/config';
@@ -154,5 +154,151 @@ describe('ApartmentViewCard room swipe while focused (P0-1)', () => {
     move(300, 310); // same gesture that pages to `living` when enabled
     up(300, 310);
     expect((card as any)._focusedZone).toBe(kitchen);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scene taps + double-tap zoom (spec P0-5). The card is unmounted (no shadow
+// root), so _zoneAtPoint runs the pure 2D math-inversion fallback — exact at
+// overview and against the stubbed 1000×800 viewport. Fake timers drive the
+// 250ms single-tap commit window (performance.now is faked too, so every
+// down→up pair classifies as a tap).
+// ---------------------------------------------------------------------------
+
+describe('ApartmentViewCard scene taps + double-tap zoom (P0-5)', () => {
+  let card: ApartmentViewCard;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    card = makeCard();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const down = (x: number, y: number, id = 1) =>
+    (card as any)._onScenePointerDown(
+      new PointerEvent('pointerdown', { pointerId: id, clientX: x, clientY: y, button: 0 }),
+    );
+  const up = (x: number, y: number, id = 1) =>
+    (card as any)._onWindowPointerUp(
+      new PointerEvent('pointerup', { pointerId: id, clientX: x, clientY: y }),
+    );
+  const move = (x: number, y: number, id = 1) =>
+    (card as any)._onWindowPointerMove(
+      new PointerEvent('pointermove', { pointerId: id, clientX: x, clientY: y }),
+    );
+  const tap = (x: number, y: number, id = 1) => {
+    down(x, y, id);
+    up(x, y, id);
+  };
+
+  // Viewport 1000×800 at identity: living (40..60%, 40..60%) = px 400..600 ×
+  // 320..480; kitchen (0..30%, 0..30%) = px 0..300 × 0..240.
+
+  it('a single tap inside a zone focuses it after the double-tap window', () => {
+    tap(450, 350);
+    // The commit window is still open — nothing focused yet.
+    expect((card as any)._focusedZone).toBeNull();
+    vi.advanceTimersByTime(250);
+    expect((card as any)._focusedZone).toBe(living);
+  });
+
+  it('doubleTapZoom:false resolves the tap immediately (no delay)', () => {
+    const cfg = makeConfig();
+    cfg.options.interaction.doubleTapZoom = false;
+    (card as any).config = cfg;
+    tap(450, 350);
+    expect((card as any)._focusedZone?.name).toBe('Living');
+  });
+
+  it('a tap outside all zones while focused exits focus', () => {
+    (card as any)._focusZone(living);
+    vi.advanceTimersByTime(700); // camera settled — is-animating cleared
+    // (900,100) inverts through the zone camera (1.5, -250, -200) to
+    // (76.7%, 25%) — outside living and kitchen.
+    tap(900, 100);
+    vi.advanceTimersByTime(250);
+    expect((card as any)._focusedZone).toBeNull();
+    expect((card as any)._transform).toEqual({ scale: 1, panX: 0, panY: 0 });
+  });
+
+  it('exit-by-tap is blocked while the camera is animating (F13)', () => {
+    (card as any)._focusZone(living); // is-animating until the 640ms fallback
+    tap(900, 100);
+    vi.advanceTimersByTime(250); // tap resolves mid-flight → blocked
+    expect((card as any)._focusedZone).toBe(living);
+    vi.advanceTimersByTime(400); // camera settles
+    tap(900, 100);
+    vi.advanceTimersByTime(250);
+    expect((card as any)._focusedZone).toBeNull();
+  });
+
+  it('while focused: tap inside the current zone is a no-op, inside another refocuses', () => {
+    (card as any)._focusZone(living);
+    vi.advanceTimersByTime(700);
+    const before = { ...(card as any)._transform };
+    // (500,400) inverts to (50%, 50%) — inside the focused living zone.
+    tap(500, 400);
+    vi.advanceTimersByTime(250);
+    expect((card as any)._focusedZone).toBe(living);
+    expect((card as any)._transform).toEqual(before);
+    // (50,40) inverts to (20%, 20%) — inside kitchen.
+    tap(50, 40);
+    vi.advanceTimersByTime(250);
+    expect((card as any)._focusedZone).toBe(kitchen);
+  });
+
+  it('double-tap toggles free zoom up, a second double-tap returns to identity', () => {
+    tap(450, 350);
+    tap(450, 350); // same spot, same faked instant → double-tap
+    // min(zoomMax 1.5, 2) anchored at (450,350) with a zero rect:
+    // pan = anchor - anchor * 1.5.
+    expect((card as any)._transform.scale).toBeCloseTo(1.5, 6);
+    expect((card as any)._transform.panX).toBeCloseTo(-225, 6);
+    expect((card as any)._transform.panY).toBeCloseTo(-175, 6);
+    // Controller stays in sync (the machine move went through pinchZoom).
+    expect((card as any)._panZoom.transform.scale).toBeCloseTo(1.5, 6);
+    // The first tap's pending commit was cancelled — no zone focus sneaks in.
+    vi.advanceTimersByTime(300);
+    expect((card as any)._focusedZone).toBeNull();
+
+    tap(450, 350);
+    tap(450, 350); // fresh pair (the consumed pair never chains a triple)
+    expect((card as any)._transform).toEqual({ scale: 1, panX: 0, panY: 0 });
+    expect((card as any)._panZoom.transform).toEqual({ scale: 1, panX: 0, panY: 0 });
+  });
+
+  it('a second pointerdown cancels the pending single-tap commit (F13)', () => {
+    tap(450, 350); // inside living — would focus at +250ms
+    down(700, 100, 2); // any new pointer cancels the pending commit
+    up(700, 100, 2); // …and its own tap resolves outside all zones → no-op
+    vi.advanceTimersByTime(300);
+    expect((card as any)._focusedZone).toBeNull();
+  });
+
+  it('no zones configured → scene taps do nothing', () => {
+    const cfg = makeConfig();
+    cfg.zones = [];
+    (card as any).config = cfg;
+    tap(450, 350);
+    vi.advanceTimersByTime(300);
+    expect((card as any)._focusedZone).toBeNull();
+    expect((card as any)._transform).toEqual({ scale: 1, panX: 0, panY: 0 });
+  });
+
+  it('free-zoomed taps (scale > 1.05) never focus zones — pan/double-tap territory', () => {
+    (card as any)._transform = { scale: 1.3, panX: 0, panY: 0 };
+    // (585,468) inverts to (45%, 45%) — inside living at overview.
+    tap(585, 468);
+    vi.advanceTimersByTime(300);
+    expect((card as any)._focusedZone).toBeNull();
+  });
+
+  it('a drag never resolves as a scene tap', () => {
+    down(450, 350);
+    move(480, 350); // > 8px → drag
+    up(480, 350);
+    vi.advanceTimersByTime(300);
+    expect((card as any)._focusedZone).toBeNull();
   });
 });

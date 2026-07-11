@@ -624,6 +624,54 @@ describe('card-component: pan release — rubber-band + snap-to-fit (P0-4)', () 
 });
 
 // ---------------------------------------------------------------------------
+// Scene-tap wayfinding: zone hit-rects + elementsFromPoint path (spec P0-5)
+// ---------------------------------------------------------------------------
+
+describe('card-component: scene tap wayfinding (P0-5)', () => {
+  const ZONED = {
+    ...BASE_CONFIG,
+    zones: [
+      { name: 'Kitchen', x: 10, y: 20, width: 40, height: 40 }, // area 1600
+      { name: 'Living', x: 55, y: 40, width: 30, height: 30 }, // area 900
+    ],
+  };
+
+  it('renders aria-hidden percent-space hit-rects inside the scene, smallest zone last', async () => {
+    const card = await mountCard(ZONED as any);
+    const hits = Array.from(
+      card.shadowRoot!.querySelectorAll('.scene .zone-hit'),
+    ) as HTMLElement[];
+    expect(hits.length).toBe(2);
+    // Larger Kitchen first, smaller Living last → topmost, so it wins overlaps.
+    expect(hits[0].dataset.zoneIndex).toBe('0');
+    expect(hits[1].dataset.zoneIndex).toBe('1');
+    expect(hits[1].getAttribute('style')).toContain('left:55%');
+    for (const h of hits) expect(h.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('resolves the tapped zone through shadowRoot.elementsFromPoint (stubbed)', async () => {
+    vi.useFakeTimers();
+    try {
+      const card = await mountCard(ZONED as any);
+      const hit = card.shadowRoot!.querySelector('.zone-hit[data-zone-index="1"]')!;
+      (card.shadowRoot as any).elementsFromPoint = () => [hit];
+      const scene = card.shadowRoot!.querySelector('.scene') as HTMLElement;
+      const c = { pointerId: 81, clientX: 280, clientY: 150, button: 0, pointerType: 'touch' };
+      scene.dispatchEvent(new PointerEvent('pointerdown', { ...c, bubbles: true }));
+      window.dispatchEvent(new PointerEvent('pointerup', { ...c, bubbles: true }));
+      vi.advanceTimersByTime(250);
+      await (card as any).updateComplete;
+      expect((card as any)._focusedZone).toBe((card as any)._floorData.zones[1]);
+      // The hit-testing flip never survives the synchronous resolution.
+      const wrapper = card.shadowRoot!.querySelector('.wrapper')!;
+      expect(wrapper.classList.contains('hit-testing')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Test 4: Light-overlay opacity matches the glow formula
 // ---------------------------------------------------------------------------
 

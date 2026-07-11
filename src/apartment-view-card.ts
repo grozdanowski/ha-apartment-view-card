@@ -4,7 +4,7 @@ import { repeat } from 'lit/directives/repeat.js';
 import { guard } from 'lit/directives/guard.js';
 import { fireEvent } from 'custom-card-helpers';
 import type { HassLike } from './core/ha-types';
-import { normalizeConfig, type ApartmentViewConfig, type EntityConfig, type ZoneConfig, type QuickAction, type ImagesConfig } from './core/config';
+import { normalizeConfig, zoneForPoint, type ApartmentViewConfig, type EntityConfig, type ZoneConfig, type QuickAction, type ImagesConfig } from './core/config';
 import './editor/apartment-view-card-editor';
 import { renderBaseLayer, weatherTint } from './render/base-layer';
 import { renderLightLayer } from './render/light-layer';
@@ -41,6 +41,17 @@ const CAMERA_MS = 560;
 const SNAP_MS = 320;
 
 /**
+ * Scene tap grammar (spec P0-5): a second tap within DOUBLE_TAP_MS and
+ * DOUBLE_TAP_RADIUS_PX of the previous scene tap is a double-tap (toggle
+ * zoom); any other tap commits after SINGLE_TAP_MS. The wait is invisible in
+ * practice — zone focus rides a 560ms camera move anyway — and markers never
+ * wait (their taps bypass this entirely).
+ */
+const DOUBLE_TAP_MS = 300;
+const DOUBLE_TAP_RADIUS_PX = 24;
+const SINGLE_TAP_MS = 250;
+
+/**
  * One-shot "modifier + scroll to zoom" hint (spec P0-3): module-level flag =
  * once per session, across every card instance on the dashboard.
  */
@@ -51,7 +62,11 @@ const WHEEL_HINT_HOLD_MS = 1600;
 const WHEEL_HINT_FADE_MS = 260;
 
 function wheelHintText(): string {
-  const mac = /mac|iphone|ipad|ipod/i.test(navigator.platform ?? '');
+  // navigator.platform is deprecated; userAgentData.platform is the
+  // replacement where it exists (Chromium). Fall back for Safari/Firefox.
+  const platform =
+    (navigator as any).userAgentData?.platform ?? navigator.platform ?? '';
+  const mac = /mac|iphone|ipad|ipod/i.test(platform);
   return `${mac ? '⌘' : 'Ctrl'} + scroll to zoom`;
 }
 
@@ -139,6 +154,10 @@ export class ApartmentViewCard extends LitElement {
   private _lastViews: MarkerView[] = [];
   private _animateFallback?: ReturnType<typeof setTimeout>;
   private _sceneEndUnsub?: () => void;
+  /** Pending single-tap commit (the double-tap window, spec P0-5). */
+  private _sceneTapTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Previous scene tap (client coords + timestamp) for double-tap detection. */
+  private _lastSceneTap: { x: number; y: number; t: number } | null = null;
 
   static styles = [
     css`
@@ -223,6 +242,20 @@ export class ApartmentViewCard extends LitElement {
          selection on iOS (spec P0-3 / F14c; pairs with draggable="false"). */
       -webkit-user-drag: none;
       user-select: none;
+    }
+    /* Invisible per-zone hit-rects (spec P0-5 / F4): percent-positioned inside
+       the transformed scene so they ride the pan/zoom — and, while focused,
+       the perspective tilt: elementsFromPoint gets the browser's own 3D
+       projection instead of a math inversion. Permanently non-interactive
+       (a11y guardrail §8.11 — they never intercept markers or pan); the
+       wrapper's .hit-testing class flips them hittable only for the duration
+       of the synchronous tap resolution. */
+    .zone-hit {
+      position: absolute;
+      pointer-events: none;
+    }
+    .wrapper.hit-testing .zone-hit {
+      pointer-events: auto;
     }
     /* ambient weather tint over the floorplan (soft-light) */
     .weather-tint {
@@ -796,6 +829,7 @@ export class ApartmentViewCard extends LitElement {
     this._wheelHintTimers = [];
     this._clearAnimating();
     this._cancelHold();
+    this._cancelSceneTap();
     this._ro?.disconnect();
     this._ro = undefined;
   }
@@ -998,6 +1032,10 @@ export class ApartmentViewCard extends LitElement {
   private _exitFocus(): void {
     this._focusedZone = null;
     this._animateTransformTo({ scale: 1, panX: 0, panY: 0 });
+    // Resync (spec P0-5): the controller may still hold a stale pre-focus
+    // transform; the next gesture or double-tap must continue from the
+    // identity we return to, not jump back to it.
+    this._panZoom.reset();
     this._panZoom.setEnabled(this.config.options.freePanZoom);
   }
 
@@ -1023,6 +1061,139 @@ export class ApartmentViewCard extends LitElement {
     if (j !== i) this._focusZone(ordered[j]);
   }
 
+  /**
+   * Scene tap grammar (spec P0-5). A second tap within DOUBLE_TAP_MS /
+   * DOUBLE_TAP_RADIUS_PX (gated by options.interaction.doubleTapZoom) is a
+   * double-tap: toggle free zoom, at overview or already free-zoomed — never
+   * while focused, where taps belong to the enter/exit logic. Anything else
+   * arms the single-tap commit timer (immediate when double-tap zoom is off —
+   * there is nothing to wait for).
+   */
+  private _onSceneTap(x: number, y: number, now: number): void {
+    const prev = this._lastSceneTap;
+    this._lastSceneTap = { x, y, t: now };
+    const doubleTap = this.config.options.interaction.doubleTapZoom;
+    if (
+      doubleTap &&
+      this._focusedZone === null &&
+      prev !== null &&
+      now - prev.t < DOUBLE_TAP_MS &&
+      Math.hypot(x - prev.x, y - prev.y) < DOUBLE_TAP_RADIUS_PX
+    ) {
+      this._cancelSceneTap();
+      this._lastSceneTap = null; // consumed — a third tap starts a fresh pair
+      this._toggleDoubleTapZoom(x, y);
+      return;
+    }
+    if (!doubleTap) {
+      this._resolveSceneTap(x, y);
+      return;
+    }
+    this._cancelSceneTap();
+    this._sceneTapTimer = setTimeout(() => {
+      this._sceneTapTimer = null;
+      this._resolveSceneTap(x, y);
+    }, SINGLE_TAP_MS);
+  }
+
+  /** Cancel a pending single-tap commit — any new pointerdown, pointercancel,
+   * a gated wheel zoom, a floor switch, or Escape (spec P0-5 / F13). */
+  private _cancelSceneTap(): void {
+    if (this._sceneTapTimer !== null) {
+      clearTimeout(this._sceneTapTimer);
+      this._sceneTapTimer = null;
+    }
+  }
+
+  /**
+   * Double-tap toggle (spec P0-5): free-zoomed (scale > 1.02) → back to the
+   * overview identity; at rest → zoom to min(zoomMax, 2) anchored at the tap
+   * point, THROUGH the controller so the P0-4 cover-bounds clamp applies and
+   * controller + card stay in sync. Double-tap zoom is a free zoom, so
+   * options.freePanZoom gates it like every other one.
+   */
+  private _toggleDoubleTapZoom(x: number, y: number): void {
+    if (!this.config.options.freePanZoom) return;
+    if (this._transform.scale > 1.02) {
+      this._panZoom.reset();
+      this._animateTransformTo({ scale: 1, panX: 0, panY: 0 });
+      return;
+    }
+    const rect =
+      (this.renderRoot?.querySelector('.wrapper') as HTMLElement | null)?.getBoundingClientRect() ??
+      this.getBoundingClientRect();
+    const targetScale = Math.min(this.config.options.zoomMax, 2);
+    this._animateTransformTo(
+      this._panZoom.pinchZoom(
+        targetScale / this._panZoom.transform.scale,
+        x - rect.left,
+        y - rect.top,
+      ),
+    );
+  }
+
+  /**
+   * Single-tap resolution (spec P0-5): wayfinding. At overview a tap inside a
+   * zone focuses it; free-zoomed taps are pan/double-tap territory; while
+   * focused, a tap inside another zone refocuses, inside the current zone
+   * does nothing, and outside all zones exits — blocked while the camera is
+   * in flight (F13: the state flag, not a fixed delay).
+   */
+  private _resolveSceneTap(x: number, y: number): void {
+    if (this._floorData.zones.length === 0) return;
+    const zone = this._zoneAtPoint(x, y);
+    if (this._focusedZone === null) {
+      if (this._transform.scale > 1.05) return; // free-zoomed: not wayfinding
+      if (zone) this._focusZone(zone);
+      return;
+    }
+    if (zone === this._focusedZone) return;
+    if (zone) {
+      this._focusZone(zone);
+      return;
+    }
+    if (!this._isAnimating) this._exitFocus();
+  }
+
+  /**
+   * Zone hit-test (spec P0-5 / F4). Primary path: the browser's own
+   * projection via shadowRoot.elementsFromPoint over the percent-space
+   * hit-rects — exact even under the focused-state perspective tilt. The
+   * rects are permanently pointer-events:none; since some engines skip such
+   * elements in elementsFromPoint, the wrapper's `.hit-testing` class flips
+   * them hittable strictly for this synchronous call (never spans a frame, so
+   * Lit can't clobber the class and the rects can't intercept anything).
+   * Fallback (no elementsFromPoint — e.g. happy-dom): invert the 2D pan/zoom
+   * math. Exact at overview where the tilt is none; while focused the
+   * rotateX(11deg) perspective makes the inversion slightly imprecise near
+   * the viewport edges — acceptable for a test-environment fallback.
+   */
+  private _zoneAtPoint(x: number, y: number): ZoneConfig | null {
+    const zones = this._floorData.zones;
+    const root = this.shadowRoot;
+    const wrapper = this.renderRoot?.querySelector('.wrapper') as HTMLElement | null;
+    if (wrapper && root && typeof root.elementsFromPoint === 'function') {
+      wrapper.classList.add('hit-testing');
+      try {
+        // Topmost-first; smaller zones render later, so the first hit is the
+        // smallest containing zone — the same rule as zoneForPoint.
+        for (const el of root.elementsFromPoint(x, y)) {
+          const idx = (el as HTMLElement).dataset?.zoneIndex;
+          if (idx !== undefined) return zones[Number(idx)] ?? null;
+        }
+        return null;
+      } finally {
+        wrapper.classList.remove('hit-testing');
+      }
+    }
+    const rect = wrapper?.getBoundingClientRect() ?? this.getBoundingClientRect();
+    const t = this._transform;
+    const vp = this._viewport();
+    const xPct = ((x - rect.left - t.panX) / t.scale / vp.width) * 100;
+    const yPct = ((y - rect.top - t.panY) / t.scale / vp.height) * 100;
+    return zoneForPoint(xPct, yPct, zones);
+  }
+
   private _onZoneChip(chip: ZoneChip): void {
     if (chip.kind === 'back') {
       this._exitFocus();
@@ -1035,6 +1206,7 @@ export class ApartmentViewCard extends LitElement {
 
   private _handleKeyDown = (e: KeyboardEvent): void => {
     if (e.key !== 'Escape') return;
+    this._cancelSceneTap(); // Escape aborts a pending scene tap (F13)
     if (this._quickOpen) {
       e.preventDefault();
       this._quickOpen = false;
@@ -1103,6 +1275,7 @@ export class ApartmentViewCard extends LitElement {
       return;
     }
     e.preventDefault();
+    this._cancelSceneTap(); // a gated wheel zoom cancels a pending tap (F13)
     // deltaMode 1 = lines (Firefox); normalize to px before the exp curve (F6).
     const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
     const r = this.getBoundingClientRect();
@@ -1140,6 +1313,7 @@ export class ApartmentViewCard extends LitElement {
 
   private _onScenePointerDown = (e: PointerEvent) => {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
+    this._cancelSceneTap(); // any new pointer cancels a pending single-tap (F13)
     this._activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (this._activePointers.size === 2) {
       // begin pinch
@@ -1147,6 +1321,10 @@ export class ApartmentViewCard extends LitElement {
       this._pinchStartDist = this._panZoom.pinchDistance(a.x, a.y, b.x, b.y);
       this._pinchStartScale = this._panZoom.transform.scale;
       this._cancelHold();
+      // A pinch is never a tap/hold: the pinch branch bypasses _tapHold.move,
+      // so without a reset the first finger's release could still classify
+      // 'tap' and fire a phantom scene tap / marker activation (spec P0-5).
+      this._tapHold.reset();
       return;
     }
     // single pointer: candidate tap/hold/pan on the SCENE (not a marker)
@@ -1157,6 +1335,7 @@ export class ApartmentViewCard extends LitElement {
   private _onMarkerPointerDown = (e: PointerEvent, m: MarkerView) => {
     e.stopPropagation();
     if (e.button !== 0 && e.pointerType === 'mouse') return;
+    this._cancelSceneTap(); // any new pointer cancels a pending single-tap (F13)
     this._activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     this._activeMarker = m;
     this._beginGesture(e);
@@ -1242,6 +1421,7 @@ export class ApartmentViewCard extends LitElement {
 
   private _switchFloor(i: number): void {
     if (i === this._floor) return;
+    this._cancelSceneTap(); // the tapped zone no longer exists (F13)
     this._exitFocus();
     this._controlled = [];
     this._selectMode = false;
@@ -1379,6 +1559,14 @@ export class ApartmentViewCard extends LitElement {
     this._cancelHold();
     if (outcome === 'tap' && this._activeMarker && this.hass) {
       this._activateEntity(this._activeMarker.entity);
+    } else if (
+      outcome === 'tap' &&
+      this._activeMarker === null &&
+      this._activePointers.size === 0
+    ) {
+      // Scene tap (spec P0-5): wayfinding + double-tap zoom. The size guard
+      // keeps the first-lifted finger of a multi-touch from reading as a tap.
+      this._onSceneTap(e.clientX, e.clientY, now);
     } else if (outcome === 'hold' && this._activeMarker && !this._holdFired) {
       // hold timer didn't fire (e.g. test/no-timer path) but release is late
       dispatchHoldAction(this._activeMarker.entity, this);
@@ -1428,6 +1616,7 @@ export class ApartmentViewCard extends LitElement {
     this._pinchStartDist = 0;
     if (this._activePointers.size === 0) this._unlatchGesture();
     this._cancelHold();
+    this._cancelSceneTap();
     this._tapHold.reset();
     this._activeMarker = null;
   };
@@ -1486,6 +1675,29 @@ export class ApartmentViewCard extends LitElement {
       weather ? states[weather] : undefined,
       ...this._floorData.entities.map((e) => states[e.entity]),
     ];
+  }
+
+  /**
+   * Invisible per-zone hit-rects (spec P0-5 / F4), percent-positioned inside
+   * the transformed scene. Larger zones render FIRST so the topmost
+   * elementsFromPoint hit is the smallest containing zone — matching
+   * zoneForPoint's smallest-area-wins rule. data-zone-index carries the
+   * position in the UNSORTED zones array.
+   */
+  private _renderZoneHits(): TemplateResult | typeof nothing {
+    const zones = this._floorData.zones;
+    if (!zones.length) return nothing;
+    const byAreaDesc = zones
+      .map((z, i) => ({ z, i }))
+      .sort((a, b) => b.z.width * b.z.height - a.z.width * a.z.height);
+    return html`${byAreaDesc.map(
+      ({ z, i }) => html`<div
+        class="zone-hit"
+        aria-hidden="true"
+        data-zone-index=${i}
+        style="left:${z.x}%;top:${z.y}%;width:${z.width}%;height:${z.height}%"
+      ></div>`,
+    )}`;
   }
 
   // ---------------------------------------------------------------------------
@@ -1599,6 +1811,7 @@ export class ApartmentViewCard extends LitElement {
                    guard()ed so per-frame transform renders skip re-evaluating
                    the whole subtree (spec P0-2 / L7). -->
               ${guard(this._sceneDeps(), () => this._renderScene())}
+              ${guard([this._floorData.zones], () => this._renderZoneHits())}
             </div>
             ${renderMarkerOverlay(views, this._onMarkerPointerDown, this._onMarkerActivate, this._pulse, this._revealed)}
             ${this._ripples.length
