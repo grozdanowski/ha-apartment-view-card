@@ -1,6 +1,6 @@
 {
   "name": "ha-apartment-view-card",
-  "version": "2.4.0",
+  "version": "2.5.0-rc.1",
   "description": "Home Assistant custom Lovelace card overlaying interactive, state-aware device markers and procedural lighting on a floorplan render.",
   "type": "module",
   "main": "dist/apartment-view-card.js",
