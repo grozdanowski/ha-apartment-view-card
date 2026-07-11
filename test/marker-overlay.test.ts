@@ -123,6 +123,38 @@ describe('computeMarkerViews', () => {
     expect(views[0].glowColor).toBeUndefined();
     expect(views[0].brightness).toBe(0);
   });
+
+  it('honors light:true override — a switch driving a lamp glows, is selectable, and has a brightness (no NaN)', () => {
+    const plug: HassEntity = { entity_id: 'switch.plug', state: 'on', attributes: {} };
+    const views = computeMarkerViews(
+      [ent({ entity: 'switch.plug', light: true, tap: 'toggle' })],
+      { 'switch.plug': plug },
+      t,
+      vp,
+      null,
+      true, // select mode
+    );
+    // Marker glows (default warm white, no rgb attrs) and reads full brightness.
+    expect(views[0].glowColor).toMatch(/^rgb\(/);
+    expect(views[0].brightness).toBe(1);
+    expect(Number.isNaN(views[0].brightness)).toBe(false);
+    expect(views[0].selectable).toBe(true);
+  });
+
+  it('honors light:false override — a light silenced by config never glows and is not selectable', () => {
+    const on: HassEntity = { entity_id: 'light.decor', state: 'on', attributes: { rgb_color: [255, 100, 50] } };
+    const views = computeMarkerViews(
+      [ent({ entity: 'light.decor', light: false })],
+      { 'light.decor': on },
+      t,
+      vp,
+      null,
+      true, // select mode
+    );
+    expect(views[0].glowColor).toBeUndefined();
+    expect(views[0].brightness).toBe(0);
+    expect(views[0].selectable).toBe(false);
+  });
 });
 
 function makeView(over: Partial<MarkerView> = {}): MarkerView {

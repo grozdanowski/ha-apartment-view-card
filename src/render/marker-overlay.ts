@@ -59,8 +59,15 @@ export interface MarkerView {
   attention: Attention | null;
 }
 
+/**
+ * Whether this marker behaves as a light (glows when active, selectable in
+ * select mode). The per-entity `light` override wins (rc.3 / 5d13f2c): a
+ * `switch.plug` driving a lamp with `light:true` glows and is selectable; a
+ * `light.foo` with `light:false` is silenced. Mirrors `emitsLight()` in
+ * light-layer.ts so the marker and the floor overlay never disagree.
+ */
 function isLight(entity: EntityConfig, state: HassEntity | undefined): boolean {
-  return (state?.entity_id ?? entity.entity).split('.')[0] === 'light';
+  return entity.light ?? (state?.entity_id ?? entity.entity).split('.')[0] === 'light';
 }
 
 /** config name -> entity friendly_name -> raw entity id (never the raw id when a friendly name exists). */
