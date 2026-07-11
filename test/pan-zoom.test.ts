@@ -77,3 +77,25 @@ describe('PanZoomController', () => {
     expect(c.transform).toEqual({ scale: 1, panX: 0, panY: 0 });
   });
 });
+
+describe('PanZoomController wheel normalization (spec P0-3 / F6)', () => {
+  it('applies the exp curve over normalized pixels: ±100px notch is ×/÷1.246', () => {
+    const cIn = new PanZoomController({ zoomMax: 3 });
+    expect(cIn.wheelZoom(-100, 0, 0).scale).toBeCloseTo(Math.exp(0.22), 6);
+    const cOut = new PanZoomController({ zoomMax: 3, minScale: 0.5 });
+    expect(cOut.wheelZoom(100, 0, 0).scale).toBeCloseTo(Math.exp(-0.22), 6);
+  });
+
+  it('a 3-line Firefox notch (normalized to 48px by the card) is a gentle step', () => {
+    const c = new PanZoomController({ zoomMax: 3 });
+    // The card converts deltaMode 1 → px (×16) BEFORE calling wheelZoom.
+    expect(c.wheelZoom(-3 * 16, 0, 0).scale).toBeCloseTo(Math.exp(0.1056), 6);
+  });
+
+  it('one event never jumps more than ×1.25 / ×0.8 regardless of delta', () => {
+    const c = new PanZoomController({ zoomMax: 10, minScale: 0.1 });
+    expect(c.wheelZoom(-5000, 0, 0).scale).toBeCloseTo(1.25, 6); // capped in
+    c.reset();
+    expect(c.wheelZoom(5000, 0, 0).scale).toBeCloseTo(0.8, 6); // capped out
+  });
+});

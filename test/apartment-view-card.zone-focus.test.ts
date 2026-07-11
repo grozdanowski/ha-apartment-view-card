@@ -22,6 +22,8 @@ function makeConfig(): ApartmentViewConfig {
       labels: { source: 'none', visibility: 'auto', densityCap: 14 },
       iconSize: 44,
       iconSizeMax: 88,
+      interaction: { wheel: 'modifier', doubleTapZoom: true, roomSwipe: true, inertia: true },
+      idleTimeout: 0,
     },
     quickActions: [],
   };
@@ -141,5 +143,16 @@ describe('ApartmentViewCard room swipe while focused (P0-1)', () => {
     move(395, 420);
     up(395, 420);
     expect((card as any)._transform).toEqual(before);
+  });
+
+  it('interaction.roomSwipe:false gates the swipe off (spec v2.5 §7)', () => {
+    const cfg = makeConfig();
+    cfg.options.interaction.roomSwipe = false;
+    (card as any).config = cfg;
+    (card as any)._focusZone(kitchen);
+    down(400, 300);
+    move(300, 310); // same gesture that pages to `living` when enabled
+    up(300, 310);
+    expect((card as any)._focusedZone).toBe(kitchen);
   });
 });

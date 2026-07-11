@@ -102,10 +102,14 @@ export function renderBaseLayer(
   const tod = resolveTimeOfDay(options, sun, now);
   const { src, derived } = baseImageSrc(images, tod);
   const filter = derived ? derivedFilter(tod) : '';
+  // draggable=false (+ CSS -webkit-user-drag/user-select on .base-image):
+  // with touch-action:none gone (spec P0-3 / F14c), mouse pans would
+  // otherwise trigger native image-drag ghosts.
   return html`<img
     class="base-image"
     src=${src}
     alt="Apartment base render"
+    draggable="false"
     style=${styleMap({ filter })}
   />`;
 }

@@ -43,6 +43,18 @@ afterEach(() => {
   document.body.querySelectorAll('apartment-view-card').forEach((el) => el.remove());
 });
 
+/** happy-dom's WheelEvent drops ctrlKey/metaKey from WheelEventInit —
+ * re-apply them after construction so the P0-3 modifier gate can be tested. */
+function wheelEvent(init: WheelEventInit): WheelEvent {
+  const e = new WheelEvent('wheel', { ...init, cancelable: true }) as WheelEvent & {
+    ctrlKey: boolean;
+    metaKey: boolean;
+  };
+  e.ctrlKey = !!init.ctrlKey;
+  e.metaKey = !!init.metaKey;
+  return e;
+}
+
 /** Markers are compositor-positioned (spec P0-2): read left/top back out of
  * the inline `translate3d(Xpx, Ypx, 0)` transform. */
 function markerPos(el: HTMLElement): { left: number; top: number } {
@@ -420,10 +432,114 @@ describe('card-component: camera engine (P0-2)', () => {
 
   it('direct gesture writes (wheel zoom) never raise is-animating (finger is 1:1)', async () => {
     const card = await mountCard(ZONED as any);
-    (card as any)._onWheel(new WheelEvent('wheel', { deltaY: -100 }));
+    // ctrl-wheel: under the P0-3 modifier gate a plain wheel now passes
+    // through to the dashboard; the zooming path needs the modifier.
+    (card as any)._onWheel(wheelEvent({ deltaY: -100, ctrlKey: true }));
     await (card as any).updateComplete;
     expect((card as any)._transform.scale).toBeGreaterThan(1); // it did zoom
     expect(wrapper(card).classList.contains('is-animating')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scroll trap killed (spec P0-3): wheel gate, deltaMode, touch-action states
+// ---------------------------------------------------------------------------
+
+describe('card-component: wheel gate + touch-action (P0-3)', () => {
+  const identity = { scale: 1, panX: 0, panY: 0 };
+  const wrapperEl = (card: Card) =>
+    card.shadowRoot!.querySelector('.wrapper') as HTMLElement;
+  const touchAction = (card: Card) =>
+    wrapperEl(card).getAttribute('style') ?? '';
+
+  it('plain wheel at scale 1 (modifier mode) passes through: transform untouched, no preventDefault, one-shot hint shows', async () => {
+    const card = await mountCard();
+    const e = wheelEvent({ deltaY: -100 });
+    (card as any)._onWheel(e);
+    await (card as any).updateComplete;
+    expect((card as any)._transform).toEqual(identity);
+    expect(e.defaultPrevented).toBe(false);
+    // First pass-through at overview shows the frosted hint pill…
+    expect(card.shadowRoot!.querySelector('.wheel-hint')).toBeTruthy();
+    expect(card.shadowRoot!.querySelector('.wheel-hint')!.textContent).toContain('scroll to zoom');
+  });
+
+  it('the hint is once per session: a later plain wheel does not re-arm it', async () => {
+    const card = await mountCard();
+    (card as any)._wheelHintPhase = 'off';
+    await (card as any).updateComplete;
+    (card as any)._onWheel(wheelEvent({ deltaY: -100 }));
+    await (card as any).updateComplete;
+    expect(card.shadowRoot!.querySelector('.wheel-hint')).toBeNull();
+  });
+
+  it('ctrl-wheel zooms and prevents default (trackpad pinch arrives this way)', async () => {
+    const card = await mountCard();
+    const e = wheelEvent({ deltaY: -100, ctrlKey: true });
+    (card as any)._onWheel(e);
+    expect((card as any)._transform.scale).toBeGreaterThan(1);
+    expect(e.defaultPrevented).toBe(true);
+  });
+
+  it('meta-wheel (cmd) also zooms', async () => {
+    const card = await mountCard();
+    (card as any)._onWheel(wheelEvent({ deltaY: -100, metaKey: true }));
+    expect((card as any)._transform.scale).toBeGreaterThan(1);
+  });
+
+  it('plain wheel zooms once already free-zoomed (scale > 1, unfocused)', async () => {
+    const card = await mountCard();
+    (card as any)._onWheel(wheelEvent({ deltaY: -100, ctrlKey: true }));
+    const zoomed = (card as any)._transform.scale;
+    expect(zoomed).toBeGreaterThan(1);
+    const e = wheelEvent({ deltaY: -100 });
+    (card as any)._onWheel(e);
+    expect((card as any)._transform.scale).toBeGreaterThan(zoomed);
+    expect(e.defaultPrevented).toBe(true);
+  });
+
+  it("wheel: 'plain' keeps the v2.4 behavior — plain wheel always zooms", async () => {
+    const card = await mountCard({
+      ...BASE_CONFIG,
+      options: { interaction: { wheel: 'plain' } },
+    } as any);
+    const e = wheelEvent({ deltaY: -100 });
+    (card as any)._onWheel(e);
+    expect((card as any)._transform.scale).toBeGreaterThan(1);
+    expect(e.defaultPrevented).toBe(true);
+  });
+
+  it('deltaMode 1 (lines) is normalized to px: 3 lines behave like 48px', async () => {
+    const lineCard = await mountCard();
+    const pxCard = await mountCard();
+    (lineCard as any)._onWheel(wheelEvent({ deltaY: -3, deltaMode: 1, ctrlKey: true }));
+    (pxCard as any)._onWheel(wheelEvent({ deltaY: -48, deltaMode: 0, ctrlKey: true }));
+    expect((lineCard as any)._transform.scale).toBeCloseTo(
+      (pxCard as any)._transform.scale,
+      10,
+    );
+    expect((lineCard as any)._transform.scale).toBeGreaterThan(1);
+  });
+
+  it('touch-action is three-state: pan-y at overview, none free-zoomed, pan-y focused', async () => {
+    const card = await mountCard({
+      ...BASE_CONFIG,
+      zones: [{ name: 'Kitchen', x: 10, y: 20, width: 40, height: 40 }],
+    } as any);
+    // (1) overview, scale 1 → pan-y (dashboard scrolls)
+    expect(touchAction(card)).toContain('touch-action:pan-y');
+
+    // (2) free-zoomed, unfocused → none (card owns single-finger pan)
+    (card as any)._onWheel(wheelEvent({ deltaY: -100, ctrlKey: true }));
+    await (card as any).updateComplete;
+    expect((card as any)._transform.scale).toBeGreaterThan(1);
+    expect(touchAction(card)).toContain('touch-action:none');
+
+    // (3) focused (scale 1.5, machine camera) → pan-y again
+    (card as any)._focusZone((card as any)._floorData.zones[0]);
+    await (card as any).updateComplete;
+    expect((card as any)._transform.scale).toBeGreaterThan(1);
+    expect(touchAction(card)).toContain('touch-action:pan-y');
   });
 });
 

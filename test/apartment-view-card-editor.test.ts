@@ -18,6 +18,8 @@ function baseConfig(): ApartmentViewConfig {
       labels: { source: 'none', visibility: 'auto', densityCap: 14 },
       iconSize: 44,
       iconSizeMax: 88,
+      interaction: { wheel: 'modifier', doubleTapZoom: true, roomSwipe: true, inertia: true },
+      idleTimeout: 0,
     },
     quickActions: [],
   };

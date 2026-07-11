@@ -34,6 +34,21 @@ const SWIPE_MAX_MS = 350;
  */
 const CAMERA_MS = 560;
 
+/**
+ * One-shot "modifier + scroll to zoom" hint (spec P0-3): module-level flag =
+ * once per session, across every card instance on the dashboard.
+ */
+let wheelHintShown = false;
+/** Hint visible-hold before the fade-out starts (opacity only). */
+const WHEEL_HINT_HOLD_MS = 1600;
+/** Covers the --av-dur-fast fade-out before the pill unrenders. */
+const WHEEL_HINT_FADE_MS = 260;
+
+function wheelHintText(): string {
+  const mac = /mac|iphone|ipad|ipod/i.test(navigator.platform ?? '');
+  return `${mac ? '⌘' : 'Ctrl'} + scroll to zoom`;
+}
+
 @customElement('apartment-view-card')
 export class ApartmentViewCard extends LitElement {
   // MIGRATION (v1 -> v2): v1 used ad-hoc `_scale` (clamped 0.5..3) + `_position`
@@ -86,8 +101,15 @@ export class ApartmentViewCard extends LitElement {
   /** Transient motion ripples (presence sensors firing), capped + auto-decaying. */
   @state() private _ripples: Array<{ key: number; left: number; top: number }> = [];
   private _rippleSeq = 0;
+  /** One-shot wheel hint lifecycle: fade in ('show') → hold → 'fade' → gone. */
+  @state() private _wheelHintPhase: 'off' | 'show' | 'fade' = 'off';
+  private _wheelHintTimers: Array<ReturnType<typeof setTimeout>> = [];
+  /** Cached `closest('hui-card-preview')` check (spec F16) — computed once. */
+  private _inPreview: boolean | null = null;
 
   private _ro?: ResizeObserver;
+  /** The .wrapper currently carrying the non-passive multi-touch guards. */
+  private _wrapperTouchTarget: HTMLElement | null = null;
   private _panZoom = new PanZoomController({ zoomMax: 1.5 });
   private _tapHold = new TapHoldTracker();
   private _activeMarker: MarkerView | null = null;
@@ -149,7 +171,9 @@ export class ApartmentViewCard extends LitElement {
       aspect-ratio: var(--av-aspect, 16 / 9);
       min-height: 120px;
       overflow: hidden;
-      touch-action: none; /* let us own pinch/pan */
+      /* touch-action is three-state and render-bound inline (spec P0-3 / C4):
+         'pan-y' at overview and while focused (dashboard scrolls), 'none'
+         only when free-zoomed. Never a static 'none' — that was the trap. */
       /* 3D context for the zone-focus perspective tilt. */
       perspective: 1300px;
       perspective-origin: 50% 44%;
@@ -183,6 +207,10 @@ export class ApartmentViewCard extends LitElement {
       display: block;
       width: 100%;
       height: auto;
+      /* No native image-drag ghosts on mouse pans, no long-press text/image
+         selection on iOS (spec P0-3 / F14c; pairs with draggable="false"). */
+      -webkit-user-drag: none;
+      user-select: none;
     }
     /* ambient weather tint over the floorplan (soft-light) */
     .weather-tint {
@@ -454,6 +482,38 @@ export class ApartmentViewCard extends LitElement {
     }
     .attention-pill ha-icon { color: var(--warning-color, #ffa600); }
     .attention-pill:active { scale: 0.96; }
+    /* One-shot "modifier + scroll to zoom" hint (spec P0-3): same frosted
+       recipe as .attention-pill, non-interactive, opacity-only in/out. */
+    .wheel-hint {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      translate: -50% 0;
+      z-index: 8;
+      pointer-events: none;
+      display: inline-flex;
+      align-items: center;
+      height: 34px;
+      padding: 0 14px;
+      border-radius: 17px;
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      color: var(--primary-text-color);
+      background: color-mix(in srgb, var(--card-background-color, #1c1e24) 60%, transparent);
+      -webkit-backdrop-filter: blur(14px) saturate(1.5);
+      backdrop-filter: blur(14px) saturate(1.5);
+      box-shadow: inset 0 0 0 1px var(--divider-color, rgba(255, 255, 255, 0.14)), 0 4px 14px rgba(0, 0, 0, 0.35);
+      opacity: 1;
+      transition: opacity var(--av-dur-fast) var(--av-ease-out);
+      animation: av-hint-in var(--av-dur-fast) var(--av-ease-out);
+    }
+    .wheel-hint.fade {
+      opacity: 0;
+    }
+    @keyframes av-hint-in {
+      from { opacity: 0; }
+    }
     /* presence/motion ripple — a one-shot expanding pulse where motion fires */
     .ripple-layer {
       position: absolute;
@@ -667,6 +727,10 @@ export class ApartmentViewCard extends LitElement {
   public connectedCallback(): void {
     super.connectedCallback();
     this.addEventListener('wheel', this._onWheel, { passive: false });
+    // Desktop Safari trackpad pinch fires proprietary gesture events that
+    // page-zoom the dashboard; we consume its ctrl-wheel stream instead
+    // (spec P0-3 / F14b). Harmless no-op everywhere else.
+    this.addEventListener('gesturestart', this._onGestureStart);
     window.addEventListener('pointermove', this._onWindowPointerMove);
     window.addEventListener('pointerup', this._onWindowPointerUp);
     window.addEventListener('pointercancel', this._onWindowPointerCancel);
@@ -680,17 +744,24 @@ export class ApartmentViewCard extends LitElement {
         }
       });
     }
+    // Re-arm the multi-touch guards on reconnect (the wrapper node survives
+    // in the persisted renderRoot; no-op before the first render).
+    this._attachWrapperTouchGuards();
   }
 
   public disconnectedCallback(): void {
     super.disconnectedCallback();
     this.removeEventListener('wheel', this._onWheel);
+    this.removeEventListener('gesturestart', this._onGestureStart);
+    this._detachWrapperTouchGuards();
     window.removeEventListener('pointermove', this._onWindowPointerMove);
     window.removeEventListener('pointerup', this._onWindowPointerUp);
     window.removeEventListener('pointercancel', this._onWindowPointerCancel);
     window.removeEventListener('keydown', this._handleKeyDown);
     clearTimeout(this._pulseTimer);
     clearTimeout(this._floorFadeTimer);
+    this._wheelHintTimers.forEach(clearTimeout);
+    this._wheelHintTimers = [];
     this._clearAnimating();
     this._cancelHold();
     this._ro?.disconnect();
@@ -771,6 +842,9 @@ export class ApartmentViewCard extends LitElement {
     // Sync focus class on host so `:host(.is-focused)` CSS selector works.
     this.classList.toggle('is-focused', this._focusedZone !== null);
     this._syncAspect();
+    // Cheap no-op once attached (reference-checked); covers the first render
+    // and the warning-template → wrapper-template swap.
+    this._attachWrapperTouchGuards();
     // Reveal choreography: this frame committed correct positions while the
     // overlay is still hidden (and transition-suppressed); flip `ready` on the
     // NEXT frame so markers fade in already in place instead of sliding from
@@ -936,16 +1010,90 @@ export class ApartmentViewCard extends LitElement {
   // Pointer / wheel handlers (named exactly per spec for Phase 5 compatibility)
   // ---------------------------------------------------------------------------
 
+  /** Safari's proprietary trackpad-pinch events must never page-zoom (F14b). */
+  private _onGestureStart = (e: Event): void => {
+    e.preventDefault();
+  };
+
+  /**
+   * Multi-touch escape hatch (spec P0-3 / F5): with `pan-y`, Android Chrome
+   * would claim two near-vertical fingers as a scroll and pointercancel the
+   * pinch. Multi-touch always belongs to the card; single-finger stays native.
+   */
+  private _onWrapperTouch = (e: TouchEvent): void => {
+    if (e.touches.length >= 2) e.preventDefault();
+  };
+
+  private _attachWrapperTouchGuards(): void {
+    const wrapper = this.renderRoot?.querySelector('.wrapper') as HTMLElement | null;
+    if (!wrapper || wrapper === this._wrapperTouchTarget) return;
+    this._detachWrapperTouchGuards();
+    wrapper.addEventListener('touchstart', this._onWrapperTouch, { passive: false });
+    wrapper.addEventListener('touchmove', this._onWrapperTouch, { passive: false });
+    this._wrapperTouchTarget = wrapper;
+  }
+
+  private _detachWrapperTouchGuards(): void {
+    const w = this._wrapperTouchTarget;
+    if (!w) return;
+    w.removeEventListener('touchstart', this._onWrapperTouch);
+    w.removeEventListener('touchmove', this._onWrapperTouch);
+    this._wrapperTouchTarget = null;
+  }
+
   private _onWheel = (e: WheelEvent) => {
     if (this._focusedZone !== null) return;
+    // Wheel gate (spec P0-3 / F7b): under the default 'modifier' mode a plain
+    // wheel belongs to the dashboard — pass it through UNTOUCHED (no
+    // preventDefault) unless a modifier is held, a trackpad pinch arrives
+    // (ctrl-wheel), or the user is already free-zoomed. 'plain' keeps the
+    // v2.4 wheel-always-zooms behavior for kiosks/wall tablets.
+    if (
+      this.config.options.interaction.wheel === 'modifier' &&
+      !(
+        e.ctrlKey ||
+        e.metaKey ||
+        (this._transform.scale > 1 && this._focusedZone === null)
+      )
+    ) {
+      this._maybeShowWheelHint();
+      return;
+    }
     e.preventDefault();
+    // deltaMode 1 = lines (Firefox); normalize to px before the exp curve (F6).
+    const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
     const r = this.getBoundingClientRect();
     this._transform = this._panZoom.wheelZoom(
-      e.deltaY,
+      dy,
       e.clientX - r.left,
       e.clientY - r.top
     );
   };
+
+  /**
+   * One-shot hint when a plain wheel passes through at overview (modifier
+   * mode): frosted mini-pill, fades in fast, auto-fades out after 1.6s.
+   * Once per session (module flag); suppressed in the card-picker preview.
+   */
+  private _maybeShowWheelHint(): void {
+    if (wheelHintShown) return;
+    if (this._inPreview === null) {
+      this._inPreview = this.closest('hui-card-preview') !== null;
+    }
+    if (this._inPreview) return;
+    wheelHintShown = true;
+    this._wheelHintPhase = 'show';
+    this._wheelHintTimers.push(
+      setTimeout(() => {
+        this._wheelHintPhase = 'fade';
+        this._wheelHintTimers.push(
+          setTimeout(() => {
+            this._wheelHintPhase = 'off';
+          }, WHEEL_HINT_FADE_MS),
+        );
+      }, WHEEL_HINT_HOLD_MS),
+    );
+  }
 
   private _onScenePointerDown = (e: PointerEvent) => {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
@@ -1191,7 +1339,12 @@ export class ApartmentViewCard extends LitElement {
     } else if (outcome === 'hold' && this._activeMarker && !this._holdFired) {
       // hold timer didn't fire (e.g. test/no-timer path) but release is late
       dispatchHoldAction(this._activeMarker.entity, this);
-    } else if (outcome === 'drag' && this._focusedZone !== null && this._activeMarker === null) {
+    } else if (
+      outcome === 'drag' &&
+      this._focusedZone !== null &&
+      this._activeMarker === null &&
+      this.config.options.interaction.roomSwipe // config gate (spec §7)
+    ) {
       // Room swipe (spec P0-1): a fast, mostly-horizontal scene drag while
       // focused pages to the neighbouring zone; vertical drags do nothing.
       const dx = e.clientX - start.x;
@@ -1372,7 +1525,10 @@ export class ApartmentViewCard extends LitElement {
           : nothing}
         <div
           class="wrapper ${this._isAnimating ? 'is-animating' : ''} ${this._isGesturing ? 'is-gesturing' : ''}"
-          style="--av-icon-size:${iconSize}px"
+          style="--av-icon-size:${iconSize}px; touch-action:${t.scale > 1 &&
+          this._focusedZone === null
+            ? 'none' /* free-zoomed: the card owns single-finger pan */
+            : 'pan-y' /* overview + focused: vertical swipes scroll the dashboard */}"
         >
           <div
             class="tilt"
@@ -1400,6 +1556,14 @@ export class ApartmentViewCard extends LitElement {
               : nothing}
           </div>
           ${this._renderQuickActions()}
+          ${this._wheelHintPhase !== 'off'
+            ? html`<div
+                class="wheel-hint ${this._wheelHintPhase === 'fade' ? 'fade' : ''}"
+                role="status"
+              >
+                ${wheelHintText()}
+              </div>`
+            : nothing}
         </div>
         <div class="zone-controls" role="toolbar" aria-label="Zones">
           ${buildZoneChips(this._floorData.zones, this._focusedZone).map(

@@ -4,6 +4,20 @@ import { DEFAULT_LABELS, VALID_LABEL_SOURCES, VALID_LABEL_VISIBILITIES } from '.
 export type LightStyle = 'lit' | 'reveal' | 'glow';
 export type SizeTier = 'tiny' | 'small' | 'medium' | 'large' | 'huge';
 export type TapAction = 'toggle' | 'more-info' | 'none';
+export type WheelMode = 'modifier' | 'plain';
+
+/** Input-behavior toggles (spec v2.5 §7). All optional in YAML; defaulted here. */
+export interface InteractionOptions {
+  /** 'modifier' (default): ctrl/cmd-wheel zooms, plain wheel scrolls the page.
+   *  'plain': v2.4 behavior — wheel always zooms (kiosks / wall tablets). */
+  wheel: WheelMode;
+  /** Scene double-tap toggle-zoom. */
+  doubleTapZoom: boolean;
+  /** Horizontal swipe between zones while focused. */
+  roomSwipe: boolean;
+  /** Flick deceleration when free-zoomed (auto-off under reduced motion). */
+  inertia: boolean;
+}
 
 export interface EntityConfig {
   entity: string;
@@ -47,6 +61,10 @@ export interface CardOptions {
   iconSizeMax: number;
   /** A weather.* entity to drive a subtle ambient tint over the floorplan. */
   weatherEntity?: string;
+  /** Input-behavior toggles (spec v2.5 §7). */
+  interaction: InteractionOptions;
+  /** Seconds of inactivity before returning to overview; 0 = off (wall tablets). */
+  idleTimeout: number;
 }
 
 export interface QuickAction {
@@ -97,6 +115,7 @@ const VALID_VIEWS: readonly CardOptions['view'][] = [
   'night',
   'duskDawn',
 ];
+const VALID_WHEEL_MODES: readonly WheelMode[] = ['modifier', 'plain'];
 
 function normalizeImages(raw: any): ImagesConfig {
   const src = raw?.images ?? {};
@@ -216,6 +235,17 @@ function normalizeZone(raw: any): ZoneConfig {
   return zone;
 }
 
+/** Fill interaction defaults; any invalid field falls back individually. */
+function normalizeInteraction(raw: any): InteractionOptions {
+  const o = raw ?? {};
+  return {
+    wheel: VALID_WHEEL_MODES.includes(o.wheel) ? o.wheel : 'modifier',
+    doubleTapZoom: typeof o.doubleTapZoom === 'boolean' ? o.doubleTapZoom : true,
+    roomSwipe: typeof o.roomSwipe === 'boolean' ? o.roomSwipe : true,
+    inertia: typeof o.inertia === 'boolean' ? o.inertia : true,
+  };
+}
+
 function normalizeOptions(raw: any): CardOptions {
   const o = raw?.options ?? {};
   return {
@@ -230,6 +260,13 @@ function normalizeOptions(raw: any): CardOptions {
     labels: normalizeLabelDefaults(o.labels),
     iconSize: typeof o.iconSize === 'number' && o.iconSize > 0 ? o.iconSize : 44,
     iconSizeMax: typeof o.iconSizeMax === 'number' && o.iconSizeMax > 0 ? o.iconSizeMax : 88,
+    interaction: normalizeInteraction(o.interaction),
+    idleTimeout:
+      typeof o.idleTimeout === 'number' &&
+      Number.isFinite(o.idleTimeout) &&
+      o.idleTimeout >= 0
+        ? o.idleTimeout
+        : 0,
     ...(typeof o.weatherEntity === 'string' && o.weatherEntity.length
       ? { weatherEntity: o.weatherEntity }
       : {}),

@@ -5,8 +5,9 @@ export interface PanZoomOptions {
   minScale?: number;
 }
 
-/** Per-wheel-notch zoom step (multiplicative). */
-const WHEEL_STEP = 1.1;
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.min(Math.max(v, lo), hi);
+}
 
 /**
  * Pure pan/zoom math with an `enabled` gate. No DOM. While disabled (used for
@@ -39,9 +40,15 @@ export class PanZoomController {
     return this.transform;
   }
 
+  /**
+   * Anchored wheel zoom. `deltaY` is in NORMALIZED PIXELS — the card converts
+   * deltaMode-1 line scrolls (Firefox) to px before calling. The exp curve
+   * gives proportional per-device feel (spec P0-3 / F6): a ±100px mouse notch
+   * is ×/÷1.246, and one event can never jump more than ×1.25 / ×0.8.
+   */
   wheelZoom(deltaY: number, anchorX: number, anchorY: number): ZoomTransform {
     if (!this.enabled) return this.transform;
-    const factor = deltaY < 0 ? WHEEL_STEP : 1 / WHEEL_STEP;
+    const factor = clamp(Math.exp(-deltaY * 0.0022), 0.8, 1.25);
     return this._applyZoom(factor, anchorX, anchorY);
   }
 

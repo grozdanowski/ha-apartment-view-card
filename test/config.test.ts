@@ -33,6 +33,13 @@ describe('normalizeConfig', () => {
       labels: { source: 'none', visibility: 'auto', densityCap: 14 },
       iconSize: 44,
       iconSizeMax: 88,
+      interaction: {
+        wheel: 'modifier',
+        doubleTapZoom: true,
+        roomSwipe: true,
+        inertia: true,
+      },
+      idleTimeout: 0,
     });
     expect(cfg.entities).toEqual([]);
     expect(cfg.zones).toEqual([]);
@@ -262,6 +269,56 @@ describe('normalizeConfig floors (multi-floor)', () => {
   });
   it('a floor without a base throws', () => {
     expect(() => normalizeConfig({ floors: [{ name: 'X', images: {} }] })).toThrow(/images\.base/);
+  });
+});
+
+describe('normalizeConfig interaction + idleTimeout (spec v2.5 §7)', () => {
+  it('keeps valid interaction values', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      options: {
+        interaction: { wheel: 'plain', doubleTapZoom: false, roomSwipe: false, inertia: false },
+        idleTimeout: 300,
+      },
+    });
+    expect(cfg.options.interaction).toEqual({
+      wheel: 'plain',
+      doubleTapZoom: false,
+      roomSwipe: false,
+      inertia: false,
+    });
+    expect(cfg.options.idleTimeout).toBe(300);
+  });
+
+  it('invalid interaction fields fall back individually to defaults', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      options: {
+        interaction: { wheel: 'scrolly', doubleTapZoom: 'yes', roomSwipe: 1, inertia: null },
+      },
+    });
+    expect(cfg.options.interaction).toEqual({
+      wheel: 'modifier',
+      doubleTapZoom: true,
+      roomSwipe: true,
+      inertia: true,
+    });
+  });
+
+  it('a non-object interaction and a bad idleTimeout yield full defaults', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      options: { interaction: 'nope', idleTimeout: -5 },
+    });
+    expect(cfg.options.interaction).toEqual({
+      wheel: 'modifier',
+      doubleTapZoom: true,
+      roomSwipe: true,
+      inertia: true,
+    });
+    expect(cfg.options.idleTimeout).toBe(0);
+    expect(normalizeConfig({ images: { base: '/b.png' }, options: { idleTimeout: 'x' } }).options.idleTimeout).toBe(0);
+    expect(normalizeConfig({ images: { base: '/b.png' }, options: { idleTimeout: NaN } }).options.idleTimeout).toBe(0);
   });
 });
 
