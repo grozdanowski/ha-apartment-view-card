@@ -138,19 +138,33 @@ describe('HUD row above the canvas', () => {
 
 // ---------------------------------------------------------------------------
 // Mobile taller-frame (Fix 3 / options.aspectMobile). A wide floorplan renders
-// short at width:100%; on phones a taller frame + a matching floorplan scale
-// gives it real vertical space. The frame scale rides a wrapper element around
-// BOTH the scene and the marker overlay, so _viewport() (and thus every marker
-// coordinate) is UNCHANGED — markers can never drift.
+// short at width:100%; on phones a TALLER wrapper + a CONTAINED floorplan gives
+// it real vertical space WITHOUT cropping: the plan keeps its natural aspect,
+// fills the width minus a small cushion, and is centered vertically (extra
+// height = breathing room). The `.frame` is the coordinate box — scene +
+// overlay live inside it — and _cardWidth/_viewport() are derived from it, so
+// markers inherit the cushion + centering and can never drift.
+//
+// Geometry for imgAspect 0.5 (natural 2:1 plan), _cardWidth 375, cushion 11px:
+//   boxWidth  = 375 + 2*11 = 397
+//   planHeight (contained) = 375 * 0.5 = 187.5
+//   aspect 1   -> boxHeight 397    -> insetY = (397    - 187.5)/2 = 104.75
+//   aspect 0.8 -> boxHeight 496.25 -> insetY = (496.25 - 187.5)/2 = 154.375
 // ---------------------------------------------------------------------------
+
+const CUSHION = 11; // FRAME_CUSHION_PX
 
 const frameEl = (card: Card): HTMLElement | null =>
   card.shadowRoot!.querySelector('.frame') as HTMLElement | null;
 const wrapperEl = (card: Card): HTMLElement =>
   card.shadowRoot!.querySelector('.wrapper') as HTMLElement;
+const cssVar = (el: HTMLElement, name: string): number | null => {
+  const m = new RegExp(`${name}:\\s*(-?[\\d.]+)px`).exec(el.getAttribute('style') ?? '');
+  return m ? parseFloat(m[1]) : null;
+};
 
-describe('mobile taller-frame (Fix 3 / aspectMobile)', () => {
-  it('defaults to a square (1/1) frame that fills the box on a mobile mount', async () => {
+describe('mobile taller-frame (Fix 3 / aspectMobile — CONTAIN)', () => {
+  it('contains the plan in a taller box with a horizontal cushion + vertical centering (default 4/5)', async () => {
     // Wide floorplan (imgAspect 0.5 => natural box is 2:1, very short).
     const card = await mountCard();
     (card as any)._cardWidth = 375;
@@ -158,30 +172,49 @@ describe('mobile taller-frame (Fix 3 / aspectMobile)', () => {
     (card as any)._isMobileScreen = true;
     await (card as any).updateComplete;
 
-    // Wrapper aspect overridden to the square default (1).
-    expect(wrapperEl(card).getAttribute('style')).toContain('aspect-ratio:1');
-    // Frame is active and scales the floorplan to fill: 1/(1 * 0.5) = 2.
+    const wrapper = wrapperEl(card);
+    // Wrapper aspect overridden to the 4/5 default (0.8) — a TALLER box.
+    expect(wrapper.getAttribute('style')).toContain('aspect-ratio:0.8');
+
+    // Frame is active and CONTAINED (no fill scale — the transform is gone).
     const frame = frameEl(card)!;
     expect(frame.classList.contains('framed')).toBe(true);
-    const m = /scale\(([\d.]+)\)/.exec(frame.getAttribute('style') ?? '');
-    expect(m).toBeTruthy();
-    expect(parseFloat(m![1])).toBeCloseTo(2, 4);
+    expect(frame.getAttribute('style') ?? '').not.toContain('scale(');
+
+    // Horizontal cushion each side: wrapper padding (drives _cardWidth) +
+    // matching frame inset (positions the contained plan off the card edges).
+    expect(wrapper.getAttribute('style')).toContain(`padding:0 ${CUSHION}px`);
+    expect(cssVar(wrapper, '--av-frame-inset-x')).toBeCloseTo(CUSHION, 4);
+
+    // Vertical centering: (boxHeight - planHeight)/2, boxHeight = (375+22)/0.8.
+    const boxWidth = 375 + 2 * CUSHION;
+    const boxHeight = boxWidth / 0.8;
+    const planHeight = 375 * 0.5;
+    const insetY = (boxHeight - planHeight) / 2;
+    expect(cssVar(wrapper, '--av-frame-inset-y')).toBeCloseTo(insetY, 3);
+    // Positive insetY => the whole plan fits with room to spare (contain, not crop).
+    expect(insetY).toBeGreaterThan(0);
+    // And the contained plan width (cushioned) never exceeds the box width.
+    expect(375).toBeLessThan(boxWidth);
   });
 
-  it('honours a taller custom aspectMobile (4/5) with the matching fill scale', async () => {
+  it('honours a custom aspectMobile (1/1) with matching contain insets', async () => {
     const card = await mountCard({
       ...BASE_CONFIG,
-      options: { aspectMobile: '4/5' },
+      options: { aspectMobile: '1/1' },
     } as any);
     (card as any)._cardWidth = 375;
     (card as any)._imgAspect = 0.5; // natural 2:1
     (card as any)._isMobileScreen = true;
     await (card as any).updateComplete;
 
-    expect(wrapperEl(card).getAttribute('style')).toContain('aspect-ratio:0.8');
-    // scale = 1 / (0.8 * 0.5) = 2.5.
-    const m = /scale\(([\d.]+)\)/.exec(frameEl(card)!.getAttribute('style') ?? '');
-    expect(parseFloat(m![1])).toBeCloseTo(2.5, 4);
+    const wrapper = wrapperEl(card);
+    expect(wrapper.getAttribute('style')).toContain('aspect-ratio:1');
+    expect(frameEl(card)!.getAttribute('style') ?? '').not.toContain('scale(');
+    expect(wrapper.getAttribute('style')).toContain(`padding:0 ${CUSHION}px`);
+    expect(cssVar(wrapper, '--av-frame-inset-x')).toBeCloseTo(CUSHION, 4);
+    // boxHeight = (375+22)/1 = 397; planHeight 187.5; insetY = 104.75.
+    expect(cssVar(wrapper, '--av-frame-inset-y')).toBeCloseTo(104.75, 3);
   });
 
   it('markers do NOT drift: positions are identical framed vs unframed', async () => {
@@ -195,9 +228,9 @@ describe('mobile taller-frame (Fix 3 / aspectMobile)', () => {
     expect(frameEl(card)!.classList.contains('framed')).toBe(false);
     const topUnframed = markerTop(firstMarker(card));
 
-    // Mobile (framed): the marker sits at the SAME viewport coordinate — the
-    // frame scale wraps scene + overlay together, so the coordinate math (and
-    // therefore the inline translate) is byte-identical.
+    // Mobile (framed): the marker sits at the SAME viewport coordinate. The
+    // frame is the coordinate box for BOTH scene and overlay, and _viewport()
+    // (width x imgAspect) is unchanged — so the inline translate is identical.
     (card as any)._isMobileScreen = true;
     await (card as any).updateComplete;
     expect(frameEl(card)!.classList.contains('framed')).toBe(true);
@@ -212,20 +245,22 @@ describe('mobile taller-frame (Fix 3 / aspectMobile)', () => {
     expect(topFramed).toBeCloseTo(expected.top, 1);
   });
 
-  it('no frame on desktop, or when the requested aspect is not taller than the image', async () => {
+  it('no frame on desktop, or when the box is not taller than the plan', async () => {
     // Desktop: never framed regardless of aspectMobile.
     const card = await mountCard({ ...BASE_CONFIG, options: { aspectMobile: '1/1' } } as any);
+    (card as any)._cardWidth = 375;
     (card as any)._imgAspect = 0.5;
     (card as any)._isMobileScreen = false;
     await (card as any).updateComplete;
     expect(frameEl(card)!.classList.contains('framed')).toBe(false);
 
-    // Mobile but the image is already TALLER than the requested frame
-    // (imgAspect 1.4 => natural box taller than 1/1): scale <= 1, skip.
+    // Mobile but the plan is already TALLER than the requested box
+    // (imgAspect 1.4 => planHeight 525 > boxHeight 397): insetY <= 0, skip.
     (card as any)._imgAspect = 1.4;
     (card as any)._isMobileScreen = true;
     await (card as any).updateComplete;
     expect(frameEl(card)!.classList.contains('framed')).toBe(false);
     expect(wrapperEl(card).getAttribute('style')).not.toContain('aspect-ratio');
+    expect(wrapperEl(card).getAttribute('style')).not.toContain('--av-frame-inset');
   });
 });

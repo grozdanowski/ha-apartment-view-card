@@ -70,12 +70,14 @@ export interface CardOptions {
   iconSizeMaxMobile?: number;
   /** Mobile-screen floorplan frame aspect (width/height), applied only under
    *  the mobile breakpoint. A wide floorplan renders as a short box at
-   *  width:100%; a taller frame (default 1/1 = square) gives the plan real
-   *  vertical space — the floorplan is scaled to fill the taller box
-   *  (fit-to-height, horizontally centered), never letterboxed. Accepts a
-   *  "w/h" string ("1/1", "4/5", "3/4") or a bare number; stored as the
-   *  numeric width/height ratio. Markers stay pinned (the whole floorplan +
-   *  overlay scale as one unit; viewport math is unchanged). */
+   *  width:100%; a taller frame (default 4/5 = 0.8) gives the plan real
+   *  vertical space. The whole floorplan is CONTAINED in the taller box — it
+   *  keeps its natural aspect, fills the width minus a small cushion, and is
+   *  centered vertically (extra height becomes top/bottom breathing room).
+   *  Nothing is cropped and nothing is up-scaled — every edge and every marker
+   *  stays visible. Accepts a "w/h" string ("4/5", "1/1", "3/4") or a bare
+   *  number; stored as the numeric width/height ratio. Markers stay pinned
+   *  (the coordinate box is the contained plan; viewport math is unchanged). */
   aspectMobile: number;
   /** A weather.* entity to drive a subtle ambient tint over the floorplan. */
   weatherEntity?: string;
@@ -267,8 +269,9 @@ function normalizeInteraction(raw: any): InteractionOptions {
 
 /**
  * Parse a floorplan frame aspect into a numeric width/height ratio.
- * Accepts "w/h" strings ("1/1", "4/5", "3/4"), "w:h", or a bare positive
- * number. Falls back to 1 (square) for anything invalid or non-positive.
+ * Accepts "w/h" strings ("4/5", "1/1", "3/4"), "w:h", or a bare positive
+ * number. Falls back to `fallback` (the caller passes the default) for
+ * anything invalid or non-positive.
  */
 function parseAspect(value: unknown, fallback: number): number {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
@@ -305,7 +308,7 @@ function normalizeOptions(raw: any): CardOptions {
     ...(typeof o.iconSizeMaxMobile === 'number' && o.iconSizeMaxMobile > 0
       ? { iconSizeMaxMobile: o.iconSizeMaxMobile }
       : {}),
-    aspectMobile: parseAspect(o.aspectMobile, 1),
+    aspectMobile: parseAspect(o.aspectMobile, 0.8),
     interaction: normalizeInteraction(o.interaction),
     idleTimeout:
       typeof o.idleTimeout === 'number' &&

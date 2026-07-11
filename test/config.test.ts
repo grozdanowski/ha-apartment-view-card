@@ -33,7 +33,7 @@ describe('normalizeConfig', () => {
       labels: { source: 'none', visibility: 'auto', densityCap: 14 },
       iconSize: 44,
       iconSizeMax: 88,
-      aspectMobile: 1,
+      aspectMobile: 0.8,
       interaction: {
         wheel: 'modifier',
         doubleTapZoom: true,
@@ -54,11 +54,11 @@ describe('normalizeConfig', () => {
     expect(s('3/4')).toBeCloseTo(0.75, 6);
     expect(s('3:4')).toBeCloseTo(0.75, 6);
     expect(s(0.75)).toBe(0.75);
-    // Invalid / non-positive → square fallback.
-    expect(s('garbage')).toBe(1);
-    expect(s(0)).toBe(1);
-    expect(s(-2)).toBe(1);
-    expect(s(undefined)).toBe(1);
+    // Invalid / non-positive → default (4/5 = 0.8) fallback.
+    expect(s('garbage')).toBeCloseTo(0.8, 6);
+    expect(s(0)).toBeCloseTo(0.8, 6);
+    expect(s(-2)).toBeCloseTo(0.8, 6);
+    expect(s(undefined)).toBeCloseTo(0.8, 6);
   });
 
   it('parses a per-entity label object + string shorthands', () => {

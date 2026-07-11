@@ -26,6 +26,9 @@ import { controlKind, controlTarget } from './core/entity-capabilities';
 
 /** Viewport width at/below which the mobile icon-size overrides apply. */
 const MOBILE_BREAKPOINT_PX = 768;
+/** Horizontal cushion (px, each side) between the contained mobile floorplan
+ *  and the card edge, so the plan never touches the screen edges (Fix 3). */
+const FRAME_CUSHION_PX = 11;
 /** Room-swipe recognition while focused (spec P0-1): min horizontal travel + max duration. */
 const SWIPE_MIN_PX = 56;
 const SWIPE_MAX_MS = 350;
@@ -229,6 +232,10 @@ export class ApartmentViewCard extends LitElement {
     .wrapper {
       position: relative;
       width: 100%;
+      /* border-box so the mobile taller-frame's horizontal cushion (applied as
+         inline padding) stays INSIDE width:100% (no overflow) and the
+         aspect-ratio height is taken over the full outer width. */
+      box-sizing: border-box;
       /* Self-size from the base image's aspect ratio (set by _syncAspect on load)
          so the card has real height in masonry / vertical-stack / panel / the
          card-picker preview — not only HA's sections/grid layout. */
@@ -242,24 +249,37 @@ export class ApartmentViewCard extends LitElement {
       perspective: 1300px;
       perspective-origin: 50% 44%;
     }
-    /* Mobile taller-frame (Fix 3 / options.aspectMobile). Wraps the tilt (scene
-       + marker overlay) as ONE body; a wide floorplan renders short at
-       width:100%, so on phones we grow the whole floorplan to fill a taller
-       wrapper (fit-to-height, horizontally centered). The scale rides this
-       element so scene and overlay scale in lockstep — _viewport() and every
-       marker coordinate are unchanged, so markers can't drift. Scale from the
-       TOP-CENTER: the image is top-anchored, so it grows downward to fill the
-       height and stays horizontally centered; the sides overflow (clipped by
-       the wrapper) and pan reveals them. */
+    /* Mobile taller-frame (Fix 3 / options.aspectMobile). The frame is the
+       floorplan's coordinate box: the scene + marker overlay live inside it at
+       inset:0, so it is the single source of truth for where the plan renders.
+       By default it fills the wrapper edge-to-edge (inset:0). On a mobile
+       screen with aspectMobile set, the wrapper grows TALLER than the plan's
+       natural height and the .frame.framed box is CONTAINED inside it: a
+       small horizontal cushion on each side (so the plan never touches the
+       card edges) and vertically centered (the extra box height becomes
+       top/bottom breathing room). The whole floorplan stays visible — no crop,
+       no up-scale. Because _cardWidth is measured from THIS element's
+       contentRect and every screen->scene mapping reads THIS element's rect,
+       markers and zones inherit the cushion + centering offset for free and
+       can't drift. */
     .frame {
       position: absolute;
       inset: 0;
-      transform-origin: 50% 0;
       transform-style: preserve-3d;
     }
-    .wrapper.is-animating .frame {
-      /* the frame scale is static per breakpoint; never animate it */
-      transition: none;
+    .frame.framed {
+      /* Contained + cushioned + vertically centered. An absolutely-positioned
+         inset:0 element fills the wrapper's PADDING box (padding does NOT inset
+         it), so the horizontal cushion is applied HERE as left/right insets;
+         the wrapper carries a matching horizontal padding purely so its
+         contentRect width (which drives _cardWidth / _viewport) equals this
+         box's width. The top/bottom insets center the natural-height (contained)
+         plan in the taller wrapper — extra box height becomes top/bottom
+         breathing room. Contain, never crop or up-scale. */
+      left: var(--av-frame-inset-x, 0px);
+      right: var(--av-frame-inset-x, 0px);
+      top: var(--av-frame-inset-y, 0px);
+      bottom: var(--av-frame-inset-y, 0px);
     }
     /* Tilts the scene + marker overlay together on zone focus (they stay aligned;
        markers remain crisp). The Lights-control button sits outside, staying flat. */
@@ -994,26 +1014,41 @@ export class ApartmentViewCard extends LitElement {
 
   /**
    * Mobile floorplan frame (Fix 3 / options.aspectMobile). A wide plan renders
-   * as a short box at width:100%; on phones we give it a taller frame (default
-   * 1/1 square) and scale the WHOLE floorplan — base image, scene, marker
-   * overlay — up to fill it (fit-to-height, horizontally centered). Because the
-   * scale rides a `.frame` element wrapping both the scene and the overlay, the
-   * two scale as one body: `_viewport()` (and therefore every marker/zoom
-   * coordinate) is UNCHANGED, so markers can't drift — they scale in lockstep
-   * with the image they sit on.
+   * as a short box at width:100%; on phones we give it a TALLER wrapper (default
+   * 4/5) and then CONTAIN the whole floorplan inside it — the plan keeps its
+   * natural aspect, fills the width minus a small cushion, and is centered
+   * vertically so the extra box height becomes top/bottom breathing room. The
+   * ENTIRE plan (every edge, every marker) stays visible: this is fit/contain,
+   * never cover/fill — nothing is cropped and nothing is up-scaled.
    *
-   * `aspect` = the wrapper's w/h ratio (drives CSS `aspect-ratio`). `scale` =
-   * how much to grow the natural (width:100%) floorplan so its height fills the
-   * taller box: 1 / (aspect · imgAspect). Returns null (no frame) on desktop,
-   * before the image aspect is known, or when the requested frame isn't taller
-   * than the image would naturally render (scale ≤ 1 = nothing to gain).
+   * Zero drift by construction: the wrapper carries `insetX` as horizontal
+   * PADDING, so `_cardWidth` (from its contentRect) is the cushioned box width;
+   * the `.frame` is inset by the same `insetX` (left/right) + `insetY`
+   * (top/bottom), and every screen->scene mapping reads the `.frame` rect
+   * (`_sceneRect()`), so markers/zones sit in the exact contained-and-centered
+   * box the plan renders in.
+   *
+   * `aspect` = the wrapper's w/h ratio (drives CSS `aspect-ratio`). `insetX` =
+   * the horizontal cushion per side (px). `insetY` = the top/bottom inset that
+   * centers the natural-height plan in the taller wrapper (px). Returns null
+   * (no frame) on desktop, before the image aspect is known, or when the
+   * requested frame isn't taller than the plan renders naturally (nothing to
+   * gain — the plan already fills or exceeds the box height).
    */
-  private _mobileFrame(): { aspect: number; scale: number } | null {
+  private _mobileFrame(): { aspect: number; insetX: number; insetY: number } | null {
     if (!this._isMobileScreen || this._imgAspect === null) return null;
-    const aspect = this.config.options.aspectMobile; // desired w/h
-    const scale = 1 / (aspect * this._imgAspect);
-    if (!(scale > 1.0001)) return null; // frame no taller than the image: skip
-    return { aspect, scale };
+    const aspect = this.config.options.aspectMobile; // desired wrapper w/h
+    const insetX = FRAME_CUSHION_PX; // horizontal cushion per side
+    // _cardWidth === the wrapper's content-box (cushioned) width. The plan
+    // renders at width:100% of it, so its natural height is cardWidth*imgAspect.
+    // The wrapper's box height comes from its aspect-ratio over the FULL border
+    // width (cushioned width + both cushions).
+    const boxWidth = this._cardWidth + 2 * insetX;
+    const boxHeight = boxWidth / aspect;
+    const planHeight = this._cardWidth * this._imgAspect;
+    const insetY = (boxHeight - planHeight) / 2;
+    if (!(insetY > 0.5)) return null; // box no taller than the plan: skip (no gain)
+    return { aspect, insetX, insetY };
   }
 
   public disconnectedCallback(): void {
@@ -1121,6 +1156,11 @@ export class ApartmentViewCard extends LitElement {
   }
 
   protected firstUpdated(): void {
+    // Observe the .wrapper. When the mobile taller-frame is active the wrapper
+    // carries a horizontal cushion as PADDING, so its contentRect.width (what
+    // the observer reads) is already the CUSHIONED coordinate-box width — the
+    // scene + overlay live at inset:0 inside that same content box, so
+    // _viewport()/_cardWidth and every marker coordinate line up exactly.
     const wrapper = this.renderRoot.querySelector('.wrapper');
     // Let the ResizeObserver deliver the first width asynchronously. Setting the
     // reactive _cardWidth synchronously here would schedule a second update inside
@@ -1189,6 +1229,21 @@ export class ApartmentViewCard extends LitElement {
       width: this._cardWidth,
       height: this._cardWidth * (this._imgAspect ?? 9 / 16),
     };
+  }
+
+  /**
+   * The on-screen rect of the floorplan's coordinate box — the `.frame`
+   * element. Every screen->scene mapping (tap, wheel, pinch, double-tap)
+   * subtracts this rect's origin, so it inherits the mobile cushion + vertical
+   * centering for free: the scene + marker overlay live at inset:0 inside the
+   * frame, so its top-left IS the (0,0) of `_viewport()`. Falls back to the
+   * wrapper, then the host, when the frame isn't mounted yet.
+   */
+  private _sceneRect(): DOMRect {
+    const el =
+      (this.renderRoot?.querySelector('.frame') as HTMLElement | null) ??
+      (this.renderRoot?.querySelector('.wrapper') as HTMLElement | null);
+    return el?.getBoundingClientRect() ?? this.getBoundingClientRect();
   }
 
   /** Apply zoomMax + freePanZoom gate whenever config changes. */
@@ -1374,9 +1429,7 @@ export class ApartmentViewCard extends LitElement {
       this._animateTransformTo({ scale: 1, panX: 0, panY: 0 });
       return;
     }
-    const rect =
-      (this.renderRoot?.querySelector('.wrapper') as HTMLElement | null)?.getBoundingClientRect() ??
-      this.getBoundingClientRect();
+    const rect = this._sceneRect();
     const targetScale = Math.min(this.config.options.zoomMax, 2);
     this._animateTransformTo(
       this._panZoom.pinchZoom(
@@ -1441,7 +1494,7 @@ export class ApartmentViewCard extends LitElement {
         wrapper.classList.remove('hit-testing');
       }
     }
-    const rect = wrapper?.getBoundingClientRect() ?? this.getBoundingClientRect();
+    const rect = this._sceneRect();
     const t = this._transform;
     const vp = this._viewport();
     const xPct = ((x - rect.left - t.panX) / t.scale / vp.width) * 100;
@@ -1602,9 +1655,7 @@ export class ApartmentViewCard extends LitElement {
     const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
     // Anchor on the CANVAS rect, not the host (host includes the HUD row —
     // anchoring there zooms toward a point ~44px below the cursor).
-    const r =
-      (this.renderRoot?.querySelector('.wrapper') as HTMLElement | null)?.getBoundingClientRect() ??
-      this.getBoundingClientRect();
+    const r = this._sceneRect();
     this._transform = this._panZoom.wheelZoom(
       dy,
       e.clientX - r.left,
@@ -1956,9 +2007,7 @@ export class ApartmentViewCard extends LitElement {
       // Anchor on the CANVAS rect, not the host: the host includes the HUD
       // row (and floor tabs) above the wrapper, which would shift the pinch
       // anchor down by their height (review: anchor-offset finding).
-      const r =
-        (this.renderRoot?.querySelector('.wrapper') as HTMLElement | null)?.getBoundingClientRect() ??
-        this.getBoundingClientRect();
+      const r = this._sceneRect();
       const cx = (a.x + b.x) / 2 - r.left;
       const cy = (a.y + b.y) / 2 - r.top;
       // apply relative to the pinch-start scale
@@ -2275,16 +2324,13 @@ export class ApartmentViewCard extends LitElement {
             ? `is-animating${this._animSnap ? ' is-animating-snap' : ''}`
             : ''} ${this._isGesturing ? 'is-gesturing' : ''}"
           style="--av-icon-size:${iconSize}px;${frame
-            ? ` aspect-ratio:${frame.aspect};`
+            ? ` aspect-ratio:${frame.aspect}; padding:0 ${frame.insetX}px; --av-frame-inset-x:${frame.insetX}px; --av-frame-inset-y:${frame.insetY}px;`
             : ''} touch-action:${t.scale > 1 &&
           this._focusedZone === null
             ? 'none' /* free-zoomed: the card owns single-finger pan */
             : 'pan-y' /* overview + focused: vertical swipes scroll the dashboard */}"
         >
-          <div
-            class="frame ${frame ? 'framed' : ''}"
-            style=${frame ? `transform: scale(${frame.scale})` : ''}
-          >
+          <div class="frame ${frame ? 'framed' : ''}">
           <div
             class="tilt"
             style="transform: ${this._focusedZone ? 'rotateX(11deg)' : 'none'};"
