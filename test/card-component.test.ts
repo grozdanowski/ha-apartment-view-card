@@ -43,15 +43,20 @@ afterEach(() => {
   document.body.querySelectorAll('apartment-view-card').forEach((el) => el.remove());
 });
 
-/** happy-dom's WheelEvent drops ctrlKey/metaKey from WheelEventInit —
- * re-apply them after construction so the P0-3 modifier gate can be tested. */
+/** happy-dom's WheelEvent drops the MouseEventInit leg (ctrlKey/metaKey/
+ * clientX/clientY) — re-apply after construction so the P0-3 modifier gate
+ * and the anchored-zoom math can be tested. */
 function wheelEvent(init: WheelEventInit): WheelEvent {
   const e = new WheelEvent('wheel', { ...init, cancelable: true }) as WheelEvent & {
     ctrlKey: boolean;
     metaKey: boolean;
+    clientX: number;
+    clientY: number;
   };
   e.ctrlKey = !!init.ctrlKey;
   e.metaKey = !!init.metaKey;
+  e.clientX = init.clientX ?? 0;
+  e.clientY = init.clientY ?? 0;
   return e;
 }
 
@@ -540,6 +545,81 @@ describe('card-component: wheel gate + touch-action (P0-3)', () => {
     await (card as any).updateComplete;
     expect((card as any)._transform.scale).toBeGreaterThan(1);
     expect(touchAction(card)).toContain('touch-action:pan-y');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pan release: rubber-band snap-back + snap-to-fit (spec P0-4)
+// ---------------------------------------------------------------------------
+
+describe('card-component: pan release — rubber-band + snap-to-fit (P0-4)', () => {
+  const wrapper = (card: Card) => card.shadowRoot!.querySelector('.wrapper')!;
+
+  /** Mount + deterministic 400×200 viewport + ctrl-wheel to a known scale. */
+  async function zoomedCard(wheelDeltaY: number): Promise<Card> {
+    const card = await mountCard();
+    (card as any)._viewport = () => ({ width: 400, height: 200 });
+    // Anchored at 0,0 (happy-dom rects are zero) → pan stays 0,0.
+    (card as any)._onWheel(wheelEvent({ deltaY: wheelDeltaY, ctrlKey: true }));
+    await (card as any).updateComplete;
+    return card;
+  }
+
+  function drag(card: Card, points: Array<[number, number]>, id = 71): void {
+    const scene = card.shadowRoot!.querySelector('.scene') as HTMLElement;
+    const [sx, sy] = points[0];
+    const c = { pointerId: id, button: 0, pointerType: 'touch' };
+    scene.dispatchEvent(
+      new PointerEvent('pointerdown', { ...c, clientX: sx, clientY: sy, bubbles: true }),
+    );
+    for (const [x, y] of points.slice(1)) {
+      window.dispatchEvent(
+        new PointerEvent('pointermove', { ...c, clientX: x, clientY: y, bubbles: true }),
+      );
+    }
+    const [ex, ey] = points[points.length - 1];
+    window.dispatchEvent(
+      new PointerEvent('pointerup', { ...c, clientX: ex, clientY: ey, bubbles: true }),
+    );
+  }
+
+  it('an overshot drag snaps back to the cover-bounds with the snap variant', async () => {
+    // deltaY -10 → scale exp(0.022) ≈ 1.0222; bounds panX ∈ [-8.9, 0].
+    const card = await zoomedCard(-10);
+    const scale = (card as any)._transform.scale;
+    // Latch at +10px (delta 0), then +30px right → raw 30 past the 0 bound → 13.5.
+    drag(card, [[100, 100], [110, 100], [140, 100]]);
+    await (card as any).updateComplete;
+    // Overshot → animate back to the clamped rest transform (NOT identity,
+    // even below 1.06 — the overshoot branch wins).
+    expect((card as any)._transform.panX).toBe(0);
+    expect((card as any)._transform.scale).toBeCloseTo(scale, 10);
+    expect(wrapper(card).classList.contains('is-animating')).toBe(true);
+    expect(wrapper(card).classList.contains('is-animating-snap')).toBe(true);
+  });
+
+  it('a clean release below scale 1.06 snaps card + controller to identity', async () => {
+    const card = await zoomedCard(-10); // scale ≈ 1.0222 < 1.06
+    // Latch, then -5px: within bounds [-8.9, 0] → no overshoot.
+    drag(card, [[100, 100], [110, 100], [105, 100]]);
+    await (card as any).updateComplete;
+    expect((card as any)._transform).toEqual({ scale: 1, panX: 0, panY: 0 });
+    expect((card as any)._panZoom.transform).toEqual({ scale: 1, panX: 0, panY: 0 });
+    // The return-to-fit rides the regular camera, not the snap variant.
+    expect(wrapper(card).classList.contains('is-animating')).toBe(true);
+    expect(wrapper(card).classList.contains('is-animating-snap')).toBe(false);
+  });
+
+  it('a clean in-bounds release at scale ≥ 1.06 settles with no animation', async () => {
+    // deltaY -100 → scale ≈ 1.246; bounds panX ∈ [-98.4, 0].
+    const card = await zoomedCard(-100);
+    const scale = (card as any)._transform.scale;
+    expect(scale).toBeGreaterThan(1.06);
+    drag(card, [[100, 100], [110, 100], [80, 100]]); // -30px, in bounds
+    await (card as any).updateComplete;
+    expect((card as any)._transform.panX).toBe(-30);
+    expect((card as any)._transform.scale).toBeCloseTo(scale, 10);
+    expect(wrapper(card).classList.contains('is-animating')).toBe(false);
   });
 });
 

@@ -35,6 +35,12 @@ const SWIPE_MAX_MS = 350;
 const CAMERA_MS = 560;
 
 /**
+ * Numeric twin of --av-dur-med: the rubber-band snap-back duration (the
+ * `is-animating-snap` camera variant, spec P0-4).
+ */
+const SNAP_MS = 320;
+
+/**
  * One-shot "modifier + scroll to zoom" hint (spec P0-3): module-level flag =
  * once per session, across every card instance on the dashboard.
  */
@@ -76,6 +82,12 @@ export class ApartmentViewCard extends LitElement {
    * _animateTransformTo only — direct gesture writes stay 1:1 (doctrine L2).
    */
   @state() private _isAnimating = false;
+  /**
+   * The in-flight camera move is the rubber-band snap-back variant
+   * (`is-animating-snap`: --av-dur-med + --av-ease-snap instead of the
+   * --av-dur-slow camera). Only meaningful while _isAnimating.
+   */
+  @state() private _animSnap = false;
   /**
    * A pan/pinch movement has latched (drives `.wrapper.is-gesturing`).
    * This is reactive state, NOT a raw classList toggle: render already runs
@@ -315,6 +327,26 @@ export class ApartmentViewCard extends LitElement {
     .wrapper.is-animating .marker-overlay .marker-label {
       transition:
         transform var(--av-dur-slow) var(--av-ease-out),
+        opacity var(--av-dur-fast) var(--av-ease-out);
+    }
+    /* Rubber-band snap-back variant (spec P0-4): shorter + snappier than the
+       camera — --av-dur-med with the snap ease, same one-body rule set.
+       Equal specificity to the is-animating rules, declared after → wins
+       while both classes are present; the pre-reveal gate below still
+       trumps everything. */
+    .wrapper.is-animating-snap .scene,
+    .wrapper.is-animating-snap .tilt {
+      transition: transform var(--av-dur-med) var(--av-ease-snap);
+    }
+    .wrapper.is-animating-snap .marker-overlay .marker {
+      transition:
+        transform var(--av-dur-med) var(--av-ease-snap),
+        scale var(--av-dur-fast) var(--av-ease-spring),
+        box-shadow 0.4s ease, opacity 0.3s ease, color 0.4s ease;
+    }
+    .wrapper.is-animating-snap .marker-overlay .marker-label {
+      transition:
+        transform var(--av-dur-med) var(--av-ease-snap),
         opacity var(--av-dur-fast) var(--av-ease-out);
     }
     /* Reveal gate composes with the animation gate: pre-reveal, nothing may
@@ -904,6 +936,9 @@ export class ApartmentViewCard extends LitElement {
   private _syncPanZoomFromConfig(): void {
     this._panZoom = new PanZoomController({
       zoomMax: this.config.options.zoomMax,
+      // Cover-bounds clamp + rubber-band (spec P0-4). _viewport() is pure
+      // state (width × aspect) — no layout reads on the gesture path.
+      viewport: () => this._viewport(),
     });
     // Overview: free pan/zoom only when enabled in options.
     this._panZoom.setEnabled(this.config.options.freePanZoom);
@@ -922,8 +957,12 @@ export class ApartmentViewCard extends LitElement {
    * without transition events (tests, reduced motion). Direct gesture writes
    * (pan/pinch/wheel) never come through here — the finger is 1:1.
    */
-  private _animateTransformTo(t: ZoomTransform): void {
+  private _animateTransformTo(
+    t: ZoomTransform,
+    opts: { snap?: boolean } = {},
+  ): void {
     this._clearAnimating(); // restart cleanly if a move is already in flight
+    this._animSnap = !!opts.snap;
     this._isAnimating = true;
     this._transform = t;
     const scene = this.renderRoot?.querySelector('.scene');
@@ -935,7 +974,10 @@ export class ApartmentViewCard extends LitElement {
       scene.addEventListener('transitionend', onEnd);
       this._sceneEndUnsub = () => scene.removeEventListener('transitionend', onEnd);
     }
-    this._animateFallback = setTimeout(() => this._clearAnimating(), CAMERA_MS + 80);
+    this._animateFallback = setTimeout(
+      () => this._clearAnimating(),
+      (opts.snap ? SNAP_MS : CAMERA_MS) + 80,
+    );
   }
 
   private _clearAnimating(): void {
@@ -944,6 +986,7 @@ export class ApartmentViewCard extends LitElement {
     this._sceneEndUnsub?.();
     this._sceneEndUnsub = undefined;
     this._isAnimating = false;
+    this._animSnap = false;
   }
 
   private _focusZone(zone: ZoneConfig): void {
@@ -1356,6 +1399,17 @@ export class ApartmentViewCard extends LitElement {
       ) {
         this._swipeToNeighborZone(dx);
       }
+    } else if (outcome === 'drag' && this._focusedZone === null) {
+      // Free-pan settle (spec P0-4): a drag left overshot rubber-bands back
+      // to the cover-bounds; a release resting below scale 1.06 returns to
+      // the overview identity (controller resynced so both stay in step).
+      const { target, overshot } = this._panZoom.release();
+      if (overshot) {
+        this._animateTransformTo(target, { snap: true });
+      } else if (target.scale < 1.06 && target.scale !== 1) {
+        this._panZoom.reset();
+        this._animateTransformTo({ scale: 1, panX: 0, panY: 0 });
+      }
     }
     this._activeMarker = null;
   };
@@ -1524,7 +1578,9 @@ export class ApartmentViewCard extends LitElement {
             </div>`
           : nothing}
         <div
-          class="wrapper ${this._isAnimating ? 'is-animating' : ''} ${this._isGesturing ? 'is-gesturing' : ''}"
+          class="wrapper ${this._isAnimating
+            ? `is-animating${this._animSnap ? ' is-animating-snap' : ''}`
+            : ''} ${this._isGesturing ? 'is-gesturing' : ''}"
           style="--av-icon-size:${iconSize}px; touch-action:${t.scale > 1 &&
           this._focusedZone === null
             ? 'none' /* free-zoomed: the card owns single-finger pan */

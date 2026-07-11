@@ -78,6 +78,72 @@ describe('PanZoomController', () => {
   });
 });
 
+describe('PanZoomController viewport clamp + rubber-band (spec P0-4)', () => {
+  const vp = () => ({ width: 100, height: 100 });
+
+  it('the zoom-apply path hard-clamps pan to cover-bounds', () => {
+    const c = new PanZoomController({ zoomMax: 3, viewport: vp });
+    // Anchor far outside: unclamped pan would be -200; bounds at scale 2 are [-100, 0].
+    const t = c.pinchZoom(2, 200, 200);
+    expect(t).toEqual({ scale: 2, panX: -100, panY: -100 });
+    // Zooming out re-clamps to the tighter bounds of the smaller scale.
+    const out = c.pinchZoom(0.75, 0, 0); // scale 1.5 → bounds [-50, 0]
+    expect(out.scale).toBeCloseTo(1.5, 6);
+    expect(out.panX).toBe(-50);
+    expect(out.panY).toBe(-50);
+  });
+
+  it('panBy is 1:1 inside bounds; overshoot displays excess × 0.45', () => {
+    const c = new PanZoomController({ zoomMax: 3, viewport: vp });
+    c.pinchZoom(2, 0, 0); // scale 2 anchored at origin: pan stays 0,0
+    expect(c.panBy(-40, -60)).toEqual({ scale: 2, panX: -40, panY: -60 });
+    // Push past the min bound: raw -140 → -100 + (-40 × 0.45).
+    const t = c.panBy(-100, 0);
+    expect(t.panX).toBeCloseTo(-100 + -40 * 0.45, 6);
+    expect(t.panY).toBe(-60);
+  });
+
+  it('overshoot deltas accumulate in finger-space (resistance never compounds)', () => {
+    const c = new PanZoomController({ zoomMax: 3, viewport: vp });
+    c.pinchZoom(2, 0, 0);
+    c.panBy(20, 0); // raw 20 past the 0 bound → shows 9
+    expect(c.transform.panX).toBeCloseTo(20 * 0.45, 6);
+    c.panBy(20, 0); // raw 40 → shows 18 (NOT 9 + 20×0.45 re-compressed)
+    expect(c.transform.panX).toBeCloseTo(40 * 0.45, 6);
+    c.panBy(-40, 0); // finger returns exactly → back on the bound
+    expect(c.transform.panX).toBeCloseTo(0, 6);
+  });
+
+  it('release() reports overshoot and settles on the clamped rest transform', () => {
+    const c = new PanZoomController({ zoomMax: 3, viewport: vp });
+    c.pinchZoom(2, 0, 0);
+    c.panBy(30, 40); // overshoots the 0,0 bound on both axes
+    const { target, overshot } = c.release();
+    expect(overshot).toBe(true);
+    expect(target).toEqual({ scale: 2, panX: 0, panY: 0 });
+    expect(c.transform).toEqual(target); // controller synced to the target
+  });
+
+  it('release() without overshoot returns the current transform untouched', () => {
+    const c = new PanZoomController({ zoomMax: 3, viewport: vp });
+    c.pinchZoom(2, 0, 0);
+    c.panBy(-25, -35);
+    const { target, overshot } = c.release();
+    expect(overshot).toBe(false);
+    expect(target).toEqual({ scale: 2, panX: -25, panY: -35 });
+  });
+
+  it('no viewport = the original unclamped math and a no-op release()', () => {
+    const c = new PanZoomController({ zoomMax: 3 });
+    c.pinchZoom(2, 200, 200);
+    expect(c.transform).toEqual({ scale: 2, panX: -200, panY: -200 });
+    c.panBy(500, 500);
+    const { target, overshot } = c.release();
+    expect(overshot).toBe(false);
+    expect(target).toEqual({ scale: 2, panX: 300, panY: 300 });
+  });
+});
+
 describe('PanZoomController wheel normalization (spec P0-3 / F6)', () => {
   it('applies the exp curve over normalized pixels: ±100px notch is ×/÷1.246', () => {
     const cIn = new PanZoomController({ zoomMax: 3 });
