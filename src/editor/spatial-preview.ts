@@ -61,6 +61,7 @@ interface CameraTween {
 
 const WALL_DEPTH = 0.09;
 const FLOOR_HEIGHT = 0.06;
+const OVERVIEW_ZOOM_OUT_MARGIN = 1.16;
 
 /** Shared generated 3D home surface used by both the editor and runtime. */
 @customElement('spatial-preview')
@@ -203,8 +204,15 @@ export class SpatialPreview extends LitElement {
     const canvas = this.renderRoot.querySelector('canvas');
     if (!(canvas instanceof HTMLCanvasElement)) return;
     try {
-      this._renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
+      this._renderer = new THREE.WebGLRenderer({
+        canvas,
+        antialias: true,
+        alpha: true,
+        premultipliedAlpha: false,
+        powerPreference: 'high-performance',
+      });
       this._renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      this._renderer.setClearColor(0x000000, 0);
       this._renderer.outputColorSpace = THREE.SRGBColorSpace;
       this._renderer.toneMapping = THREE.ACESFilmicToneMapping;
       this._renderer.toneMappingExposure = 0.98;
@@ -1575,6 +1583,12 @@ export class SpatialPreview extends LitElement {
           this._modelRadius * (mobile ? 2.15 : 1.54),
           this._modelRadius * (mobile ? 1.4 : 1.04),
         );
+    const poseDistance = position.distanceTo(target);
+    this._controls.maxDistance = zone
+      ? Math.max(this._controls.maxDistance, poseDistance * 1.04)
+      : Math.max(this._controls.minDistance + 1, poseDistance * OVERVIEW_ZOOM_OUT_MARGIN);
+    this._camera.far = Math.max(50, this._controls.maxDistance * 3);
+    this._camera.updateProjectionMatrix();
     this._cameraTween = {
       started: performance.now(),
       duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 520,
