@@ -130,7 +130,7 @@ describe('HUD row above the canvas', () => {
     const cssText = (card.constructor as typeof ApartmentViewCard).styles
       .map((s: any) => s.cssText ?? '')
       .join('\n');
-    expect(cssText).toMatch(/ha-card\s*\{[^}]*background:\s*none/);
+    expect(cssText).toMatch(/ha-card\s*\{[^}]*background:\s*transparent/);
     expect(cssText).toMatch(/ha-card\s*\{[^}]*border:\s*none/);
     expect(cssText).toMatch(/ha-card\s*\{[^}]*box-shadow:\s*none/);
   });

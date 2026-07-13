@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import '../src/editor/apartment-view-card-editor';
 import type { ApartmentViewConfig } from '../src/core/config';
+import { rectangularSpatialPlan } from '../src/core/spatial-plan';
 
 function baseConfig(): ApartmentViewConfig {
   return {
@@ -12,6 +13,7 @@ function baseConfig(): ApartmentViewConfig {
     options: {
       view: 'auto',
       lightStyle: 'lit',
+      hideWalls: false,
       freePanZoom: true,
       zoomMax: 1.5,
       duskDawnOffsetMinutes: 60,
@@ -30,6 +32,7 @@ async function mount() {
   const el = document.createElement('apartment-view-card-editor') as any;
   el.hass = { states: {}, localize: (k: string) => k };
   el.setConfig(baseConfig());
+  el._mode = 'advanced';
   document.body.appendChild(el);
   await el.updateComplete;
   return el;
@@ -44,6 +47,7 @@ describe('apartment-view-card-editor: images + options', () => {
     const el = document.createElement('apartment-view-card-editor') as any;
     el.hass = { states: {} };
     el.setConfig({ ...baseConfig(), _legacy: 'keep' });
+    el._mode = 'advanced';
     expect(el.config._legacy).toBe('keep');
   });
 
@@ -88,6 +92,7 @@ describe('apartment-view-card-editor: images + options', () => {
       },
     };
     el.setConfig(baseConfig());
+    el._mode = 'advanced';
     document.body.appendChild(el);
     await el.updateComplete;
     let fired: any = null;
@@ -111,6 +116,7 @@ describe('apartment-view-card-editor: images + options', () => {
       ...baseConfig(),
       images: { base: '/local/day.png', allLights: '/local/all.png' },
     });
+    el._mode = 'advanced';
     document.body.appendChild(el);
     await el.updateComplete;
     let fired: any = null;
@@ -159,6 +165,7 @@ describe('apartment-view-card-editor: images + options', () => {
       ],
       _legacy: 'keep',
     });
+    el._mode = 'advanced';
     document.body.appendChild(el);
     await el.updateComplete;
     let fired: any = null;
@@ -201,6 +208,7 @@ describe('apartment-view-card-editor: entities', () => {
         duskDawnOffsetMinutes: 60,
       },
     });
+    el._mode = 'advanced';
     document.body.appendChild(el);
     await el.updateComplete;
     return el;
@@ -367,6 +375,7 @@ describe('apartment-view-card-editor: zones', () => {
         duskDawnOffsetMinutes: 60,
       },
     });
+    el._mode = 'advanced';
     document.body.appendChild(el);
     await el.updateComplete;
     return el;
@@ -456,6 +465,21 @@ describe('apartment-view-card-editor: zones', () => {
     (el.shadowRoot.querySelectorAll('.zone-down')[0] as HTMLElement).click();
     expect(fired.zones.map((z: any) => z.name)).toEqual(['Kitchen', 'Living']);
   });
+
+  it('links a room to an Area independently of its display name', async () => {
+    const el = await mountWithZones();
+    el.hass = {
+      states: {},
+      localize: (k: string) => k,
+      areas: { living_room: { area_id: 'living_room', name: 'Living Area' } },
+    };
+    await el.updateComplete;
+    const select = el.shadowRoot.querySelector('.zone-area-link') as HTMLSelectElement;
+    select.value = 'living_room';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(el.config.zones[0].areaId).toBe('living_room');
+    expect(el.config.zones[0].name).toBe('Living Area');
+  });
 });
 
 describe('apartment-view-card-editor: tabs + import + search', () => {
@@ -465,6 +489,7 @@ describe('apartment-view-card-editor: tabs + import + search', () => {
     const el = document.createElement('apartment-view-card-editor') as any;
     el.hass = { states: {}, localize: (k: string) => k };
     el.setConfig({ ...baseConfig(), entities });
+    el._mode = 'advanced';
     document.body.appendChild(el);
     await el.updateComplete;
     return el;
@@ -531,6 +556,7 @@ describe('apartment-view-card-editor: quick actions', () => {
     const el = document.createElement('apartment-view-card-editor') as any;
     el.hass = { states: {}, localize: (k: string) => k };
     el.setConfig({ ...baseConfig(), quickActions });
+    el._mode = 'advanced';
     document.body.appendChild(el);
     await el.updateComplete;
     (Array.from(el.shadowRoot.querySelectorAll('.tab')) as HTMLElement[])
@@ -587,5 +613,172 @@ describe('apartment-view-card-editor: quick actions', () => {
     (el.shadowRoot.querySelectorAll('.remove-action')[0] as HTMLElement).click();
     await el.updateComplete;
     expect(fired.quickActions.map((a: any) => a.name)).toEqual(['A']);
+  });
+});
+
+describe('apartment-view-card-editor: setup studio', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  async function mountStudio(config = baseConfig()) {
+    const el = document.createElement('apartment-view-card-editor') as any;
+    el.hass = { states: {}, localize: (k: string) => k };
+    el.setConfig(config);
+    document.body.appendChild(el);
+    await el.updateComplete;
+    return el;
+  }
+
+  it('opens in the room-first setup studio and keeps advanced controls one tap away', async () => {
+    const el = await mountStudio();
+    expect(el.shadowRoot.querySelector('.setup-steps')).toBeTruthy();
+    expect(el.shadowRoot.querySelector('.tab-devices')).toBeNull();
+    const advanced = Array.from(el.shadowRoot.querySelectorAll('.mode-switch button'))
+      .find((button: any) => button.textContent?.includes('Advanced')) as HTMLElement;
+    advanced.click();
+    await el.updateComplete;
+    expect(el.shadowRoot.querySelector('.tab-devices')).toBeTruthy();
+  });
+
+  it('offers plan authoring and a generated 3D home preview', async () => {
+    const el = await mountStudio();
+    const labels = Array.from(el.shadowRoot.querySelectorAll('.preview-switch button'))
+      .map((button: any) => button.textContent?.trim());
+    expect(labels).toEqual(['Plan', '3D home']);
+    (el.shadowRoot.querySelectorAll('.preview-switch button')[1] as HTMLElement).click();
+    await el.updateComplete;
+    expect(el.shadowRoot.querySelector('spatial-preview')).toBeTruthy();
+  });
+
+  it('presents imported survey geometry without pretending the graph is empty', async () => {
+    const el = await mountStudio({
+      ...baseConfig(),
+      type: 'custom:apartment-view-card',
+      zones: [{ id: 'living', name: 'Living Room', x: 0, y: 0, width: 100, height: 100 }],
+      spatial: {
+        openings: [], walls: [], site: { north: 0 }, dimensions: { width: 6, aspectRatio: 1.5, wallHeight: 2.6 },
+        plan: { version: 1, vertices: [], walls: [], rooms: [], objects: [] },
+        shell: {
+          outer: [[0, 0], [6, 0], [6, 4], [0, 4]], holes: [], floor: [[0, 0], [6, 0], [6, 4], [0, 4]],
+          rooms: [{ zoneId: 'living', floor: [[0, 0], [6, 0], [6, 4], [0, 4]] }],
+          walls: [{ id: 'wall', points: [[0, 0], [6, 0], [6, 4]], thickness: 0.18 }],
+          openings: [{ id: 'door', kind: 'door', x: 3, z: 0, width: 0.9, depth: 0.18, rotation: 0, bottom: 0, height: 2.1 }],
+        },
+      },
+    });
+    expect(el.shadowRoot.textContent).toContain('2 wall segments, 1 room, and 0 placed objects');
+    const planEditor = el.shadowRoot.querySelector('spatial-plan-editor') as any;
+    await planEditor.updateComplete;
+    expect(planEditor.shadowRoot.querySelectorAll('.survey-wall')).toHaveLength(1);
+    expect(planEditor.shadowRoot.textContent).toContain('Surveyed architecture is locked');
+    el._setupStep = 'architecture';
+    await el.updateComplete;
+    expect(el.shadowRoot.textContent).toContain('1 measured opening');
+    expect(el.shadowRoot.textContent).toContain('0.90 × 2.10 m');
+  });
+
+  it('undoes and redoes editor changes', async () => {
+    const el = await mountStudio();
+    el._onImageChanged('base', '/local/changed.png');
+    await el.updateComplete;
+    expect(el.config.images.base).toBe('/local/changed.png');
+    (el.shadowRoot.querySelector('.undo') as HTMLElement).click();
+    await el.updateComplete;
+    expect(el.config.images.base).toBe('/local/day.png');
+    (el.shadowRoot.querySelector('.redo') as HTMLElement).click();
+    expect(el.config.images.base).toBe('/local/changed.png');
+  });
+
+  it('adds and adjusts an opening after selecting a wall', async () => {
+    const el = await mountStudio({
+      ...baseConfig(),
+      zones: [{ id: 'living', name: 'Living Room', x: 10, y: 10, width: 70, height: 60 }],
+      spatial: {
+        plan: rectangularSpatialPlan(8, 6),
+        openings: [], walls: [], site: { north: 0 }, dimensions: { width: 8, aspectRatio: 4 / 3, wallHeight: 2.6 },
+      },
+    });
+    el._setupStep = 'architecture';
+    await el.updateComplete;
+    const preview = el.shadowRoot.querySelector('spatial-plan-editor') as HTMLElement;
+    preview.dispatchEvent(new CustomEvent('spatial-wall-selected', {
+      detail: { wallId: 'wall-1' }, bubbles: true, composed: true,
+    }));
+    await el.updateComplete;
+    const addDoor = Array.from(el.shadowRoot.querySelectorAll('.setup-card ha-button'))
+      .find((button: any) => button.textContent?.includes('Add door')) as HTMLElement;
+    addDoor.click();
+    await el.updateComplete;
+    expect(el.config.spatial.openings[0]).toMatchObject({ kind: 'door', wallId: 'wall-1', position: 0.5, widthMeters: 0.9, height: 2.1 });
+    const size = el.shadowRoot.querySelector('#opening-size') as HTMLInputElement;
+    size.value = '1.15';
+    size.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(el.config.spatial.openings[0].widthMeters).toBe(1.15);
+    const curve = el.shadowRoot.querySelector('#wall-curve') as HTMLInputElement;
+    curve.value = '-42';
+    curve.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(el.config.spatial.plan.walls[0].curve).toBe(-0.42);
+    const north = el.shadowRoot.querySelector('#north-bearing') as HTMLInputElement;
+    north.value = '32';
+    north.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(el.config.spatial.site.north).toBe(32);
+  });
+
+  it('maps an enclosed spatial room to a Home Assistant Area', async () => {
+    const el = await mountStudio();
+    el.hass = {
+      states: {}, localize: (k: string) => k,
+      areas: { living: { area_id: 'living', name: 'Living Room' } },
+      entities: {}, devices: {},
+    };
+    el._commitSpatial({ ...el._spatial(), plan: rectangularSpatialPlan(8, 6) });
+    el._setupStep = 'rooms';
+    await el.updateComplete;
+    expect(el.shadowRoot.textContent).toContain('1 enclosed space was found');
+    const select = el.shadowRoot.querySelector('.room-fields select') as HTMLSelectElement;
+    select.value = 'living';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(el.config.zones[0].name).toBe('Living Room');
+    expect(el.config.zones[0].areaId).toBe('living');
+    expect(el.config.spatial.plan.rooms[0].zoneId).toBe(el.config.zones[0].id);
+  });
+
+  it('imports an area into its matching room rather than a generic grid', async () => {
+    const config = {
+      ...baseConfig(),
+      zones: [{ name: 'Kitchen', x: 20, y: 30, width: 40, height: 20 }],
+    };
+    const el = await mountStudio(config);
+    el.hass = {
+      states: {}, localize: (k: string) => k,
+      areas: { kitchen: { area_id: 'kitchen', name: 'Kitchen' } },
+      entities: {
+        'light.kitchen_one': { entity_id: 'light.kitchen_one', area_id: 'kitchen' },
+        'light.kitchen_two': { entity_id: 'light.kitchen_two', area_id: 'kitchen' },
+      },
+      devices: {},
+    };
+    el._addEntitiesFromArea('kitchen');
+    expect(el.config.entities).toHaveLength(2);
+    for (const entity of el.config.entities) {
+      expect(entity.x).toBeGreaterThan(20);
+      expect(entity.x).toBeLessThan(60);
+      expect(entity.y).toBeGreaterThan(30);
+      expect(entity.y).toBeLessThan(50);
+    }
+  });
+
+  it('flags unplaced devices and overlapping rooms in the setup review', async () => {
+    const el = await mountStudio({
+      ...baseConfig(),
+      entities: [{ entity: 'light.unplaced', x: 90, y: 90, size: 'small', tap: 'toggle', orientation: null }],
+      zones: [
+        { name: 'Living Room', x: 0, y: 0, width: 50, height: 50 },
+        { name: 'Kitchen', x: 40, y: 40, width: 40, height: 40 },
+      ],
+    });
+    el._setupStep = 'review';
+    await el.updateComplete;
+    expect(el.shadowRoot.textContent).toContain('1 device needs a room');
+    expect(el.shadowRoot.textContent).toContain('1 overlapping room boundary found');
   });
 });

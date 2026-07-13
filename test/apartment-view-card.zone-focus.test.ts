@@ -16,6 +16,7 @@ function makeConfig(): ApartmentViewConfig {
     options: {
       view: 'auto',
       lightStyle: 'lit',
+      hideWalls: false,
       freePanZoom: true,
       zoomMax: 1.5,
       duskDawnOffsetMinutes: 60,

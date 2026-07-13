@@ -22,7 +22,11 @@ export interface HassLike {
   ): Promise<void>;
   /** Optional formatting context present on the real HA `hass` (used for labels). */
   locale?: { language?: string };
-  config?: { unit_system?: Record<string, string> };
+  config?: {
+    latitude?: number;
+    longitude?: number;
+    unit_system?: Record<string, string>;
+  };
   /** HA's locale-aware state display; not guaranteed on older cores. */
   formatEntityState?: (stateObj: HassEntity) => string;
 }

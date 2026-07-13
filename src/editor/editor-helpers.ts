@@ -4,6 +4,7 @@ import type {
   LightStyle,
   SizeTier,
   TapAction,
+  MarkerVisibility,
   ZoneConfig,
 } from '../core/config';
 
@@ -73,6 +74,20 @@ const TAP_OPTIONS: { value: TapAction; label: string }[] = [
   { value: 'none', label: 'None' },
 ];
 
+const PRESENTATION_OPTIONS = [
+  { value: 'calm', label: 'Calm — only what matters now' },
+  { value: 'informative', label: 'Informative — useful room context' },
+  { value: 'control-heavy', label: 'Control-heavy — show every device' },
+];
+
+const MARKER_VISIBILITY_OPTIONS: { value: MarkerVisibility; label: string }[] = [
+  { value: 'auto', label: 'Automatic for this device type' },
+  { value: 'always', label: 'Always' },
+  { value: 'active', label: 'When active' },
+  { value: 'attention', label: 'Only when it needs attention' },
+  { value: 'hidden', label: 'Hidden' },
+];
+
 /** Per-entity label source. 'inherit' = no per-entity label (use the global default). */
 const LABEL_SOURCE_OPTIONS = [
   { value: 'inherit', label: 'Inherit from card default' },
@@ -136,6 +151,10 @@ export const IMAGE_FIELDS: ImageFieldDef[] = [
 export function optionsSchema(): HaFormSchema[] {
   return [
     {
+      name: 'presentation',
+      selector: { select: { mode: 'dropdown', options: PRESENTATION_OPTIONS } },
+    },
+    {
       name: 'view',
       selector: { select: { mode: 'dropdown', options: VIEW_OPTIONS } },
     },
@@ -143,6 +162,7 @@ export function optionsSchema(): HaFormSchema[] {
       name: 'lightStyle',
       selector: { select: { mode: 'dropdown', options: LIGHT_STYLE_OPTIONS } },
     },
+    { name: 'hideWalls', selector: { boolean: {} } },
     { name: 'freePanZoom', selector: { boolean: {} } },
     {
       name: 'zoomMax',
@@ -214,6 +234,14 @@ export function entitySchema(directional: boolean, labelSource = 'inherit'): HaF
       selector: { select: { mode: 'dropdown', options: TAP_OPTIONS } },
     },
     {
+      name: 'overviewVisibility',
+      selector: { select: { mode: 'dropdown', options: MARKER_VISIBILITY_OPTIONS } },
+    },
+    {
+      name: 'roomVisibility',
+      selector: { select: { mode: 'dropdown', options: MARKER_VISIBILITY_OPTIONS } },
+    },
+    {
       name: 'lightStyle',
       selector: { select: { mode: 'dropdown', options: LIGHT_STYLE_OPTIONS } },
     },
@@ -279,6 +307,8 @@ export interface EntityFormData {
   icon?: string;
   size: SizeTier;
   tap: TapAction;
+  overviewVisibility?: MarkerVisibility;
+  roomVisibility?: MarkerVisibility;
   lightStyle?: LightStyle;
   x: number;
   y: number;
@@ -299,6 +329,8 @@ export function entityToForm(e: EntityConfig): EntityFormData {
     icon: e.icon,
     size: e.size,
     tap: e.tap,
+    overviewVisibility: e.overviewVisibility,
+    roomVisibility: e.roomVisibility,
     lightStyle: e.lightStyle,
     x: e.x,
     y: e.y,

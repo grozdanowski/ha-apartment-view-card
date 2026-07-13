@@ -15,21 +15,21 @@ describe('apartment-view-card config element + stub', () => {
     expect(customElements.get('apartment-view-card-editor')).toBeDefined();
   });
 
-  it('getStubConfig returns a valid v2 config that normalizeConfig accepts', () => {
+  it('getStubConfig returns a valid 3D config that normalizeConfig accepts', () => {
     const Card = customElements.get('apartment-view-card') as any;
     const stub = Card.getStubConfig();
     expect(stub.type).toContain('apartment-view-card');
-    expect(stub.images.base).toBeTruthy();
+    expect(stub.images.base).toBe('');
+    expect(stub.spatial.plan.rooms).toHaveLength(1);
     expect(Array.isArray(stub.entities)).toBe(true);
     expect(Array.isArray(stub.zones)).toBe(true);
     expect(() => normalizeConfig(stub)).not.toThrow();
   });
 
-  it('getStubConfig uses a self-contained placeholder image, not a path that 404s', () => {
+  it('getStubConfig needs no placeholder image', () => {
     const Card = customElements.get('apartment-view-card') as any;
     const stub = Card.getStubConfig();
-    expect(stub.images.base.startsWith('data:image/svg+xml')).toBe(true);
-    expect(stub.images.base).not.toContain('/local/');
+    expect(stub.images.base).toBe('');
   });
 
   it('getStubConfig options carry the documented defaults', () => {

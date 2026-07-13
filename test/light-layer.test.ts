@@ -18,6 +18,7 @@ function opts(over: Partial<CardOptions> = {}): CardOptions {
   return {
     view: 'auto',
     lightStyle: 'lit',
+    hideWalls: false,
     freePanZoom: true,
     zoomMax: 1.5,
     duskDawnOffsetMinutes: 60,

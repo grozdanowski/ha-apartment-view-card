@@ -4,8 +4,9 @@ import { repeat } from 'lit/directives/repeat.js';
 import { guard } from 'lit/directives/guard.js';
 import { fireEvent } from 'custom-card-helpers';
 import type { HassLike } from './core/ha-types';
-import { normalizeConfig, zoneForPoint, type ApartmentViewConfig, type EntityConfig, type ZoneConfig, type QuickAction, type ImagesConfig } from './core/config';
+import { normalizeConfig, zoneForEntity, zoneForPoint, type ApartmentViewConfig, type EntityConfig, type ZoneConfig, type QuickAction, type ImagesConfig } from './core/config';
 import './editor/apartment-view-card-editor';
+import './editor/spatial-preview';
 import { renderBaseLayer, weatherTint } from './render/base-layer';
 import { renderLightLayer } from './render/light-layer';
 import { renderEffect, EFFECT_STYLES } from './render/effect-layer';
@@ -23,6 +24,8 @@ import { entityInFocusedZone } from './render/zone-focus';
 import { attentionFor } from './core/attention';
 import './render/control-surface';
 import { controlKind, controlTarget } from './core/entity-capabilities';
+import { markerIsVisible } from './core/entity-policy';
+import { rectangularSpatialPlan } from './core/spatial-plan';
 
 /** Viewport width at/below which the mobile icon-size overrides apply. */
 const MOBILE_BREAKPOINT_PX = 768;
@@ -127,6 +130,7 @@ export class ApartmentViewCard extends LitElement {
    */
   @state() private _isGesturing = false;
   @state() private _focusedZone: ZoneConfig | null = null;
+  @state() private _spatialFocusedZone: string | null = null;
   /** Entities currently driven by the control surface (empty = closed). */
   @state() private _controlled: string[] = [];
   /** "Lights control" multi-select mode. */
@@ -194,6 +198,7 @@ export class ApartmentViewCard extends LitElement {
     css`
     :host {
       display: block;
+      background: transparent;
       /* Motion tokens (spec v2.5 §2) — every duration/easing in the card
          derives from these. Reduced motion zeroes the durations below
          (keyframes and the tilt transform don't read the vars, so they keep
@@ -203,15 +208,19 @@ export class ApartmentViewCard extends LitElement {
       --av-dur-med: 320ms; /* entrances, panel arrivals, snap-back */
       --av-dur-slow: 560ms; /* camera moves: zone focus, reset, double-tap */
       --av-ease-out: cubic-bezier(0.22, 1, 0.36, 1); /* the camera, fades, labels */
-      --av-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1); /* chips, checks, FAB; NEVER the camera */
+      --av-ease-spring: cubic-bezier(0.22, 1, 0.36, 1); /* crisp chips, checks, FAB; NEVER the camera */
       --av-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); /* cross-fades, exits */
-      --av-ease-snap: cubic-bezier(0.175, 0.885, 0.32, 1.12); /* rubber-band return only */
+      --av-ease-snap: cubic-bezier(0.22, 1, 0.36, 1); /* rubber-band return only */
     }
     /* The floorplan floats directly on the dashboard: no card chrome. */
     ha-card {
-      background: none;
+      --ha-card-background: transparent;
+      --ha-card-border-color: transparent;
+      --ha-card-box-shadow: none;
+      background: transparent;
       border: none;
       box-shadow: none;
+      overflow: visible;
     }
     /* HUD row above the canvas (attention + lights control live here, never
        overlaying the floorplan). */
@@ -933,22 +942,27 @@ export class ApartmentViewCard extends LitElement {
     return { rows: 8, columns: 12, min_rows: 4, min_columns: 6 };
   }
 
+  private _onSpatialEntitySelected(event: CustomEvent<{ entityId: string }>): void {
+    event.stopPropagation();
+    fireEvent(this, 'hass-more-info', { entityId: event.detail.entityId });
+  }
+
+  private _onSpatialRoomSelected(event: CustomEvent<{ zoneId: string | null }>): void {
+    event.stopPropagation();
+    this._spatialFocusedZone = event.detail.zoneId;
+  }
+
   static getConfigElement(): HTMLElement {
     return document.createElement('apartment-view-card-editor');
   }
-
-  // Self-contained placeholder so the card-picker preview shows a clean
-  // "configure me" panel instead of a 404 to a path that does not exist yet.
-  static readonly STUB_BASE_IMAGE =
-    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='200'%3E%3Crect width='320' height='200' fill='%23263238'/%3E%3Crect x='24' y='24' width='272' height='152' rx='8' fill='none' stroke='%2390a4ae' stroke-width='2' stroke-dasharray='8 6'/%3E%3Ctext x='160' y='106' fill='%2390a4ae' font-family='sans-serif' font-size='14' text-anchor='middle'%3ESet images.base to your floorplan%3C/text%3E%3C/svg%3E";
 
   // HA calls getStubConfig(hass, entities); params accepted for future seeding.
   static getStubConfig(): ApartmentViewConfig {
     return normalizeConfig({
       type: 'custom:apartment-view-card',
-      images: { base: ApartmentViewCard.STUB_BASE_IMAGE },
       entities: [],
       zones: [],
+      spatial: { plan: rectangularSpatialPlan(8, 6) },
       options: {
         view: 'auto',
         lightStyle: 'lit',
@@ -1847,7 +1861,7 @@ export class ApartmentViewCard extends LitElement {
       this._attentionCycleCount = items.length;
     }
     const item = items[this._attentionCycle % items.length];
-    const zone = zoneForPoint(item.x, item.y, this._floorData.zones);
+    const zone = zoneForEntity(item, this._floorData.zones);
     const onSettle = (): void => this._pulseAttention();
     if (zone) {
       this._focusZone(zone, { onSettle });
@@ -2202,6 +2216,26 @@ export class ApartmentViewCard extends LitElement {
   // ---------------------------------------------------------------------------
 
   protected render(): TemplateResult {
+    const spatial = this.config?.spatial;
+    if (spatial?.plan || spatial?.shell) {
+      return html`<ha-card><spatial-preview
+        .zones=${this.config.zones}
+        .entities=${this.config.entities}
+        .openings=${spatial.openings}
+        .walls=${spatial.walls}
+        .site=${spatial.site}
+        .dimensions=${spatial.dimensions}
+        .plan=${spatial.plan}
+        .shell=${spatial.shell ?? null}
+        .hass=${this.hass}
+        .hideWalls=${this.config.options.hideWalls}
+        .focusedZoneId=${this._spatialFocusedZone}
+        .latitude=${spatial.site.latitude ?? this.hass?.config?.latitude ?? 0}
+        .longitude=${spatial.site.longitude ?? this.hass?.config?.longitude ?? 0}
+        @spatial-entity-selected=${this._onSpatialEntitySelected}
+        @spatial-room-selected=${this._onSpatialRoomSelected}
+      ></spatial-preview></ha-card>`;
+    }
     if (!this.config?.images?.base) {
       return html`<ha-card><div class="warning">Please configure images.base.</div></ha-card>`;
     }
@@ -2225,7 +2259,7 @@ export class ApartmentViewCard extends LitElement {
     // Mobile taller-frame (Fix 3): overrides the wrapper aspect + scales the
     // whole floorplan (via .frame) to fill it. null on desktop / no gain.
     const frame = this._mobileFrame();
-    const views = computeMarkerViews(
+    const allViews = computeMarkerViews(
       this._floorData.entities,
       this.hass?.states ?? {},
       t,
@@ -2238,8 +2272,20 @@ export class ApartmentViewCard extends LitElement {
       maxIconScale,
       this._frozenLabels ?? undefined,
     );
+    const roomFocused = this._focusedZone !== null;
+    const views = allViews.filter((view) => markerIsVisible(
+      view.entity,
+      this.config.options.presentation ?? 'control-heavy',
+      {
+        state: view.state,
+        active: view.active,
+        attention: view.attention,
+        roomFocused,
+        selectMode: this._selectMode,
+      },
+    ));
     this._lastViews = views; // snapshot source for the gesture label freeze
-    const attentionCount = views.filter((v) => v.attention).length;
+    const attentionCount = allViews.filter((v) => v.attention).length;
 
     const floors = this.config.floors ?? [];
 

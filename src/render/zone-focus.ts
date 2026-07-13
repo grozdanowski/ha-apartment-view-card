@@ -1,5 +1,5 @@
 import type { EntityConfig, ZoneConfig } from '../core/config';
-import { zoneForPoint } from '../core/config';
+import { zoneForEntity } from '../core/config';
 
 /**
  * True when the entity's membership zone (smallest-area containing zone) is the
@@ -13,5 +13,7 @@ export function entityInFocusedZone(
   zones: ZoneConfig[],
 ): boolean {
   if (focused === null) return true;
-  return zoneForPoint(entity.x, entity.y, zones) === focused;
+  const membership = zoneForEntity(entity, zones);
+  if (membership === null) return false;
+  return focused.id && membership.id ? membership.id === focused.id : membership === focused;
 }

@@ -71,6 +71,7 @@ describe('optionsSchema', () => {
       expect.arrayContaining([
         'view',
         'lightStyle',
+        'hideWalls',
         'freePanZoom',
         'zoomMax',
         'duskDawnOffsetMinutes',
@@ -95,6 +96,11 @@ describe('optionsSchema', () => {
   it('uses a boolean selector for freePanZoom', () => {
     const fpz = schema.find((s) => s.name === 'freePanZoom')!;
     expect(fpz.selector.boolean).toBeDefined();
+  });
+
+  it('uses a boolean selector for the overview wall preference', () => {
+    const hideWalls = schema.find((s) => s.name === 'hideWalls')!;
+    expect(hideWalls.selector).toEqual({ boolean: {} });
   });
 });
 

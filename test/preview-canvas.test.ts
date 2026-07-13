@@ -58,6 +58,37 @@ describe('preview-canvas', () => {
     expect(markers[1].classList.contains('selected')).toBe(false);
   });
 
+  it('supports precise keyboard positioning', async () => {
+    const el = await mount();
+    const moves: { index: number; x: number; y: number }[] = [];
+    el.addEventListener('preview-entity-moved', (e) => moves.push((e as CustomEvent).detail));
+    const marker = el.shadowRoot!.querySelectorAll('.marker')[0] as HTMLElement;
+    marker.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    marker.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true }));
+    expect(moves).toEqual([
+      { index: 0, x: 20.5, y: 30 },
+      { index: 0, x: 20, y: 32 },
+    ]);
+    expect(marker.getAttribute('role')).toBe('button');
+    expect(marker.getAttribute('tabindex')).toBe('0');
+  });
+
+  it('exposes selectable walls and openings only in architecture mode', async () => {
+    const el = await mount();
+    el.zones = [{ id: 'living', name: 'Living Room', x: 10, y: 10, width: 60, height: 50 }];
+    el.openings = [{ id: 'door-1', kind: 'door', wallId: 'living:top', position: 0.5, width: 0.2 }];
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelectorAll('.wall')).toHaveLength(0);
+    el.architectureMode = true;
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelectorAll('.wall')).toHaveLength(4);
+    expect(el.shadowRoot!.querySelectorAll('.opening')).toHaveLength(1);
+    let wallId = '';
+    el.addEventListener('preview-wall-selected', (event) => { wallId = (event as CustomEvent).detail.wallId; });
+    (el.shadowRoot!.querySelector('.wall') as HTMLElement).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    expect(wallId).toBe('living:top');
+  });
+
   it('dragging a marker fires preview-entity-moved with clamped %', async () => {
     const el = await mount();
     const moves: { index: number; x: number; y: number }[] = [];

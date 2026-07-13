@@ -5,6 +5,7 @@ import {
   type ApartmentViewConfig,
   type ZoneConfig,
 } from '../src/core/config';
+import { rectangularSpatialPlan } from '../src/core/spatial-plan';
 
 describe('normalizeConfig', () => {
   it('throws when images.base is missing', () => {
@@ -12,6 +13,36 @@ describe('normalizeConfig', () => {
     expect(() =>
       normalizeConfig({ type: 'x', images: {} }),
     ).toThrow(/images\.base/);
+  });
+
+  it('accepts an authoritative 3D spatial plan without a floorplan image', () => {
+    const cfg = normalizeConfig({
+      type: 'custom:apartment-view-card',
+      spatial: { plan: rectangularSpatialPlan(8, 6) },
+    });
+    expect(cfg.images.base).toBe('');
+    expect(cfg.spatial?.plan?.rooms).toHaveLength(1);
+  });
+
+  it('preserves exact survey geometry without requiring a floorplan image', () => {
+    const cfg = normalizeConfig({
+      type: 'custom:apartment-view-card',
+      zones: [{ id: 'living', name: 'Living Room', x: 0, y: 0, width: 100, height: 100 }],
+      spatial: {
+        shell: {
+          outer: [[0, 0], [8, 0], [8, 6], [0, 6]],
+          holes: [],
+          floor: [[0, 0], [8, 0], [8, 6], [0, 6]],
+          rooms: [{ zoneId: 'living', floor: [[0, 0], [8, 0], [8, 6], [0, 6]], finish: 'wood' }],
+          walls: [{ id: 'survey wall', points: [[0, 0], [8, 0]], thickness: 0.18, zoneIds: ['living'] }],
+          openings: [{ id: 'front door', kind: 'door', x: 4, z: 0, width: 0.9, depth: 0.18, rotation: 0, bottom: 0, height: 2.1 }],
+        },
+      },
+    });
+    expect(cfg.images.base).toBe('');
+    expect(cfg.spatial?.shell?.rooms?.[0].zoneId).toBe('living');
+    expect(cfg.spatial?.shell?.walls?.[0].id).toBe('survey-wall');
+    expect(cfg.spatial?.shell?.openings[0]).toMatchObject({ id: 'front-door', kind: 'door', width: 0.9 });
   });
 
   it('accepts legacy top-level dayImage as images.base', () => {
@@ -27,6 +58,7 @@ describe('normalizeConfig', () => {
     expect(cfg.options).toEqual({
       view: 'auto',
       lightStyle: 'lit',
+      hideWalls: false,
       freePanZoom: true,
       zoomMax: 1.5,
       duskDawnOffsetMinutes: 60,
@@ -41,6 +73,7 @@ describe('normalizeConfig', () => {
         inertia: true,
       },
       idleTimeout: 0,
+      presentation: 'control-heavy',
     });
     expect(cfg.entities).toEqual([]);
     expect(cfg.zones).toEqual([]);
@@ -179,6 +212,7 @@ describe('normalizeConfig', () => {
       zones: [{ x: 1, y: 2, width: 10, height: 20, icon: 'mdi:sofa' }],
     });
     expect(cfg.zones[0]).toEqual({
+      id: 'zone',
       name: 'Zone',
       icon: 'mdi:sofa',
       x: 1,
@@ -186,6 +220,163 @@ describe('normalizeConfig', () => {
       width: 10,
       height: 20,
     });
+  });
+
+  it('migrates rooms to stable unique ids and preserves Area links', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      zones: [
+        { name: 'Living Room', areaId: 'living_room', x: 0, y: 0, width: 50, height: 50 },
+        { name: 'Living Room', x: 50, y: 0, width: 50, height: 50 },
+      ],
+    });
+    expect(cfg.modelVersion).toBe(6);
+    expect(cfg.zones.map((zone) => zone.id)).toEqual(['living-room', 'living-room-2']);
+    expect(cfg.zones[0].areaId).toBe('living_room');
+  });
+
+  it('normalizes wall openings and drops openings whose wall no longer exists', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      zones: [{ id: 'living', name: 'Living Room', x: 0, y: 0, width: 80, height: 80 }],
+      spatial: {
+        openings: [
+          { id: 'balcony-door', kind: 'door', wallId: 'living:right', position: 2, width: 0.01 },
+          { id: 'window', kind: 'window', wallId: 'deleted:top', position: 0.5, width: 0.3 },
+        ],
+      },
+    });
+    expect(cfg.spatial?.openings).toEqual([
+      { id: 'balcony-door', kind: 'door', wallId: 'living:right', position: 0.96, width: 0.08 },
+    ]);
+  });
+
+  it('normalizes curved walls, north, location, and real dimensions', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      zones: [{ id: 'living', name: 'Living Room', x: 0, y: 0, width: 80, height: 80 }],
+      spatial: {
+        openings: [],
+        walls: [
+          { wallId: 'living:right', curve: 1.8 },
+          { wallId: 'deleted:left', curve: 0.4 },
+          { wallId: 'living:top', curve: 0 },
+        ],
+        site: { north: -25, latitude: 95, longitude: -190 },
+        dimensions: { width: 11.7, aspectRatio: 1.158, wallHeight: 2.65 },
+      },
+    });
+    expect(cfg.spatial).toEqual({
+      openings: [],
+      walls: [{ wallId: 'living:right', curve: 1 }],
+      site: { north: 335, latitude: 90, longitude: -180 },
+      dimensions: { width: 11.7, aspectRatio: 1.158, wallHeight: 2.65 },
+    });
+  });
+
+  it('normalizes an authoritative metre-based spatial plan', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      zones: [{ id: 'living', name: 'Living Room', x: 0, y: 0, width: 100, height: 100 }],
+      entities: [{
+        entity: 'light.pendant', x: 50, y: 50,
+        spatial: {
+          position: { x: 2.4, y: 2.35, z: 1.8 },
+          rotation: { x: 0, y: 45, z: 0 },
+          mount: 'ceiling', parentId: 'living', visible: false,
+        },
+      }],
+      spatial: {
+        openings: [{
+          id: 'balcony', kind: 'door', wallId: 'South Wall', position: 0.5, width: 0.2,
+          widthMeters: 0.92, height: 2.15, bottom: 0, hinge: 'right', swing: 'in',
+        }],
+        plan: {
+          version: 99,
+          vertices: [
+            { id: 'A', x: 0, z: 0 }, { id: 'B', x: 5, z: 0 },
+            { id: 'C', x: 5, z: 4 }, { id: 'D', x: 0, z: 4 },
+          ],
+          walls: [
+            { id: 'South Wall', start: 'A', end: 'B', thickness: 0.18, curve: 0 },
+            { id: 'East Wall', start: 'B', end: 'C', thickness: 0.12, curve: 0.2 },
+            { id: 'North Wall', start: 'C', end: 'D', thickness: 0.12, curve: 0 },
+            { id: 'West Wall', start: 'D', end: 'A', thickness: 0.12, curve: 0 },
+          ],
+          rooms: [{
+            id: 'Lounge', zoneId: 'living', floorFinish: 'wood',
+            boundary: [
+              { wallId: 'South Wall' }, { wallId: 'East Wall' },
+              { wallId: 'North Wall' }, { wallId: 'West Wall' },
+            ],
+          }],
+          objects: [{
+            id: 'Sofa', kind: 'sofa', name: 'Main sofa', zoneId: 'living', entityId: 'sensor.sofa',
+            assetId: 'fjord-sofa-3', finishId: 'lichen',
+            position: { x: 2, y: 0, z: 3 }, rotation: { y: 180 }, scale: { x: 2.2, y: 1, z: 0.9 },
+          }],
+        },
+      },
+    });
+    expect(cfg.spatial?.plan?.version).toBe(1);
+    expect(cfg.spatial?.plan?.vertices).toHaveLength(4);
+    expect(cfg.spatial?.plan?.vertices[0]).toEqual({ id: 'a', x: 0, z: 0 });
+    expect(cfg.spatial?.plan?.walls).toHaveLength(4);
+    expect(cfg.spatial?.plan?.walls[0]).toEqual({ id: 'south-wall', start: 'a', end: 'b', thickness: 0.18, curve: 0 });
+    expect(cfg.spatial?.plan?.rooms[0]).toMatchObject({ id: 'lounge', zoneId: 'living', floorFinish: 'wood' });
+    expect(cfg.spatial?.plan?.objects[0]).toEqual({
+      id: 'sofa', kind: 'sofa', name: 'Main sofa', zoneId: 'living', entityId: 'sensor.sofa', assetId: 'fjord-sofa-3', finishId: 'lichen',
+      position: { x: 2, y: 0, z: 3 }, rotation: { x: 0, y: 180, z: 0 }, scale: { x: 2.2, y: 1, z: 0.9 },
+    });
+    expect(cfg.spatial?.openings[0]).toEqual({
+      id: 'balcony', kind: 'door', wallId: 'south-wall', position: 0.5, width: 0.2,
+      widthMeters: 0.92, height: 2.15, bottom: 0, hinge: 'right', swing: 'in',
+    });
+    expect(cfg.entities[0].spatial).toEqual({
+      position: { x: 2.4, y: 2.35, z: 1.8 },
+      rotation: { x: 0, y: 45, z: 0 },
+      mount: 'ceiling', parentId: 'living', visible: false,
+    });
+  });
+
+  it('drops broken spatial graph references and clamps unsafe transforms', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      entities: [{
+        entity: 'camera.test',
+        spatial: { position: { x: 5000, y: -5000, z: 2 }, rotation: { y: 900 }, mount: 'magic' },
+      }],
+      spatial: {
+        plan: {
+          vertices: [{ id: 'a', x: 0, z: 0 }, { id: 'bad' }],
+          walls: [
+            { id: 'dangling', start: 'a', end: 'missing' },
+            { id: 'same', start: 'a', end: 'a' },
+          ],
+          rooms: [{ id: 'broken', boundary: [{ wallId: 'dangling' }] }],
+          objects: [{ id: 'lamp', kind: 'lamp', scale: { x: 0, y: 99, z: 1 } }],
+        },
+      },
+    });
+    expect(cfg.spatial?.plan).toEqual({ version: 1, vertices: [{ id: 'a', x: 0, z: 0 }], walls: [], rooms: [], objects: [{
+      id: 'lamp', kind: 'lamp', position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 0.05, y: 20, z: 1 },
+    }] });
+    expect(cfg.entities[0].spatial).toEqual({
+      position: { x: 1000, y: -1000, z: 2 }, rotation: { x: 0, y: 360, z: 0 }, mount: 'free', visible: true,
+    });
+  });
+
+  it('keeps explicit room membership and removes only broken room links', () => {
+    const cfg = normalizeConfig({
+      images: { base: '/b.png' },
+      zones: [{ id: 'lounge', name: 'Renamed Lounge', x: 0, y: 0, width: 50, height: 50 }],
+      entities: [
+        { entity: 'media_player.tv', zoneId: 'lounge', x: 90, y: 90 },
+        { entity: 'light.orphan', zoneId: 'deleted-room', x: 10, y: 10 },
+      ],
+    });
+    expect(cfg.entities[0].zoneId).toBe('lounge');
+    expect(cfg.entities[1]).not.toHaveProperty('zoneId');
   });
 
   it('preserves unknown top-level keys (v1 columns/rows bug)', () => {
@@ -265,6 +456,14 @@ describe('normalizeConfig weatherEntity', () => {
   it('keeps a string weatherEntity, omits otherwise', () => {
     expect(normalizeConfig({ images: { base: '/b.png' }, options: { weatherEntity: 'weather.home' } }).options.weatherEntity).toBe('weather.home');
     expect('weatherEntity' in normalizeConfig({ images: { base: '/b.png' } }).options).toBe(false);
+  });
+});
+
+describe('normalizeConfig hideWalls', () => {
+  it('defaults overview walls to full height and preserves an explicit cutaway preference', () => {
+    expect(normalizeConfig({ images: { base: '/b.png' } }).options.hideWalls).toBe(false);
+    expect(normalizeConfig({ images: { base: '/b.png' }, options: { hideWalls: true } }).options.hideWalls).toBe(true);
+    expect(normalizeConfig({ images: { base: '/b.png' }, options: { hideWalls: 'yes' } }).options.hideWalls).toBe(false);
   });
 });
 

@@ -3,7 +3,7 @@
   "render_readme": true,
   "filename": "apartment-view-card.js",
   "content_in_root": false,
-  "domains": ["light", "media_player", "climate"],
+  "domains": ["light", "media_player", "climate", "cover", "fan", "lock", "vacuum"],
   "homeassistant": "2024.3.0",
   "iot_class": "calculated"
 }

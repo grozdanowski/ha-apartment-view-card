@@ -1,7 +1,7 @@
 {
   "name": "ha-apartment-view-card",
-  "version": "2.5.3",
-  "description": "Home Assistant custom Lovelace card overlaying interactive, state-aware device markers and procedural lighting on a floorplan render.",
+  "version": "3.0.0",
+  "description": "A spatial, state-aware 3D home for Home Assistant with an integrated architectural editor.",
   "type": "module",
   "main": "dist/apartment-view-card.js",
   "scripts": {
@@ -23,8 +23,12 @@
   "license": "MIT",
   "dependencies": {
     "@mdi/js": "^7.4.47",
+    "@types/suncalc": "^1.9.2",
+    "@types/three": "^0.185.1",
     "custom-card-helpers": "^1.9.0",
-    "lit": "^3.3.0"
+    "lit": "^3.3.0",
+    "suncalc": "^2.0.1",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^7.18.0",
