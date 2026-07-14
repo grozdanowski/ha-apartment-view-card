@@ -1,6 +1,6 @@
 {
   "name": "ha-apartment-view-card",
-  "version": "3.0.5",
+  "version": "3.0.6",
   "description": "A spatial, state-aware 3D home for Home Assistant with an integrated architectural editor.",
   "type": "module",
   "main": "dist/apartment-view-card.js",
@@ -26,11 +26,13 @@
     "@types/suncalc": "^1.9.2",
     "@types/three": "^0.185.1",
     "custom-card-helpers": "^1.9.0",
+    "js-yaml": "^5.2.1",
     "lit": "^3.3.0",
     "suncalc": "^2.0.1",
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "@vitest/browser": "^2.1.9",

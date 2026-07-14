@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import '../src/apartment-view-card';
 import { rectangularSpatialPlan } from '../src/core/spatial-plan';
+import { elementPrimitivesForType } from '../src/core/spatial-elements';
 
 describe('3D spatial runtime', () => {
   beforeEach(() => {
@@ -73,6 +74,9 @@ describe('3D spatial runtime', () => {
   it('focuses a room from the navigation rail', async () => {
     const { card, preview } = await mount();
     const roomButtons = [...card.shadowRoot.querySelectorAll('.spatial-room-rail button')] as HTMLButtonElement[];
+    expect(roomButtons.map((button) => button.textContent)).toEqual(['Living Room']);
+    expect(card.shadowRoot.querySelector('.spatial-room-back')).toBeNull();
+    expect(card.shadowRoot.querySelector('.spatial-room-divider')).toBeNull();
     const roomButton = roomButtons.find((button) => button.textContent === 'Living Room');
     roomButton?.click();
     await card.updateComplete;
@@ -81,6 +85,8 @@ describe('3D spatial runtime', () => {
     expect(roomButton?.getAttribute('aria-pressed')).toBe('true');
     const back = card.shadowRoot.querySelector('.spatial-room-back') as HTMLButtonElement;
     expect(back).toBeTruthy();
+    expect(card.shadowRoot.querySelector('.spatial-room-divider')).toBeTruthy();
+    expect([...card.shadowRoot.querySelectorAll('.spatial-room-rail button')].map((button) => button.textContent)).toEqual(['Living Room']);
     back.click();
     await card.updateComplete;
     await preview.updateComplete;
@@ -94,10 +100,15 @@ describe('3D spatial runtime', () => {
     await preview.updateComplete;
     const roomButton = [...preview.shadowRoot.querySelectorAll('.room-rail button')]
       .find((button: Element) => button.textContent === 'Living Room') as HTMLButtonElement;
+    expect([...preview.shadowRoot.querySelectorAll('.room-rail button')].map((button) => button.textContent)).toEqual(['Living Room']);
+    expect(preview.shadowRoot.querySelector('.room-back')).toBeNull();
+    expect(preview.shadowRoot.querySelector('.room-divider')).toBeNull();
     roomButton.click();
     await preview.updateComplete;
     expect(preview.focusedZoneId).toBe('living');
     expect(roomButton.getAttribute('aria-pressed')).toBe('true');
+    expect(preview.shadowRoot.querySelector('.room-back')).toBeTruthy();
+    expect(preview.shadowRoot.querySelector('.room-divider')).toBeTruthy();
   });
 
   it('uses solid floor materials without image textures', () => {
@@ -105,6 +116,75 @@ describe('3D spatial runtime', () => {
     const floor = preview._surveyFloorMaterial() as THREE.MeshStandardMaterial;
     expect(floor.map).toBeNull();
     expect(floor.roughness).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it('blocks exterior directional light with invisible room-shaped ceilings', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.dimensions = { width: 6, aspectRatio: 1, wallHeight: 2.7 };
+    const shell = preview._createCeilingShadowShell({
+      outer: [[0, 0], [6, 0], [6, 4], [0, 4]],
+      holes: [],
+      floor: [[0, 0], [6, 0], [6, 4], [0, 4]],
+      rooms: [
+        { zoneId: 'living', floor: [[0, 0], [4, 0], [4, 4], [0, 4]] },
+        { zoneId: 'office', floor: [[4, 0], [6, 0], [6, 4], [4, 4]] },
+      ],
+      openings: [],
+    });
+    const ceilings = shell.children as THREE.Mesh[];
+    expect(ceilings).toHaveLength(2);
+    expect(ceilings.map((ceiling) => ceiling.userData.zoneId)).toEqual(['living', 'office']);
+    ceilings.forEach((ceiling) => {
+      const material = ceiling.material as THREE.MeshBasicMaterial;
+      expect(ceiling.position.y).toBe(2.7);
+      expect(ceiling.castShadow).toBe(true);
+      expect(ceiling.receiveShadow).toBe(false);
+      expect(ceiling.userData.ceilingShadowOccluder).toBe(true);
+      expect(material.colorWrite).toBe(false);
+      expect(material.depthWrite).toBe(false);
+      expect(material.side).toBe(THREE.DoubleSide);
+    });
+  });
+
+  it('makes every exterior directional light respect architectural shadows', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    const sun = new THREE.DirectionalLight();
+    const fill = new THREE.DirectionalLight();
+    preview._configureExteriorShadow(sun, 2048);
+    preview._configureExteriorShadow(fill, 1024);
+    expect(sun.castShadow).toBe(true);
+    expect(fill.castShadow).toBe(true);
+    expect(sun.shadow.mapSize.width).toBe(2048);
+    expect(fill.shadow.mapSize.width).toBe(1024);
+  });
+
+  it('lets exterior directional light pass through architectural glazing', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.dimensions = { width: 4, aspectRatio: 1, wallHeight: 2.7 };
+    const shell = preview._createSurveyShell({
+      outer: [[0, 0], [4, 0], [4, 3], [0, 3]],
+      holes: [],
+      floor: [[0, 0], [4, 0], [4, 3], [0, 3]],
+      rooms: [{ zoneId: 'living', floor: [[0, 0], [4, 0], [4, 3], [0, 3]] }],
+      walls: [{ id: 'facade', points: [[0, 0], [4, 0]], thickness: 0.2, zoneIds: ['living'] }],
+      openings: [{
+        id: 'balcony-glass', kind: 'window', x: 2, z: 0, width: 1.8, depth: 0.2,
+        rotation: 0, bottom: 0, height: 2.45,
+      }],
+    });
+    const glazing: THREE.Mesh[] = [];
+    const walls: THREE.Mesh[] = [];
+    shell.traverse((node: THREE.Object3D) => {
+      if (!(node instanceof THREE.Mesh)) return;
+      if (node.userData.glazing) glazing.push(node);
+      if (node.userData.architecturalWall) walls.push(node);
+    });
+    expect(glazing).toHaveLength(1);
+    expect(glazing[0].castShadow).toBe(false);
+    expect(glazing[0].receiveShadow).toBe(true);
+    expect((glazing[0].material as THREE.MeshStandardMaterial).transparent).toBe(true);
+    expect(walls.length).toBeGreaterThan(0);
+    expect(walls.every((wall) => wall.castShadow)).toBe(true);
   });
 
   it('turns active Home Assistant lights into practical scene lighting', () => {
@@ -128,6 +208,134 @@ describe('3D spatial runtime', () => {
     expect(practical.intensity).toBeGreaterThan(10);
     expect(practical.color.r).toBeCloseTo(1);
     expect(practical.color.g).toBeCloseTo(180 / 255);
+  });
+
+  it('represents both light Element types as beacon anchors with practical light and no solid mesh', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.hass = {
+      states: {
+        'light.fixture': {
+          entity_id: 'light.fixture', state: 'on',
+          attributes: { brightness: 128, rgb_color: [255, 120, 60] },
+        },
+      },
+    };
+    for (const type of ['ceiling-light', 'light-bulb'] as const) {
+      const visual = preview._createSpatialElement({
+        id: type,
+        type,
+        entityId: 'light.fixture',
+        position: { x: 0, y: 2.4, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        primitives: elementPrimitivesForType(type),
+      });
+      expect(visual.children.some((node: THREE.Object3D) => node instanceof THREE.Mesh)).toBe(false);
+      const practical = visual.children.find((node: THREE.Object3D) => node instanceof THREE.PointLight) as THREE.PointLight;
+      expect(practical).toBeTruthy();
+      expect(practical.intensity).toBeCloseTo((128 / 255) * 18);
+      expect(practical.color.r).toBeCloseTo(1);
+      expect(practical.color.g).toBeCloseTo(120 / 255);
+      expect(practical.userData.semanticLight).toBe(true);
+    }
+  });
+
+  it('loads a GLB Element once and drives each mapped material surface from Home Assistant state', async () => {
+    const preview = document.createElement('spatial-preview') as any;
+    const source = new THREE.Group();
+    const sourceMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(1.4, 0.8, 0.12),
+      new THREE.MeshStandardMaterial({ name: 'Screen', color: 0x111111 }),
+    );
+    sourceMesh.name = 'Display';
+    source.add(sourceMesh);
+    const element = {
+      id: 'tv', type: 'glb' as const, name: 'Television', entityId: 'media_player.tv',
+      position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, primitives: [],
+      glb: {
+        fileName: 'tv.glb', uri: 'data:model/gltf-binary;base64,AAAA', byteLength: 3,
+        size: { x: 1.4, y: 0.8, z: 0.12 },
+        surfaces: [{
+          id: 'screen', name: 'Screen', nodePath: '0', materialIndex: 0, entityId: 'switch.screen',
+          color: { base: '#111111', rules: [{ operator: 'equals' as const, compare: 'on', value: '#ff0000' }] },
+          luminosity: { base: 0, rules: [{ operator: 'equals' as const, compare: 'on', value: 0.8 }] },
+        }],
+      },
+    };
+    preview.plan = { ...rectangularSpatialPlan(4, 3), elements: [element] };
+    preview.hass = {
+      states: {
+        'switch.screen': { entity_id: 'switch.screen', state: 'on', attributes: {} },
+      },
+    };
+    preview._elementLoadGeneration = 1;
+    preview._cachedGlbElement = async () => source;
+    const model = new THREE.Group();
+    const visual = preview._createSpatialElement(element, 1);
+    model.add(visual);
+    preview._model = model;
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const mesh = (visual.children[0] as THREE.Group).children[0] as THREE.Mesh;
+    const material = mesh.material as THREE.MeshStandardMaterial;
+    expect(material.color.getHexString()).toBe('ff0000');
+    expect(material.emissiveIntensity).toBeCloseTo(2.8);
+    const practical = mesh.children.find((node) => node instanceof THREE.PointLight) as THREE.PointLight;
+    expect(practical.intensity).toBeCloseTo(9.6);
+    expect(practical.userData.elementGlbSurfaceLight).toBe('screen');
+  });
+
+  it('creates a colored floating beacon directly from a bound light Element', async () => {
+    const preview = document.createElement('spatial-preview') as any;
+    const plan = rectangularSpatialPlan(4, 3);
+    plan.elements = [{
+      id: 'pendant', type: 'ceiling-light', name: 'Dining pendant', zoneId: 'living', entityId: 'light.pendant',
+      position: { x: 2, y: 2.4, z: 1.5 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 },
+      primitives: elementPrimitivesForType('ceiling-light'),
+    }];
+    preview.plan = plan;
+    preview.entities = [];
+    preview.hass = {
+      states: {
+        'light.pendant': {
+          entity_id: 'light.pendant', state: 'on',
+          attributes: { friendly_name: 'Pendant', brightness: 220, rgb_color: [80, 160, 255] },
+        },
+      },
+    };
+    document.body.append(preview);
+    await preview.updateComplete;
+    const beacon = preview.shadowRoot.querySelector('.entity-beacon') as HTMLElement;
+    expect(beacon).toBeTruthy();
+    expect(beacon.dataset.domain).toBe('light');
+    expect(beacon.getAttribute('style')).toContain('--entity-accent:rgb(80 160 255)');
+    expect(beacon.querySelector('ha-icon')?.getAttribute('icon')).toBe('mdi:ceiling-light');
+    expect(beacon.getAttribute('aria-label')).toContain('Dining pendant');
+  });
+
+  it('represents lights as emitted color and brightness without airflow rings', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.hass = {
+      states: {
+        'light.mirror': {
+          entity_id: 'light.mirror',
+          state: 'on',
+          attributes: { brightness: 64, color_temp_kelvin: 2700 },
+        },
+      },
+    };
+    const visual = preview._createEntityVisual('light.mirror', new THREE.Vector3(0, 1.7, 0), 'bathroom');
+    const model = new THREE.Group();
+    model.add(visual);
+    preview._model = model;
+    preview._updateEntityStateVisuals();
+
+    const marker = visual.children.find((node: THREE.Object3D) => node.userData.entityMarker) as THREE.Mesh;
+    const material = marker.material as THREE.MeshStandardMaterial;
+    expect(visual.children.some((node: THREE.Object3D) => node.userData.entityEffect)).toBe(false);
+    expect(material.emissiveIntensity).toBeCloseTo(1.2 + (64 / 255) * 3.8);
+    expect(material.emissive.r).toBeGreaterThan(material.emissive.b);
   });
 
   it('scales air effects from live fan percentage', () => {
@@ -172,10 +380,62 @@ describe('3D spatial runtime', () => {
       },
     };
     await preview.updateComplete;
-    const beacon = preview.shadowRoot.querySelector('.entity-beacon') as HTMLElement;
-    expect(beacon.classList.contains('expanded')).toBe(true);
+    let beacon = preview.shadowRoot.querySelector('.entity-beacon') as HTMLElement;
+    expect(beacon.dataset.context).toBe('overview');
+    expect(beacon.classList.contains('expanded')).toBe(false);
+    expect(beacon.title).toBe('');
     expect(beacon.getAttribute('aria-label')).toContain('All The Stars · Kendrick Lamar & SZA · Spotify');
     expect(beacon.querySelector('ha-icon')?.getAttribute('icon')).toBe('mdi:speaker-play');
+
+    preview.focusedZoneId = 'living';
+    await preview.updateComplete;
+    beacon = preview.shadowRoot.querySelector('.entity-beacon') as HTMLElement;
+    expect(beacon.dataset.context).toBe('room');
+    expect(beacon.classList.contains('expanded')).toBe(true);
+    expect(beacon.title).toContain('All The Stars');
+  });
+
+  it('hides a beacon from overview without suppressing it in its room', async () => {
+    const { preview } = await mount();
+    preview.entities = [{
+      entity: 'fan.purifier', name: 'Air purifier', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null,
+      zoneId: 'living', overviewVisibility: 'hidden', roomVisibility: 'always',
+      spatial: { position: { x: 4, y: 0.5, z: 3 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'surface', visible: true },
+    }];
+    preview.hass = { states: { 'fan.purifier': { entity_id: 'fan.purifier', state: 'on', attributes: { percentage: 70 } } } };
+    await preview.updateComplete;
+    expect(preview.shadowRoot.querySelector('.entity-beacon')).toBeNull();
+
+    preview.focusedZoneId = 'living';
+    await preview.updateComplete;
+    const beacon = preview.shadowRoot.querySelector('.entity-beacon') as HTMLElement;
+    expect(beacon).toBeTruthy();
+    expect(beacon.dataset.context).toBe('room');
+  });
+
+  it('hides other-room 3D markers during room focus while preserving their effects', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    const livingMarker = new THREE.Mesh(new THREE.SphereGeometry(0.05), new THREE.MeshStandardMaterial());
+    livingMarker.userData.entityMarker = true;
+    livingMarker.userData.zoneId = 'living';
+    const officeMarker = livingMarker.clone();
+    officeMarker.userData.entityMarker = true;
+    officeMarker.userData.zoneId = 'office';
+    const officeEffect = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.01), new THREE.MeshStandardMaterial());
+    officeEffect.userData.entityEffect = true;
+    officeEffect.userData.zoneId = 'office';
+    preview._model = new THREE.Group();
+    preview._model.add(livingMarker, officeMarker, officeEffect);
+
+    preview.focusedZoneId = 'living';
+    preview._applyFocus();
+    expect(livingMarker.visible).toBe(true);
+    expect(officeMarker.visible).toBe(false);
+    expect(officeEffect.visible).toBe(true);
+
+    preview.focusedZoneId = null;
+    preview._applyFocus();
+    expect(officeMarker.visible).toBe(true);
   });
 
   it('fits every apartment corner inside a narrow mobile overview', () => {

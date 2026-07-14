@@ -2,18 +2,20 @@ import { describe, expect, it } from 'vitest';
 import {
   addSpatialVertex,
   addSpatialWall,
-  addSpatialObject,
+  addSpatialElement,
   deriveSpatialRooms,
+  duplicateSpatialElement,
   emptySpatialPlan,
   moveSpatialVertex,
   nearestSpatialVertex,
   rectangularSpatialPlan,
-  removeSpatialObject,
+  removeSpatialElement,
   removeSpatialWall,
   snapSpatialPoint,
   updateSpatialWall,
-  updateSpatialObject,
+  updateSpatialElement,
 } from '../src/core/spatial-plan';
+import { createSpatialPrimitive } from '../src/core/spatial-elements';
 
 describe('spatial plan mutations', () => {
   it('creates a closed rectangular starter home', () => {
@@ -99,11 +101,42 @@ describe('spatial plan mutations', () => {
     expect(deriveSpatialRooms({ ...plan, walls: plan.walls.slice(0, 3), rooms: [] })).toEqual([]);
   });
 
-  it('adds, transforms, and removes a spatial object', () => {
-    let plan = addSpatialObject(rectangularSpatialPlan(), 'sofa', { x: 2, z: 3 });
-    expect(plan.objects[0]).toMatchObject({ id: 'sofa-1', kind: 'sofa', position: { x: 2, y: 0, z: 3 } });
-    plan = updateSpatialObject(plan, 'sofa-1', { rotation: { x: 0, y: 90, z: 0 }, scale: { x: 1.2, y: 1, z: 1 } });
-    expect(plan.objects[0]).toMatchObject({ rotation: { y: 90 }, scale: { x: 1.2 } });
-    expect(removeSpatialObject(plan, 'sofa-1').objects).toEqual([]);
+  it('adds, transforms, duplicates, and removes an Element', () => {
+    let plan = addSpatialElement(rectangularSpatialPlan(), 'custom', { x: 2, z: 3 }, {
+      name: 'Sofa',
+      primitives: [createSpatialPrimitive('seat', 'cube', {
+        color: { base: '#445566', rules: [{ operator: 'equals', compare: 'on', value: '#ffffff' }] },
+      })],
+    });
+    expect(plan.elements[0]).toMatchObject({ id: 'custom-1', type: 'custom', position: { x: 2, y: 0, z: 3 } });
+    plan = updateSpatialElement(plan, 'custom-1', { rotation: { x: 0, y: 90, z: 0 }, scale: { x: 1.2, y: 1, z: 1 } });
+    expect(plan.elements[0]).toMatchObject({ rotation: { y: 90 }, scale: { x: 1.2 } });
+
+    plan = duplicateSpatialElement(plan, 'custom-1');
+    expect(plan.elements[1]).toMatchObject({ id: 'custom-2', name: 'Sofa copy', position: { x: 2.25, z: 3.25 } });
+    expect(plan.elements[1].primitives[0]).not.toBe(plan.elements[0].primitives[0]);
+    expect(plan.elements[1].primitives[0].color.rules[0]).not.toBe(plan.elements[0].primitives[0].color.rules[0]);
+
+    expect(removeSpatialElement(plan, 'custom-1').elements.map((element) => element.id)).toEqual(['custom-2']);
+  });
+
+  it('duplicates GLB surface rules without sharing mutable configuration', () => {
+    let plan = addSpatialElement(rectangularSpatialPlan(), 'glb', { x: 2, z: 2 }, {
+      name: 'Television',
+      glb: {
+        fileName: 'tv.glb', uri: 'data:model/gltf-binary;base64,AAAA', byteLength: 3,
+        size: { x: 1.4, y: 0.8, z: 0.12 },
+        surfaces: [{
+          id: 'screen', name: 'Screen', nodePath: '0', materialIndex: 0,
+          color: { base: '#111111', rules: [{ operator: 'equals', compare: 'on', value: '#ffffff' }] },
+          luminosity: { base: 0, rules: [{ operator: 'equals', compare: 'on', value: 0.8 }] },
+        }],
+      },
+    });
+
+    plan = duplicateSpatialElement(plan, 'glb-1');
+    expect(plan.elements[1].glb).not.toBe(plan.elements[0].glb);
+    expect(plan.elements[1].glb?.surfaces[0]).not.toBe(plan.elements[0].glb?.surfaces[0]);
+    expect(plan.elements[1].glb?.surfaces[0].luminosity.rules[0]).not.toBe(plan.elements[0].glb?.surfaces[0].luminosity.rules[0]);
   });
 });

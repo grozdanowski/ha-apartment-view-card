@@ -1,11 +1,13 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { fireEvent, type HomeAssistant } from 'custom-card-helpers';
+import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import * as THREE from 'three';
 import {
   normalizeConfig,
   roomIdFor,
   wallParts,
-  zoneForPoint,
   zoneForEntity,
   type ApartmentViewConfig,
   type EntityConfig,
@@ -19,61 +21,52 @@ import {
   type SpatialPlan,
   type SpatialRoom,
   type SpatialShellOpening,
+  type SpatialElementPrimitive,
+  type SpatialElement,
+  type SpatialGlbSurface,
+  type SpatialConditionalValue,
+  type SpatialElementType,
 } from '../core/config';
 import {
-  IMAGE_FIELDS,
-  type ImageFieldKey,
-  entitySchema,
-  entityToForm,
-  formToEntity,
   defaultEntity,
-  isDirectional,
-  zoneSchema,
   quickActionSchema,
   defaultZone,
-  labelsSchema,
-  stageOptionsSchema,
-  lightingOptionsSchema,
 } from './editor-helpers';
 import { withSuggestedEntityPolicy } from '../core/entity-policy';
 import {
-  addSpatialObject,
+  addSpatialElement,
+  duplicateSpatialElement,
   emptySpatialPlan,
   rectangularSpatialPlan,
-  removeSpatialObject,
-  updateSpatialObject,
+  removeSpatialElement,
+  updateSpatialElement,
   updateSpatialWall,
   withDerivedSpatialRooms,
 } from '../core/spatial-plan';
 import { roomPolygon, spatialBounds, validateSpatialPlan, wallLength } from '../core/spatial-geometry';
-import { SPATIAL_ASSETS, SPATIAL_ASSET_CATEGORIES, spatialAsset, type SpatialAssetDefinition, type SpatialAssetCategory } from '../core/spatial-assets';
 import { assignShellOpenings, shellSegmentById } from '../core/spatial-shell';
 import { resolveSpatialEntityState } from '../core/spatial-state';
+import { createSpatialPrimitive, elementPrimitivesForType } from '../core/spatial-elements';
+import { discoverGlbSurfaces } from '../core/spatial-glb';
 
-type EditorTab = 'floorplan' | 'devices' | 'lighting' | 'zones' | 'actions';
 type EditorMode = 'setup' | 'advanced';
-type SetupStep = 'floorplan' | 'rooms' | 'architecture' | 'furniture' | 'devices' | 'review';
+type SetupStep = 'floorplan' | 'rooms' | 'architecture' | 'elements' | 'devices' | 'actions' | 'review';
 type PreviewMode = 'edit' | '3d';
+type GlbSurfaceScope = 'surface' | 'material' | 'color';
 type HomeChange =
   | { kind: 'rename'; zoneId: string; currentName: string; areaName: string }
   | { kind: 'new-devices'; areaId: string; areaName: string; count: number }
   | { kind: 'missing-area'; zoneId: string; zoneName: string };
-const TABS: { id: EditorTab; label: string; icon: string }[] = [
-  { id: 'floorplan', label: 'Structure', icon: 'mdi:floor-plan' },
-  { id: 'devices', label: 'Devices', icon: 'mdi:devices' },
-  { id: 'lighting', label: 'Lighting', icon: 'mdi:lightbulb-group' },
-  { id: 'zones', label: 'Zones', icon: 'mdi:select-group' },
-  { id: 'actions', label: 'Quick actions', icon: 'mdi:flash' },
-];
 const SETUP_STEPS: { id: SetupStep; label: string; icon: string }[] = [
   { id: 'floorplan', label: 'Structure', icon: 'mdi:vector-polyline' },
   { id: 'rooms', label: 'Rooms', icon: 'mdi:door' },
   { id: 'architecture', label: 'Openings', icon: 'mdi:door-open' },
-  { id: 'furniture', label: 'Furniture', icon: 'mdi:sofa-outline' },
+  { id: 'elements', label: 'Elements', icon: 'mdi:shape-outline' },
   { id: 'devices', label: 'Devices', icon: 'mdi:devices' },
+  { id: 'actions', label: 'Actions', icon: 'mdi:flash-outline' },
   { id: 'review', label: 'Review', icon: 'mdi:check-circle-outline' },
 ];
-import './preview-canvas';
+const MAX_EMBEDDED_GLB_BYTES = 2_500_000;
 import './spatial-preview';
 import './spatial-plan-editor';
 
@@ -82,24 +75,23 @@ export class ApartmentViewCardEditor extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @state() private _config!: ApartmentViewConfig;
   @state() private _selectedEntity = -1;
-  @state() private _drawingZone = false;
-  @state() private _uploadingKey: ImageFieldKey | null = null;
-  @state() private _tab: EditorTab = 'devices';
   @state() private _mode: EditorMode = 'setup';
   @state() private _setupStep: SetupStep = 'floorplan';
-  @state() private _entitySearch = '';
-  @state() private _pendingZoneName = '';
-  @state() private _pendingAreaId = '';
   @state() private _selectedWallId = '';
   @state() private _selectedOpeningId = '';
   @state() private _selectedRoomId = '';
-  @state() private _selectedObjectId = '';
+  @state() private _selectedElementId = '';
+  @state() private _selectedPrimitiveId = '';
+  @state() private _selectedGlbSurfaceId = '';
+  @state() private _glbSurfaceScope: GlbSurfaceScope = 'surface';
+  @state() private _glbStatus: { kind: 'loading' | 'ready' | 'error'; message: string } | null = null;
   @state() private _previewMode: PreviewMode = 'edit';
   @state() private _previewCollapsed = false;
-  @state() private _assetSearch = '';
-  @state() private _assetCategory: SpatialAssetCategory | 'All' = 'All';
   @state() private _undoCount = 0;
   @state() private _redoCount = 0;
+  @state() private _backupStatus: { kind: 'ready' | 'error' | 'restored'; message: string } | null = null;
+  @state() private _pendingRestore: ApartmentViewConfig | null = null;
+  @state() private _pendingRestoreName = '';
   private _undoStack: ApartmentViewConfig[] = [];
   private _redoStack: ApartmentViewConfig[] = [];
   private _lastEmittedConfig: ApartmentViewConfig | null = null;
@@ -407,51 +399,108 @@ export class ApartmentViewCardEditor extends LitElement {
     .room-fields input:disabled { opacity: 0.6; }
     .room-status { padding-top: 3px; color: var(--secondary-text-color); font-size: 0.72em; white-space: nowrap; }
     .room-status.linked { color: var(--success-color, #6fba98); }
-    .furniture-library {
+    .element-kinds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+    .element-kinds button,
+    .element-kinds .element-upload,
+    .backup-actions button {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 7px;
-      margin-top: 12px;
-    }
-    .furniture-library button {
-      display: grid;
-      place-items: center;
-      gap: 7px;
-      min-height: 94px;
-      min-width: 0;
-      padding: 9px 6px;
-      border: 1px solid var(--divider-color);
+      grid-template-columns: 32px minmax(0, 1fr);
+      align-items: center;
+      gap: 12px;
+      min-height: 82px;
+      padding: 14px;
+      border: 1px solid var(--studio-line);
       border-radius: 2px;
-      background: color-mix(in srgb, var(--studio-accent) 8%, var(--secondary-background-color));
+      background: color-mix(in srgb, var(--studio-accent) 5%, transparent);
       color: var(--primary-text-color);
-      font: inherit;
-      font-size: 0.76em;
       cursor: pointer;
+      font: inherit;
       text-align: left;
     }
-    .furniture-library button:hover { border-color: color-mix(in srgb, var(--primary-color) 55%, var(--divider-color)); }
-    .furniture-library ha-icon { --mdc-icon-size: 22px; color: var(--primary-color); }
-    .furniture-library span { max-width: 100%; overflow-wrap: anywhere; }
-    .asset-browser-tools { display: grid; gap: 8px; margin-top: 12px; }
-    .asset-search {
-      width: 100%; min-width: 0; min-height: 46px; box-sizing: border-box; padding: 10px 11px;
-      border: 1px solid var(--divider-color); border-radius: 2px;
-      background: var(--card-background-color); color: var(--primary-text-color); font: inherit;
+    .element-kinds .element-upload { box-sizing: border-box; }
+    .element-kinds button:hover,
+    .element-kinds .element-upload:hover,
+    .backup-actions button:hover { border-color: var(--studio-accent); background: color-mix(in srgb, var(--studio-accent) 10%, transparent); }
+    .element-kinds ha-icon,
+    .element-kinds .element-upload ha-icon,
+    .backup-actions ha-icon { --mdc-icon-size: 25px; color: var(--studio-accent); }
+    .element-kinds strong,
+    .element-kinds small,
+    .backup-actions strong,
+    .backup-actions small { display: block; line-height: 1.3; }
+    .element-kinds small,
+    .backup-actions small { margin-top: 3px; color: var(--secondary-text-color); font-size: 12px; }
+    .element-title,
+    .primitive-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .element-title > div > span,
+    .primitive-header > div > span { color: var(--studio-accent); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    .element-title h3,
+    .primitive-header h3 { margin-top: 4px; }
+    .element-type { padding: 4px 0; border-bottom: 2px solid var(--studio-accent); color: var(--secondary-text-color); font-size: 12px; text-transform: capitalize; }
+    .primitive-add { display: flex; gap: 4px; }
+    .primitive-add button,
+    .conditional-heading button,
+    .condition-remove {
+      display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 42px; min-height: 42px;
+      border: 1px solid var(--studio-line); border-radius: 2px; background: transparent; color: var(--primary-text-color); cursor: pointer; font: inherit;
     }
-    .asset-categories { display: flex; gap: 5px; overflow-x: auto; scrollbar-width: none; }
-    .asset-categories::-webkit-scrollbar { display: none; }
-    .asset-categories button {
-      flex: 0 0 auto; min-height: 40px; padding: 0 0 5px; border: 0; border-bottom: 2px solid transparent;
-      border-radius: 0; background: transparent; color: var(--secondary-text-color); font: inherit; font-size: 13px; cursor: pointer;
-    }
-    .asset-categories { gap: 20px; }
-    .asset-categories button.active { border-bottom-color: var(--studio-accent); background: transparent; color: var(--primary-text-color); }
-    .asset-name { display: block; font-weight: 650; line-height: 1.25; }
-    .asset-size { display: block; margin-top: 3px; color: var(--secondary-text-color); font-size: 0.88em; font-variant-numeric: tabular-nums; }
-    .finish-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-    .finish-picker button { display: flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 10px; border: 1px solid var(--divider-color); border-radius: 6px; background: var(--card-background-color); color: var(--primary-text-color); font: inherit; font-size: 0.78em; cursor: pointer; }
-    .finish-picker button.active { border-color: var(--primary-color); }
-    .finish-swatch { width: 16px; height: 16px; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 50%; }
+    .primitive-add ha-icon,
+    .conditional-heading ha-icon,
+    .condition-remove ha-icon { --mdc-icon-size: 18px; }
+    .primitive-list { display: flex; gap: 16px; margin: 16px 0 0; overflow-x: auto; border-bottom: 1px solid var(--studio-line); scrollbar-width: none; }
+    .primitive-list::-webkit-scrollbar { display: none; }
+    .primitive-list button { display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto; min-height: 44px; padding: 0 0 7px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--secondary-text-color); cursor: pointer; font: inherit; }
+    .primitive-list button.active { border-bottom-color: var(--studio-accent); color: var(--primary-text-color); }
+    .primitive-list ha-icon { --mdc-icon-size: 17px; }
+    .primitive-editor { padding-top: 18px; }
+    .glb-source { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; margin-top: 14px; padding: 14px 0; border-block: 1px solid var(--studio-line); }
+    .glb-source strong, .glb-source span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .glb-source span { margin-top: 3px; color: var(--secondary-text-color); font-size: 12px; }
+    .glb-replace { display: inline-flex; align-items: center; gap: 7px; min-height: 42px; padding: 0 11px; border: 1px solid var(--studio-line); color: var(--primary-text-color); cursor: pointer; font-size: 13px; }
+    .glb-replace ha-icon { --mdc-icon-size: 18px; }
+    .glb-status { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--secondary-text-color); font-size: 13px; line-height: 1.4; }
+    .glb-status ha-icon { --mdc-icon-size: 18px; }
+    .glb-status.ready { color: var(--success-color, #6fba98); }
+    .glb-status.error { color: var(--error-color, #e57373); }
+    .glb-note { margin-top: 10px !important; color: var(--secondary-text-color); font-size: 12px !important; }
+    .surface-meta { margin-top: 10px; color: var(--secondary-text-color); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .surface-scope { margin-top: 16px; padding-block: 14px; border-block: 1px solid var(--studio-line); }
+    .surface-scope-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .surface-scope-header strong { font-size: 13px; font-weight: 600; }
+    .surface-scope-switch { display: flex; min-width: 0; overflow-x: auto; border-bottom: 1px solid var(--studio-line); scrollbar-width: none; }
+    .surface-scope-switch::-webkit-scrollbar { display: none; }
+    .surface-scope-switch button { flex: 0 0 auto; min-height: 42px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--secondary-text-color); cursor: pointer; font: inherit; font-size: 12px; }
+    .surface-scope-switch button[aria-pressed='true'] { border-bottom-color: var(--studio-accent); color: var(--primary-text-color); }
+    .surface-scope-switch button[disabled] { opacity: 0.38; cursor: default; }
+    .surface-scope-copy { margin-top: 10px; color: var(--secondary-text-color); font-size: 12px; line-height: 1.45; }
+    .surface-apply { min-height: 40px; padding: 0 12px; border: 1px solid var(--studio-accent); border-radius: 2px; background: transparent; color: var(--primary-text-color); cursor: pointer; font: inherit; font-size: 12px; }
+    .conditional-control { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--studio-line); }
+    .conditional-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .conditional-heading button { min-height: 36px; padding: 0 9px; color: var(--secondary-text-color); font-size: 12px; }
+    .base-value { display: grid; grid-template-columns: 72px minmax(0, 1fr) 48px; align-items: center; gap: 10px; margin-top: 12px; color: var(--secondary-text-color); font-size: 13px; }
+    .base-value input[type='range'] { width: 100%; accent-color: var(--studio-accent); }
+    .base-value input[type='color'],
+    .condition-result input[type='color'] { width: 44px; height: 36px; padding: 2px; border: 1px solid var(--studio-line); border-radius: 2px; background: transparent; }
+    .base-value input[type='text'] { min-height: 40px; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--studio-line); border-radius: 2px; background: var(--card-background-color); color: var(--primary-text-color); font: inherit; }
+    .base-value output { text-align: right; font-variant-numeric: tabular-nums; }
+    .condition-row { position: relative; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)) 42px; gap: 8px; margin-top: 10px; padding: 12px 0; border-top: 1px solid var(--studio-line); }
+    .condition-row label { display: grid; gap: 4px; min-width: 0; color: var(--secondary-text-color); font-size: 11px; }
+    .condition-row input,
+    .condition-row select { width: 100%; min-width: 0; min-height: 42px; box-sizing: border-box; padding: 8px; border: 1px solid var(--studio-line); border-radius: 2px; background: var(--card-background-color); color: var(--primary-text-color); font: inherit; font-size: 13px; }
+    .condition-remove { align-self: end; color: var(--error-color, #e57373); }
+    .advanced-workspace { max-width: 920px; }
+    .backup-card { display: grid; grid-template-columns: 44px minmax(0, 1fr); column-gap: 14px; }
+    .backup-icon { display: grid; place-items: center; width: 44px; height: 44px; background: color-mix(in srgb, var(--studio-accent) 16%, transparent); color: var(--studio-accent); }
+    .backup-icon ha-icon { --mdc-icon-size: 22px; }
+    .backup-copy { min-width: 0; }
+    .backup-actions { grid-column: 2; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 18px; }
+    .backup-picker,
+    .restore-button { grid-column: 2; display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 48px; margin-top: 18px; padding: 0 16px; box-sizing: border-box; border: 1px solid var(--studio-accent); border-radius: 2px; background: transparent; color: var(--primary-text-color); cursor: pointer; font: inherit; }
+    .restore-button { background: var(--studio-accent); color: #091012; }
+    .backup-status { grid-column: 2; display: flex; align-items: flex-start; gap: 10px; margin-top: 14px; padding: 12px; border-left: 3px solid var(--studio-accent); background: color-mix(in srgb, var(--studio-accent) 8%, transparent); color: var(--secondary-text-color); font-size: 13px; line-height: 1.45; }
+    .backup-status.error { border-left-color: var(--error-color, #e57373); }
+    .backup-status ha-icon { flex: 0 0 auto; --mdc-icon-size: 20px; }
+    .backup-status strong { display: block; margin-bottom: 2px; color: var(--primary-text-color); }
     .transform-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 14px; }
     .asset-fields { display: grid; gap: 9px; margin-top: 14px; }
     .asset-fields label { display: grid; gap: 4px; color: var(--secondary-text-color); font-size: 0.75em; }
@@ -488,7 +537,6 @@ export class ApartmentViewCardEditor extends LitElement {
       .room-mapping { grid-template-columns: 34px minmax(0, 1fr); }
       .room-number { width: 34px; height: 34px; }
       .room-status { grid-column: 2; padding-top: 0; }
-      .furniture-library { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .setup-steps { gap: 24px; margin-bottom: 22px; }
       .setup-step { min-width: auto; font-size: 16px; padding-inline: 0; }
       .setup-step ha-icon { display: none; }
@@ -734,8 +782,29 @@ export class ApartmentViewCardEditor extends LitElement {
       .room-mapping.selected .room-summary-name { display: none; }
       .room-mapping.selected .room-fields { grid-column: 2; }
       .room-status { grid-column: 2; padding-top: 0; }
-      .furniture-library { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .element-kinds { grid-template-columns: 1fr; }
+      .element-kinds button, .element-kinds .element-upload { min-height: 72px; }
+      .glb-source { grid-template-columns: 1fr; }
+      .glb-replace { justify-content: center; }
+      .surface-scope-header { align-items: stretch; flex-direction: column; }
+      .surface-apply { width: 100%; }
       .transform-grid { grid-template-columns: 1fr; }
+      .primitive-header { align-items: center; }
+      .base-value { grid-template-columns: 64px minmax(0, 1fr) 44px; }
+      .condition-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 42px; padding: 14px 0; }
+      .condition-row label:nth-child(1),
+      .condition-row label:nth-child(2) { grid-column: 1 / -1; }
+      .condition-row label:nth-child(3) { grid-column: 1; }
+      .condition-row label:nth-child(4) { grid-column: 2 / -1; }
+      .condition-row label:nth-child(5) { grid-column: 1 / 3; }
+      .condition-row .condition-remove { grid-column: 3; align-self: end; }
+      .backup-card { display: block; }
+      .backup-icon { margin-bottom: 14px; }
+      .backup-actions { grid-template-columns: 1fr; }
+      .backup-actions,
+      .backup-picker,
+      .backup-status,
+      .restore-button { grid-column: auto; width: 100%; }
       .opening-control { grid-template-columns: 78px minmax(0, 1fr) 42px; }
       .north-setting { grid-template-columns: 56px minmax(0, 1fr); gap: 10px; }
       .compass { width: 56px; height: 56px; }
@@ -803,6 +872,80 @@ export class ApartmentViewCardEditor extends LitElement {
 
   private _setMode(mode: EditorMode): void {
     this._mode = mode;
+  }
+
+  private _downloadBackup(format: 'json' | 'yaml'): void {
+    const content = format === 'json'
+      ? `${JSON.stringify(this._config, null, 2)}\n`
+      : dumpYaml(this._config, { noRefs: true, lineWidth: 120, sortKeys: false });
+    const blob = new Blob([content], { type: format === 'json' ? 'application/json' : 'application/yaml' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `apartment-view-backup.${format === 'json' ? 'json' : 'yaml'}`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  private _validateBackup(raw: unknown): { config?: ApartmentViewConfig; errors: string[] } {
+    const errors: string[] = [];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { errors: ['The backup must contain one configuration object.'] };
+    const candidate = raw as Record<string, unknown>;
+    if (candidate.type !== 'custom:apartment-view-card') errors.push('This is not an Apartment View Card backup.');
+    if (!Array.isArray(candidate.entities)) errors.push('The entities list is missing or invalid.');
+    if (!Array.isArray(candidate.zones)) errors.push('The rooms list is missing or invalid.');
+    const spatial = candidate.spatial as Record<string, unknown> | undefined;
+    const rawPlan = spatial?.plan as Record<string, unknown> | undefined;
+    if (rawPlan && !Array.isArray(rawPlan.elements)) errors.push('The spatial plan has no valid Elements list.');
+    if (errors.length) return { errors };
+    const config = normalizeConfig(candidate);
+    const plan = config.spatial?.plan;
+    if (plan) {
+      errors.push(...validateSpatialPlan(plan, config.spatial?.openings).filter((issue) => issue.severity === 'error').map((issue) => issue.message));
+      plan.elements.forEach((element) => {
+        if (element.type === 'custom' && !element.primitives.length) errors.push(`Element ${element.name ?? element.id} has no primitives.`);
+        if (element.type === 'glb' && (!element.glb || !element.glb.surfaces.length)) errors.push(`Element ${element.name ?? element.id} has no valid GLB surfaces.`);
+      });
+    }
+    return errors.length ? { errors } : { config, errors: [] };
+  }
+
+  private async _onBackupPicked(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    if (file.size > 5_000_000) {
+      this._backupStatus = { kind: 'error', message: 'That backup is larger than 5 MB.' };
+      return;
+    }
+    try {
+      const text = await file.text();
+      const raw = file.name.toLowerCase().endsWith('.json') ? JSON.parse(text) : loadYaml(text);
+      const result = this._validateBackup(raw);
+      if (!result.config) {
+        this._pendingRestore = null;
+        this._backupStatus = { kind: 'error', message: result.errors.join(' ') };
+        return;
+      }
+      this._pendingRestore = result.config;
+      this._pendingRestoreName = file.name;
+      const plan = result.config.spatial?.plan;
+      this._backupStatus = {
+        kind: 'ready',
+        message: `Validated ${result.config.zones.length} rooms, ${result.config.entities.length} entities, and ${plan?.elements.length ?? 0} Elements.`,
+      };
+    } catch (error) {
+      this._pendingRestore = null;
+      this._backupStatus = { kind: 'error', message: error instanceof Error ? error.message : 'The backup could not be read.' };
+    }
+  }
+
+  private _restorePendingBackup(): void {
+    if (!this._pendingRestore) return;
+    this._applyConfig(this._pendingRestore);
+    this._pendingRestore = null;
+    this._backupStatus = { kind: 'restored', message: `${this._pendingRestoreName} has been restored.` };
   }
 
   private _rememberDialogStyle(element: HTMLElement): void {
@@ -940,95 +1083,9 @@ export class ApartmentViewCardEditor extends LitElement {
     }));
   }
 
-  private _optionsLabel = (schema: { name: string }): string => {
-    const labels: Record<string, string> = {
-      view: 'Time-of-day view',
-      lightStyle: 'Light style',
-      hideWalls: 'Lower walls in apartment overview',
-      freePanZoom: 'Free pan / zoom',
-      zoomMax: 'Max zone-zoom scale',
-      duskDawnOffsetMinutes: 'Dusk/Dawn offset',
-      iconSize: 'Marker size — desktop (zoomed out)',
-      iconSizeMax: 'Max marker size — desktop (zoomed in)',
-      iconSizeMobile: 'Marker size — mobile (zoomed out)',
-      iconSizeMaxMobile: 'Max marker size — mobile (zoomed in)',
-      presentation: 'Information density',
-    };
-    return labels[schema.name] ?? schema.name;
-  };
-
-  private _onOptionsChanged(ev: CustomEvent): void {
-    ev.stopPropagation();
-    // ha-form sends the full options object; merge it so every field (incl.
-    // iconSize/iconSizeMax and any future option) is picked up. Spread _config
-    // first so images/entities/zones/unknown keys survive.
-    const v = ev.detail.value as Record<string, any>;
-    const config: ApartmentViewConfig = {
-      ...this._config,
-      options: { ...this._config.options, ...v },
-    };
-    this._applyConfig(config);
-  }
-
-  /** <ha-picture-upload> emits a `change` event; its `.value` is the new URL (or null when cleared). */
-  private _onImageChanged(key: ImageFieldKey, value: string | null): void {
-    const images = { ...this._config.images };
-    if (value) {
-      images[key] = value;
-    } else if (key === 'base') {
-      images.base = ''; // required: cleared -> empty so the preview shows the "configure" warning
-    } else {
-      delete (images as Record<string, unknown>)[key];
-    }
-    const config: ApartmentViewConfig = { ...this._config, images };
-    this._applyConfig(config);
-  }
-
-  /**
-   * Upload a picked file to HA's image store and use its serve URL. Uses only
-   * always-available primitives (file input + hass.fetchWithAuth + the image
-   * integration from default_config) — NOT a lazy HA component that may be
-   * unregistered in a custom-card editor context.
-   */
-  private async _onImageFilePicked(key: ImageFieldKey, ev: Event): Promise<void> {
-    const input = ev.target as HTMLInputElement;
-    const file = input.files && input.files[0];
-    if (!file) return;
-    this._uploadingKey = key;
-    try {
-      const body = new FormData();
-      body.append('file', file);
-      const resp = await (
-        this.hass as unknown as {
-          fetchWithAuth: (path: string, init: RequestInit) => Promise<Response>;
-        }
-      ).fetchWithAuth('/api/image/upload', { method: 'POST', body });
-      if (!resp.ok) throw new Error(`upload failed (${resp.status})`);
-      const data = (await resp.json()) as { id: string };
-      this._onImageChanged(key, `/api/image/serve/${data.id}/original`);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('apartment-view-card: image upload failed', err);
-    } finally {
-      this._uploadingKey = null;
-      input.value = '';
-    }
-  }
-
   private _commitEntities(entities: EntityConfig[], record = true): void {
     const config: ApartmentViewConfig = { ...this._config, entities };
     this._applyConfig(config, record);
-  }
-
-  private _addEntity(): void {
-    this._commitEntities([...this._config.entities, defaultEntity()]);
-    this._selectedEntity = this._config.entities.length - 1;
-  }
-
-  private _matchesSearch(e: EntityConfig): boolean {
-    const q = this._entitySearch.trim().toLowerCase();
-    if (!q) return true;
-    return (e.name ?? '').toLowerCase().includes(q) || e.entity.toLowerCase().includes(q);
   }
 
   private _sensibleDomains = new Set([
@@ -1098,83 +1155,6 @@ export class ApartmentViewCardEditor extends LitElement {
       });
     });
     this._commitEntities([...this._config.entities, ...added]);
-    this._tab = 'devices';
-  }
-
-  private _removeEntity(index: number): void {
-    const entities = this._config.entities.filter((_, i) => i !== index);
-    if (this._selectedEntity === index) this._selectedEntity = -1;
-    this._commitEntities(entities);
-  }
-
-  private _selectEntity(index: number): void {
-    this._selectedEntity = this._selectedEntity === index ? -1 : index;
-  }
-
-  /** Keyboard support for the collapsible entity header (Enter/Space toggles). */
-  private _onRowKey(ev: KeyboardEvent, index: number): void {
-    if (ev.key === 'Enter' || ev.key === ' ') {
-      ev.preventDefault();
-      this._selectEntity(index);
-    }
-  }
-
-  private _entityLabel = (schema: { name: string }): string => {
-    const labels: Record<string, string> = {
-      entity: 'Entity',
-      name: 'Name (optional)',
-      icon: 'Icon (optional)',
-      size: 'Size',
-      tap: 'Tap action',
-      lightStyle: 'Light style override',
-      x: 'X position',
-      y: 'Y position',
-      directional: 'Directional (cone)',
-      orientation: 'Orientation',
-      labelSource: 'Label',
-      labelText: 'Label text',
-      labelAttribute: 'Attribute name',
-      labelVisibility: 'Label visibility',
-      overviewVisibility: 'Show on apartment overview',
-      roomVisibility: 'Show inside room',
-    };
-    return labels[schema.name] ?? schema.name;
-  };
-
-  private _labelsLabel = (schema: { name: string }): string => {
-    const labels: Record<string, string> = {
-      source: 'Default label',
-      visibility: 'When to show labels',
-    };
-    return labels[schema.name] ?? schema.name;
-  };
-
-  private _onLabelsChanged(ev: CustomEvent): void {
-    ev.stopPropagation();
-    const v = ev.detail.value as { source?: string; visibility?: string };
-    const config: ApartmentViewConfig = {
-      ...this._config,
-      options: {
-        ...this._config.options,
-        labels: {
-          ...this._config.options.labels,
-          source: (v.source ?? this._config.options.labels.source) as any,
-          visibility: (v.visibility ?? this._config.options.labels.visibility) as any,
-        },
-      },
-    };
-    this._applyConfig(config);
-  }
-
-  private _onEntityChanged(ev: CustomEvent, index: number): void {
-    ev.stopPropagation();
-    const prev = this._config.entities[index];
-    const changed = formToEntity(prev, ev.detail.value);
-    const next = !prev.entity && changed.entity ? withSuggestedEntityPolicy(changed) : changed;
-    const entities = this._config.entities.map((e, i) =>
-      i === index ? next : e
-    );
-    this._commitEntities(entities);
   }
 
   private _onPreviewEditStart(): void {
@@ -1189,27 +1169,6 @@ export class ApartmentViewCardEditor extends LitElement {
     if (this._undoStack.length > 50) this._undoStack.shift();
     this._redoStack = [];
     this._syncHistoryState();
-  }
-
-  private _onPreviewEntityMoved(ev: CustomEvent): void {
-    const { index, x, y } = ev.detail as {
-      index: number;
-      x: number;
-      y: number;
-    };
-    const zone = zoneForPoint(x, y, this._config.zones);
-    const entities = this._config.entities.map((e, i) => {
-      if (i !== index) return e;
-      const moved = { ...e, x, y };
-      if (zone?.id) return { ...moved, zoneId: zone.id };
-      const { zoneId: _zoneId, ...unplaced } = moved;
-      return unplaced;
-    });
-    this._commitEntities(entities, !this._dragStartConfig);
-  }
-
-  private _onPreviewEntitySelected(ev: CustomEvent): void {
-    this._selectedEntity = (ev.detail as { index: number }).index;
   }
 
   private _spatial(): SpatialConfig {
@@ -1407,6 +1366,39 @@ export class ApartmentViewCardEditor extends LitElement {
     }, record);
   }
 
+  private async _editStructure(): Promise<void> {
+    this._mode = 'setup';
+    this._setupStep = 'floorplan';
+    this._previewMode = 'edit';
+    this._previewCollapsed = false;
+    await this.updateComplete;
+    const editor = this.renderRoot.querySelector('spatial-plan-editor');
+    await editor?.beginStructureEditing();
+    const preview = this.renderRoot.querySelector<HTMLElement>('.preview-panel');
+    if (typeof preview?.scrollIntoView === 'function') preview.scrollIntoView({ block: 'start', behavior: 'auto' });
+  }
+
+  private _renderNorthSetting() {
+    const north = this._spatial().site.north;
+    return html`<div class="setup-card">
+      <h3>True north</h3>
+      <p>Rotate north to match the plan. Home Assistant's location supplies the correct solar path and daylight angles.</p>
+      <div class="north-setting">
+        <div class="compass" aria-hidden="true"><div class="compass-arrow" style=${`transform:rotate(${north}deg)`}></div></div>
+        <div>
+          <div class="opening-control">
+            <label for="structure-north-bearing">North</label>
+            <input id="structure-north-bearing" type="range" min="0" max="359" step="1" .value=${String(Math.round(north))}
+              @pointerdown=${this._onPreviewEditStart} @pointerup=${this._onPreviewEditEnd}
+              @input=${(event: Event) => this._updateNorth(Number((event.target as HTMLInputElement).value), !this._dragStartConfig)} />
+            <output>${Math.round(north)}°</output>
+          </div>
+          <div class="location-note">${this.hass.config?.latitude?.toFixed?.(3) ?? 'Home'} · ${this.hass.config?.longitude?.toFixed?.(3) ?? 'location'}</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
   private _updateDimensions(patch: Partial<SpatialDimensions>): void {
     this._commitSpatial({
       ...this._spatial(),
@@ -1467,8 +1459,7 @@ export class ApartmentViewCardEditor extends LitElement {
     this._commitSpatial({ ...this._spatial(), shell: { ...shell, walls } });
   }
 
-  private _addSpatialFurniture(asset: SpatialAssetDefinition | null): void {
-    const plan = this._spatial().plan ?? emptySpatialPlan();
+  private _elementInsertionPoint(plan: SpatialPlan): { position: { x: number; z: number }; zoneId?: string } {
     const room = plan.rooms.find((candidate) => candidate.id === this._selectedRoomId) ?? plan.rooms[0];
     const polygon = room ? roomPolygon(plan, room) : null;
     const bounds = spatialBounds(plan);
@@ -1485,31 +1476,289 @@ export class ApartmentViewCardEditor extends LitElement {
       x: polygon.reduce((sum, point) => sum + point.x, 0) / polygon.length,
       z: polygon.reduce((sum, point) => sum + point.z, 0) / polygon.length,
     } : shellCenter ?? { x: bounds.centerX, z: bounds.centerZ };
-    const next = addSpatialObject(plan, asset?.kind ?? 'custom', position, {
-      ...(room?.zoneId ? { zoneId: room.zoneId } : {}),
-      ...(asset ? { name: asset.label, assetId: asset.id, finishId: asset.defaultFinish } : { name: 'Custom model' }),
+    return { position, ...(room?.zoneId ? { zoneId: room.zoneId } : {}) };
+  }
+
+  private _addSpatialElement(type: SpatialElementType): void {
+    const plan = this._spatial().plan ?? emptySpatialPlan();
+    const insertion = this._elementInsertionPoint(plan);
+    const next = addSpatialElement(plan, type, insertion.position, {
+      ...(insertion.zoneId ? { zoneId: insertion.zoneId } : {}),
+      name: type === 'ceiling-light' ? 'Ceiling light' : type === 'light-bulb' ? 'Light bulb' : 'Custom element',
+      primitives: elementPrimitivesForType(type),
     });
-    this._selectedObjectId = next.objects[next.objects.length - 1].id;
+    const added = next.elements[next.elements.length - 1];
+    this._selectedElementId = added.id;
+    this._selectedPrimitiveId = added.primitives[0]?.id ?? '';
+    this._selectedGlbSurfaceId = '';
     this._commitSpatial({ ...this._spatial(), plan: next });
     this._previewMode = 'edit';
   }
 
-  private _updateSpatialFurniture(patch: Parameters<typeof updateSpatialObject>[2]): void {
+  private _updateSpatialElement(patch: Parameters<typeof updateSpatialElement>[2]): void {
     const plan = this._spatial().plan;
-    if (!plan || !this._selectedObjectId) return;
-    this._commitSpatial({ ...this._spatial(), plan: updateSpatialObject(plan, this._selectedObjectId, patch) });
+    if (!plan || !this._selectedElementId) return;
+    this._commitSpatial({ ...this._spatial(), plan: updateSpatialElement(plan, this._selectedElementId, patch) });
   }
 
-  private _removeSpatialFurniture(): void {
+  private _duplicateSpatialElement(): void {
     const plan = this._spatial().plan;
-    if (!plan || !this._selectedObjectId) return;
-    this._commitSpatial({ ...this._spatial(), plan: removeSpatialObject(plan, this._selectedObjectId) });
-    this._selectedObjectId = '';
+    if (!plan || !this._selectedElementId) return;
+    const next = duplicateSpatialElement(plan, this._selectedElementId);
+    const added = next.elements[next.elements.length - 1];
+    this._selectedElementId = added.id;
+    this._selectedPrimitiveId = added.primitives[0]?.id ?? '';
+    this._selectedGlbSurfaceId = added.glb?.surfaces[0]?.id ?? '';
+    this._commitSpatial({ ...this._spatial(), plan: next });
   }
 
-  private _onSpatialObjectSelected(ev: CustomEvent): void {
-    this._selectedObjectId = (ev.detail as { objectId: string }).objectId;
-    this._setupStep = 'furniture';
+  private _removeSpatialElement(): void {
+    const plan = this._spatial().plan;
+    if (!plan || !this._selectedElementId) return;
+    this._commitSpatial({ ...this._spatial(), plan: removeSpatialElement(plan, this._selectedElementId) });
+    this._selectedElementId = '';
+    this._selectedPrimitiveId = '';
+    this._selectedGlbSurfaceId = '';
+  }
+
+  private _updateElementPrimitive(patch: Partial<SpatialElementPrimitive>): void {
+    const plan = this._spatial().plan;
+    const element = plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
+    if (!plan || !element || !this._selectedPrimitiveId) return;
+    this._updateSpatialElement({
+      primitives: element.primitives.map((primitive) => primitive.id === this._selectedPrimitiveId ? { ...primitive, ...patch } : primitive),
+    });
+  }
+
+  private _addElementPrimitive(kind: SpatialElementPrimitive['kind']): void {
+    const plan = this._spatial().plan;
+    const element = plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
+    if (!element) return;
+    let index = element.primitives.length + 1;
+    while (element.primitives.some((primitive) => primitive.id === `part-${index}`)) index += 1;
+    const primitive = createSpatialPrimitive(`part-${index}`, kind, { name: `Part ${index}` });
+    this._selectedPrimitiveId = primitive.id;
+    this._updateSpatialElement({ primitives: [...element.primitives, primitive] });
+  }
+
+  private _removeElementPrimitive(): void {
+    const plan = this._spatial().plan;
+    const element = plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
+    if (!element || !this._selectedPrimitiveId) return;
+    const primitives = element.primitives.filter((primitive) => primitive.id !== this._selectedPrimitiveId);
+    this._selectedPrimitiveId = primitives[0]?.id ?? '';
+    this._updateSpatialElement({ primitives });
+  }
+
+  private _readFileAsDataUri(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error('The GLB file could not be read.'));
+      reader.onload = () => typeof reader.result === 'string'
+        ? resolve(reader.result)
+        : reject(new Error('The GLB file could not be encoded.'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  private async _onGlbPicked(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    const replace = input.dataset.replace === 'true';
+    input.value = '';
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.glb')) {
+      this._glbStatus = { kind: 'error', message: 'Choose a binary .glb file. Linked .gltf files are not portable.' };
+      return;
+    }
+    if (file.size > MAX_EMBEDDED_GLB_BYTES) {
+      this._glbStatus = { kind: 'error', message: `Keep embedded GLB files below ${(MAX_EMBEDDED_GLB_BYTES / 1_000_000).toFixed(1)} MB so Home Assistant can save and sync the dashboard.` };
+      return;
+    }
+    this._glbStatus = { kind: 'loading', message: `Inspecting ${file.name}…` };
+    try {
+      const buffer = await file.arrayBuffer();
+      const [gltf, uri] = await Promise.all([
+        new GLTFLoader().parseAsync(buffer, ''),
+        this._readFileAsDataUri(file),
+      ]);
+      gltf.scene.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(gltf.scene);
+      if (bounds.isEmpty()) throw new Error('The GLB contains no renderable geometry.');
+      const size = bounds.getSize(new THREE.Vector3());
+      const surfaces = discoverGlbSurfaces(gltf.scene).map((surface) => ({
+        id: surface.id,
+        name: surface.name,
+        nodePath: surface.nodePath,
+        materialIndex: surface.materialIndex,
+        sourceMaterialKey: surface.sourceMaterialKey,
+        sourceColor: surface.sourceColor,
+        color: surface.color,
+        luminosity: surface.luminosity,
+      }));
+      if (!surfaces.length) throw new Error('The GLB contains no material surfaces to map.');
+      const source = {
+        fileName: file.name,
+        uri: `data:model/gltf-binary;base64,${uri.slice(uri.indexOf(',') + 1)}`,
+        byteLength: file.size,
+        size: { x: Math.max(0.001, size.x), y: Math.max(0.001, size.y), z: Math.max(0.001, size.z) },
+        surfaces,
+      };
+      const plan = this._spatial().plan ?? emptySpatialPlan();
+      const selected = plan.elements.find((element) => element.id === this._selectedElementId);
+      if (replace && selected?.type === 'glb') {
+        this._glbSurfaceScope = 'surface';
+        this._selectedGlbSurfaceId = surfaces[0].id;
+        this._updateSpatialElement({ glb: source });
+      } else {
+        const insertion = this._elementInsertionPoint(plan);
+        const name = file.name.replace(/\.glb$/i, '').replace(/[-_]+/g, ' ').trim() || 'GLB element';
+        const next = addSpatialElement(plan, 'glb', insertion.position, {
+          ...(insertion.zoneId ? { zoneId: insertion.zoneId } : {}),
+          name,
+          glb: source,
+          primitives: [],
+        });
+        const added = next.elements[next.elements.length - 1];
+        this._selectedElementId = added.id;
+        this._selectedPrimitiveId = '';
+        this._glbSurfaceScope = 'surface';
+        this._selectedGlbSurfaceId = surfaces[0].id;
+        this._commitSpatial({ ...this._spatial(), plan: next });
+      }
+      this._previewMode = '3d';
+      this._glbStatus = { kind: 'ready', message: `${surfaces.length} ${surfaces.length === 1 ? 'surface' : 'surfaces'} ready to map.` };
+    } catch (error) {
+      this._glbStatus = { kind: 'error', message: error instanceof Error ? error.message : 'The GLB could not be imported.' };
+    }
+  }
+
+  private _updateGlbSurface(patch: Partial<SpatialGlbSurface>): void {
+    const element = this._spatial().plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
+    if (!element?.glb || !this._selectedGlbSurfaceId) return;
+    this._updateSpatialElement({
+      glb: {
+        ...element.glb,
+        surfaces: element.glb.surfaces.map((surface) => surface.id === this._selectedGlbSurfaceId ? { ...surface, ...patch } : surface),
+      },
+    });
+  }
+
+  private _glbSurfaceTargets(element: SpatialElement, selected: SpatialGlbSurface): SpatialGlbSurface[] {
+    if (!element.glb || this._glbSurfaceScope === 'surface') return [selected];
+    if (this._glbSurfaceScope === 'material') {
+      const key = selected.sourceMaterialKey;
+      return key ? element.glb.surfaces.filter((surface) => surface.sourceMaterialKey === key) : [selected];
+    }
+    const color = selected.sourceColor ?? String(selected.color.base).toLowerCase();
+    return element.glb.surfaces.filter((surface) => (surface.sourceColor ?? String(surface.color.base).toLowerCase()) === color);
+  }
+
+  private _updateGlbSurfaceGroup(patch: Partial<SpatialGlbSurface>): void {
+    const element = this._spatial().plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
+    const selected = element?.glb?.surfaces.find((candidate) => candidate.id === this._selectedGlbSurfaceId);
+    if (!element?.glb || !selected) return;
+    const targetIds = new Set(this._glbSurfaceTargets(element, selected).map((surface) => surface.id));
+    this._updateSpatialElement({
+      glb: {
+        ...element.glb,
+        surfaces: element.glb.surfaces.map((surface) => targetIds.has(surface.id) ? { ...surface, ...patch } : surface),
+      },
+    });
+  }
+
+  private _applySelectedGlbMappingToScope(): void {
+    const element = this._spatial().plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
+    const selected = element?.glb?.surfaces.find((candidate) => candidate.id === this._selectedGlbSurfaceId);
+    if (!selected || this._glbSurfaceScope === 'surface') return;
+    this._updateGlbSurfaceGroup({
+      entityId: selected.entityId,
+      color: structuredClone(selected.color),
+      luminosity: structuredClone(selected.luminosity),
+    });
+  }
+
+  private _updateGlbSurfaceConditional<T>(key: 'color' | 'luminosity', value: SpatialConditionalValue<T>): void {
+    this._updateGlbSurfaceGroup({ [key]: value } as Partial<SpatialGlbSurface>);
+  }
+
+  private _addGlbSurfaceRule(key: 'color' | 'luminosity'): void {
+    const element = this._spatial().plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
+    const surface = element?.glb?.surfaces.find((candidate) => candidate.id === this._selectedGlbSurfaceId);
+    if (!surface) return;
+    const value = surface[key] as SpatialConditionalValue<string | number>;
+    this._updateGlbSurfaceConditional(key, {
+      ...value,
+      rules: [...value.rules, { operator: 'equals', compare: 'on', value: value.base }],
+    } as SpatialConditionalValue<any>);
+  }
+
+  private _updateGlbSurfaceRule(key: 'color' | 'luminosity', index: number, patch: Record<string, unknown>): void {
+    const element = this._spatial().plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
+    const surface = element?.glb?.surfaces.find((candidate) => candidate.id === this._selectedGlbSurfaceId);
+    if (!surface) return;
+    const value = surface[key] as SpatialConditionalValue<string | number>;
+    this._updateGlbSurfaceConditional(key, {
+      ...value,
+      rules: value.rules.map((rule, ruleIndex) => ruleIndex === index ? { ...rule, ...patch } : rule),
+    } as SpatialConditionalValue<any>);
+  }
+
+  private _removeGlbSurfaceRule(key: 'color' | 'luminosity', index: number): void {
+    const element = this._spatial().plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
+    const surface = element?.glb?.surfaces.find((candidate) => candidate.id === this._selectedGlbSurfaceId);
+    if (!surface) return;
+    this._updateGlbSurfaceConditional(key, {
+      ...surface[key],
+      rules: surface[key].rules.filter((_, ruleIndex) => ruleIndex !== index),
+    } as SpatialConditionalValue<any>);
+  }
+
+  private _updatePrimitiveConditional<T>(key: 'color' | 'luminosity' | 'waves', value: SpatialConditionalValue<T>): void {
+    this._updateElementPrimitive({ [key]: value } as Partial<SpatialElementPrimitive>);
+  }
+
+  private _addPrimitiveRule(key: 'color' | 'luminosity' | 'waves'): void {
+    const element = this._spatial().plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
+    const primitive = element?.primitives.find((candidate) => candidate.id === this._selectedPrimitiveId);
+    if (!primitive) return;
+    if (key === 'color') {
+      this._updatePrimitiveConditional(key, { ...primitive.color, rules: [...primitive.color.rules, { operator: 'equals', compare: 'on', value: primitive.color.base }] });
+    } else {
+      const value = primitive[key];
+      this._updatePrimitiveConditional(key, { ...value, rules: [...value.rules, { operator: 'equals', compare: 'on', value: value.base }] });
+    }
+  }
+
+  private _updatePrimitiveRule(
+    key: 'color' | 'luminosity' | 'waves',
+    index: number,
+    patch: Record<string, unknown>,
+  ): void {
+    const element = this._spatial().plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
+    const primitive = element?.primitives.find((candidate) => candidate.id === this._selectedPrimitiveId);
+    if (!primitive) return;
+    const current = primitive[key] as SpatialConditionalValue<string | number>;
+    this._updatePrimitiveConditional(key, {
+      ...current,
+      rules: current.rules.map((rule, ruleIndex) => ruleIndex === index ? { ...rule, ...patch } : rule),
+    } as SpatialConditionalValue<any>);
+  }
+
+  private _removePrimitiveRule(key: 'color' | 'luminosity' | 'waves', index: number): void {
+    const element = this._spatial().plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
+    const primitive = element?.primitives.find((candidate) => candidate.id === this._selectedPrimitiveId);
+    if (!primitive) return;
+    const current = primitive[key] as SpatialConditionalValue<string | number>;
+    this._updatePrimitiveConditional(key, { ...current, rules: current.rules.filter((_, ruleIndex) => ruleIndex !== index) } as SpatialConditionalValue<any>);
+  }
+
+  private _onSpatialElementSelected(ev: CustomEvent): void {
+    this._selectedElementId = (ev.detail as { elementId: string }).elementId;
+    const element = this._spatial().plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
+    this._selectedPrimitiveId = element?.primitives[0]?.id ?? '';
+    this._selectedGlbSurfaceId = element?.glb?.surfaces[0]?.id ?? '';
+    this._setupStep = 'elements';
   }
 
   private _onSpatialEntitySelected(ev: CustomEvent): void {
@@ -1541,6 +1790,13 @@ export class ApartmentViewCardEditor extends LitElement {
       ...entity,
       spatial: { ...spatial, ...patch },
     } : entity));
+  }
+
+  private _updateSelectedEntity(patch: Partial<EntityConfig>): void {
+    if (!this._config.entities[this._selectedEntity]) return;
+    this._commitEntities(this._config.entities.map((entity, index) => index === this._selectedEntity
+      ? { ...entity, ...patch }
+      : entity));
   }
 
   private _commitZones(zones: ZoneConfig[]): void {
@@ -1637,151 +1893,9 @@ export class ApartmentViewCardEditor extends LitElement {
     } : zone));
   }
 
-  private _startDrawZone(): void {
-    this._drawingZone = true;
-  }
-
-  private _onZoneDrawn(ev: CustomEvent): void {
-    const rect = ev.detail as {
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-    };
-    const base = defaultZone();
-    const zone: ZoneConfig = {
-      id: roomIdFor(this._pendingZoneName.trim() || base.name, this._config.zones),
-      ...(this._pendingAreaId ? { areaId: this._pendingAreaId } : {}),
-      name: this._pendingZoneName.trim() || base.name,
-      ...(base.icon !== undefined ? { icon: base.icon } : {}),
-      x: rect.x,
-      y: rect.y,
-      width: rect.width,
-      height: rect.height,
-    };
-    this._drawingZone = false;
-    const zones = [...this._config.zones, zone];
-    this._commitZones(zones);
-    this._pendingZoneName = zone.name === base.name ? '' : zone.name;
-    this._pendingAreaId = '';
-    this._setupStep = 'rooms';
-  }
-
-  private _onZoneDrawCancelled(): void {
-    this._drawingZone = false;
-  }
-
-  private _removeZone(index: number): void {
-    this._commitZones(this._config.zones.filter((_, i) => i !== index));
-  }
-
-  private _moveZone(index: number, delta: number): void {
-    const target = index + delta;
-    if (target < 0 || target >= this._config.zones.length) return;
-    const zones = [...this._config.zones];
-    const [z] = zones.splice(index, 1);
-    zones.splice(target, 0, z);
-    this._commitZones(zones);
-  }
-
-  private _zoneLabel = (schema: { name: string }): string => {
-    const labels: Record<string, string> = {
-      name: 'Name',
-      icon: 'Icon (optional)',
-      x: 'X',
-      y: 'Y',
-      width: 'Width',
-      height: 'Height',
-    };
-    return labels[schema.name] ?? schema.name;
-  };
-
-  private _onZoneChanged(ev: CustomEvent, index: number): void {
-    ev.stopPropagation();
-    const v = ev.detail.value as Partial<ZoneConfig>;
-    const zones = this._config.zones.map((z, i) =>
-      i === index ? { ...z, ...v } : z
-    );
-    this._commitZones(zones);
-  }
-
-  private _onZoneAreaChanged(index: number, areaId: string): void {
-    const area = this._areaList().find((candidate) => candidate.area_id === areaId);
-    const zones = this._config.zones.map((zone, i) => {
-      if (i !== index) return zone;
-      if (!areaId) {
-        const { areaId: _areaId, ...unlinked } = zone;
-        return unlinked;
-      }
-      return { ...zone, areaId, ...(area ? { name: area.name } : {}) };
-    });
-    this._commitZones(zones);
-  }
-
   private _selectUnplacedEntity(entity: EntityConfig): void {
     this._selectedEntity = this._config.entities.indexOf(entity);
     this._previewMode = 'edit';
-  }
-
-  private _renderZones() {
-    return html`
-      <div class="section">
-        <div class="section-title">Zones</div>
-        ${this._config.zones.map(
-          (z, i) => html`
-            <div class="zone-row">
-              <div class="row-header">
-                <span class="row-title">${z.name}</span>
-                <div class="zone-actions">
-                  <ha-icon-button
-                    class="zone-up"
-                    .label=${'Move zone up'}
-                    .path=${'M7,15L12,10L17,15H7Z'}
-                    @click=${() => this._moveZone(i, -1)}
-                  ></ha-icon-button>
-                  <ha-icon-button
-                    class="zone-down"
-                    .label=${'Move zone down'}
-                    .path=${'M7,10L12,15L17,10H7Z'}
-                    @click=${() => this._moveZone(i, 1)}
-                  ></ha-icon-button>
-                  <ha-icon-button
-                    class="remove-zone"
-                    .label=${'Delete zone'}
-                    .path=${'M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z'}
-                    @click=${() => this._removeZone(i)}
-                  ></ha-icon-button>
-                </div>
-              </div>
-              <select class="zone-area-link" aria-label="Linked Home Assistant Area"
-                .value=${z.areaId ?? ''}
-                @change=${(event: Event) => this._onZoneAreaChanged(i, (event.target as HTMLSelectElement).value)}>
-                <option value="">No linked Home Assistant Area</option>
-                ${this._areaList().map((area) => html`<option value=${area.area_id}>${area.name}</option>`)}
-              </select>
-              <ha-form
-                class="zone-form"
-                .hass=${this.hass}
-                .data=${z}
-                .schema=${zoneSchema()}
-                .computeLabel=${this._zoneLabel}
-                @value-changed=${(ev: CustomEvent) => this._onZoneChanged(ev, i)}
-              ></ha-form>
-            </div>
-          `
-        )}
-        <ha-button
-          class="add-zone"
-          @click=${this._drawingZone ? this._onZoneDrawCancelled : this._startDrawZone}
-        >${this._drawingZone ? 'Cancel drawing' : 'Add zone'}</ha-button>
-        <p class="section-hint">
-          ${this._drawingZone
-            ? html`<b>Drawing mode is ON</b> — drag a rectangle on the floorplan
-                preview to place the zone (Esc cancels).`
-            : 'Add zone arms drawing mode: you then drag the zone rectangle directly on the preview.'}
-        </p>
-      </div>
-    `;
   }
 
   // ---------------------------------------------------------------------------
@@ -1900,95 +2014,6 @@ export class ApartmentViewCardEditor extends LitElement {
     `;
   }
 
-  private _renderImportFromArea() {
-    const areas = (this.hass as unknown as { areas?: Record<string, { area_id: string; name: string }> }).areas ?? {};
-    const list = Object.values(areas);
-    if (!list.length) return nothing;
-    return html`<div class="import-row">
-      <select
-        class="area-import"
-        aria-label="Import devices from a room"
-        @change=${(ev: Event) => {
-          const sel = ev.target as HTMLSelectElement;
-          if (sel.value) this._addEntitiesFromArea(sel.value);
-          sel.value = '';
-        }}
-      >
-        <option value="">+ Import devices from a room…</option>
-        ${list
-          .slice()
-          .sort((a, b) => String(a.name).localeCompare(String(b.name)))
-          .map((a) => html`<option value=${a.area_id}>${a.name}</option>`)}
-      </select>
-    </div>`;
-  }
-
-  private _renderEntities() {
-    return html`
-      <div class="section">
-        <div class="section-title">Entities</div>
-        ${this._renderImportFromArea()}
-        ${this._config.entities.length > 5
-          ? html`<input
-              class="entity-search"
-              type="search"
-              placeholder="Search devices…"
-              .value=${this._entitySearch}
-              @input=${(ev: Event) => {
-                this._entitySearch = (ev.target as HTMLInputElement).value;
-              }}
-            />`
-          : nothing}
-        ${this._config.entities
-          .map((e, i) => ({ e, i }))
-          .filter(({ e }) => this._matchesSearch(e))
-          .map(({ e, i }) => {
-          const directional = isDirectional(e.orientation);
-          const expanded = i === this._selectedEntity;
-          return html`
-            <div class="entity-row ${expanded ? 'selected' : ''}">
-              <div
-                class="row-header"
-                role="button"
-                tabindex="0"
-                aria-expanded=${expanded ? 'true' : 'false'}
-                @click=${() => this._selectEntity(i)}
-                @keydown=${(ev: KeyboardEvent) => this._onRowKey(ev, i)}
-              >
-                <ha-icon
-                  class="chevron ${expanded ? 'open' : ''}"
-                  icon="mdi:chevron-right"
-                ></ha-icon>
-                <span class="row-title">${e.name || e.entity || 'New entity'}</span>
-                <ha-icon-button
-                  class="remove-entity"
-                  .label=${'Remove entity'}
-                  .path=${'M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z'}
-                  @click=${(ev: Event) => {
-                    ev.stopPropagation();
-                    this._removeEntity(i);
-                  }}
-                ></ha-icon-button>
-              </div>
-              ${expanded
-                ? html`<ha-form
-                    class="entity-form"
-                    .hass=${this.hass}
-                    .data=${entityToForm(e)}
-                    .schema=${entitySchema(directional, e.label?.source ?? 'inherit')}
-                    .computeLabel=${this._entityLabel}
-                    @value-changed=${(ev: CustomEvent) =>
-                      this._onEntityChanged(ev, i)}
-                  ></ha-form>`
-                : nothing}
-            </div>
-          `;
-        })}
-        <ha-button class="add-entity" @click=${this._addEntity}>Add entity</ha-button>
-      </div>
-    `;
-  }
-
   private _renderStudioHeader() {
     return html`
       <div class="editor-mode">
@@ -2022,7 +2047,13 @@ export class ApartmentViewCardEditor extends LitElement {
         ${SETUP_STEPS.map((step) => html`
           <button class="setup-step ${this._setupStep === step.id ? 'active' : ''}" role="tab"
             aria-selected=${this._setupStep === step.id}
-            @click=${() => { this._setupStep = step.id; if (step.id === 'architecture' || step.id === 'furniture') this._previewMode = 'edit'; }}>
+            @click=${() => {
+              if (step.id === 'floorplan') void this._editStructure();
+              else {
+                this._setupStep = step.id;
+                if (step.id === 'architecture' || step.id === 'elements') this._previewMode = 'edit';
+              }
+            }}>
             <ha-icon icon=${step.icon}></ha-icon><span>${step.label}</span>
           </button>
         `)}
@@ -2034,8 +2065,12 @@ export class ApartmentViewCardEditor extends LitElement {
     const index = SETUP_STEPS.findIndex((step) => step.id === this._setupStep);
     const next = SETUP_STEPS[Math.min(SETUP_STEPS.length - 1, Math.max(0, index + delta))];
     if (!next) return;
+    if (next.id === 'floorplan') {
+      void this._editStructure();
+      return;
+    }
     this._setupStep = next.id;
-    if (next.id === 'architecture' || next.id === 'furniture') this._previewMode = 'edit';
+    if (next.id === 'architecture' || next.id === 'elements') this._previewMode = 'edit';
   }
 
   private _renderSetupFloorplan() {
@@ -2044,17 +2079,17 @@ export class ApartmentViewCardEditor extends LitElement {
     const surveyWallCount = shell?.walls?.reduce((count, wall) => count + Math.max(0, wall.points.length - 1), 0) ?? 0;
     const wallCount = surveyWallCount || plan?.walls.length || 0;
     const roomCount = shell?.rooms?.length || plan?.rooms.length || 0;
-    const objectCount = plan?.objects.length || 0;
+    const elementCount = plan?.elements.length || 0;
     const selectedShellSegment = shell ? shellSegmentById(shell, this._selectedWallId) : undefined;
     const selectedPlanWall = plan?.walls.find((wall) => wall.id === this._selectedWallId);
     return html`
-      <p class="studio-intro">Build the physical home in metres. Shared corners, walls, openings, furniture, light, and every device will use this one model.</p>
+      <p class="studio-intro">Build the physical home in metres. Shared corners, walls, openings, Elements, light, and every device use one coherent model.</p>
       ${plan || shell ? html`
         <div class="setup-card">
           <h3>Your structure</h3>
-          <p>${wallCount} wall segment${wallCount === 1 ? '' : 's'}, ${roomCount} room${roomCount === 1 ? '' : 's'}, and ${objectCount} placed object${objectCount === 1 ? '' : 's'}.</p>
+          <p>${wallCount} wall segment${wallCount === 1 ? '' : 's'}, ${roomCount} room${roomCount === 1 ? '' : 's'}, and ${elementCount} Element${elementCount === 1 ? '' : 's'}.</p>
           <div class="setup-actions">
-            <ha-button @click=${() => { this._previewMode = 'edit'; }}>Edit structure</ha-button>
+            <ha-button @click=${this._editStructure}>Edit structure</ha-button>
             <ha-button @click=${() => { this._previewMode = '3d'; }}>Inspect in 3D</ha-button>
             <ha-button @click=${() => { this._setupStep = 'rooms'; }}>Continue to rooms</ha-button>
           </div>
@@ -2100,6 +2135,7 @@ export class ApartmentViewCardEditor extends LitElement {
             </div>
           </div>
         ` : html`<p class="structure-hint"><ha-icon icon="mdi:cursor-default-click-outline"></ha-icon><span>Select a wall to edit its thickness and shape, or drag a corner directly in the plan.</span></p>`}
+        ${this._renderNorthSetting()}
       ` : html`
         <div class="setup-card">
           <h3>How would you like to begin?</h3>
@@ -2170,7 +2206,7 @@ export class ApartmentViewCardEditor extends LitElement {
       <div class="setup-card">
         <h3>No enclosed rooms yet</h3>
         <p>Close the wall outline in Plan view. Shared walls can divide a larger outline into multiple rooms.</p>
-        <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'floorplan'; this._previewMode = 'edit'; }}>Edit structure</ha-button></div>
+        <div class="setup-actions"><ha-button @click=${this._editStructure}>Edit structure</ha-button></div>
       </div>
     `;
     return html`
@@ -2211,7 +2247,7 @@ export class ApartmentViewCardEditor extends LitElement {
           })}
         </div>
         <div class="setup-actions">
-          <ha-button @click=${() => { this._setupStep = 'floorplan'; this._previewMode = 'edit'; }}>Adjust walls</ha-button>
+          <ha-button @click=${this._editStructure}>Adjust walls</ha-button>
           <ha-button @click=${() => { this._setupStep = 'architecture'; this._previewMode = 'edit'; }}>Add doors &amp; windows</ha-button>
         </div>
       </div>
@@ -2230,7 +2266,6 @@ export class ApartmentViewCardEditor extends LitElement {
     const planWall = plan?.walls.find((wall) => wall.id === this._selectedWallId);
     const selected = openings.find((opening) => opening.id === this._selectedOpeningId);
     const curve = this._selectedWallId ? this._wallCurve(this._selectedWallId) : 0;
-    const north = this._spatial().site.north;
     const wallOpenings = this._selectedWallId
       ? openings.filter((opening) => opening.wallId === this._selectedWallId)
       : [];
@@ -2301,25 +2336,14 @@ export class ApartmentViewCardEditor extends LitElement {
         </div>
         <div class="setup-actions"><ha-button @click=${() => this._removeShellOpening(surveySelected.id)}>Remove ${surveySelected.kind}</ha-button></div>
       </div>` : nothing}
-      <div class="setup-card">
-        <h3>Daylight orientation</h3>
-        <p>Set true north so the 3D home casts sunlight from the correct direction.</p>
-        <div class="opening-control">
-          <label for="north-bearing">North</label>
-          <input id="north-bearing" type="range" min="0" max="359" step="1" .value=${String(Math.round(north))}
-            @pointerdown=${this._onPreviewEditStart} @pointerup=${this._onPreviewEditEnd}
-            @input=${(event: Event) => this._updateNorth(Number((event.target as HTMLInputElement).value), !this._dragStartConfig)} />
-          <output>${Math.round(north)}°</output>
-        </div>
-      </div>
-      <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'furniture'; this._previewMode = 'edit'; }}>Continue to furniture</ha-button></div>
+      <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'elements'; this._previewMode = 'edit'; }}>Continue to Elements</ha-button></div>
     `;
     if (!plan?.rooms.length && !this._config.zones.length) return html`
       <p class="studio-intro">Doors and windows are attached directly to room walls.</p>
-      <div class="architecture-empty">Close at least one room first.<div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'floorplan'; this._previewMode = 'edit'; }}>Edit structure</ha-button></div></div>
+      <div class="architecture-empty">Close at least one room first.<div class="setup-actions"><ha-button @click=${this._editStructure}>Edit structure</ha-button></div></div>
     `;
     return html`
-      <p class="studio-intro">Select a wall to shape it, then add doors and windows. Set north once and the 3D model can cast sunlight from the real direction.</p>
+      <p class="studio-intro">Select a wall to shape it, then add doors and windows.</p>
       ${!this._selectedWallId ? html`
         <div class="architecture-empty">Select any highlighted wall in the 2D plan above.</div>
       ` : html`
@@ -2411,7 +2435,7 @@ export class ApartmentViewCardEditor extends LitElement {
       ` : nothing}
       <div class="setup-card">
         <h3>Real dimensions</h3>
-        <p>Scale the model in metres so rooms, furniture, walls, shadows, and camera movement share one believable physical system.</p>
+        <p>Scale the model in metres so rooms, Elements, walls, shadows, and camera movement share one believable physical system.</p>
         <div class="opening-editor">
           <div class="opening-control">
             <label for="apartment-width">Plan width</label>
@@ -2434,90 +2458,193 @@ export class ApartmentViewCardEditor extends LitElement {
         </div>
         ${!plan ? html`<div class="setup-actions"><ha-button @click=${this._useImageAspect}>Read ratio from floorplan</ha-button></div>` : nothing}
       </div>
-      <div class="setup-card">
-        <h3>Sun orientation</h3>
-        <p>Point north to match the floorplan. Home Assistant's home location supplies latitude and longitude automatically.</p>
-        <div class="north-setting">
-          <div class="compass" aria-hidden="true"><div class="compass-arrow" style=${`transform:rotate(${north}deg)`}></div></div>
-          <div>
-            <div class="opening-control">
-              <label for="north-bearing">North</label>
-              <input id="north-bearing" type="range" min="0" max="359" step="1" .value=${String(Math.round(north))}
-                @pointerdown=${this._onPreviewEditStart} @pointerup=${this._onPreviewEditEnd}
-                @input=${(event: Event) => this._updateNorth(Number((event.target as HTMLInputElement).value), !this._dragStartConfig)} />
-              <output>${Math.round(north)}°</output>
-            </div>
-            <div class="location-note">${this.hass.config?.latitude?.toFixed?.(3) ?? 'Home'} · ${this.hass.config?.longitude?.toFixed?.(3) ?? 'location'}</div>
-          </div>
-        </div>
-      </div>
-      <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'furniture'; this._previewMode = 'edit'; }}>Continue to furniture</ha-button></div>
+      <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'elements'; this._previewMode = 'edit'; }}>Continue to Elements</ha-button></div>
     `;
   }
 
-  private _renderSetupFurniture() {
+  private _renderConditionalControl(
+    primitive: SpatialElementPrimitive,
+    key: 'color' | 'luminosity' | 'waves',
+    label: string,
+  ) {
+    const value = primitive[key] as SpatialConditionalValue<string | number>;
+    const isColor = key === 'color';
+    return html`<div class="conditional-control">
+      <div class="conditional-heading"><strong>${label}</strong><button title=${`Add conditional ${label.toLowerCase()} rule`} @click=${() => this._addPrimitiveRule(key)}><ha-icon icon="mdi:plus"></ha-icon><span>Condition</span></button></div>
+      <label class="base-value"><span>Default</span>${isColor ? html`
+        <input type="color" .value=${String(value.base)} @input=${(event: Event) => this._updatePrimitiveConditional(key, { ...value, base: (event.target as HTMLInputElement).value } as SpatialConditionalValue<any>)} />
+        <input type="text" pattern="#[0-9a-fA-F]{6}" .value=${String(value.base)} @change=${(event: Event) => this._updatePrimitiveConditional(key, { ...value, base: (event.target as HTMLInputElement).value } as SpatialConditionalValue<any>)} />
+      ` : html`<input type="range" min="0" max="1" step="0.01" .value=${String(value.base)}
+        @pointerdown=${this._onPreviewEditStart} @pointerup=${this._onPreviewEditEnd}
+        @input=${(event: Event) => this._updatePrimitiveConditional(key, { ...value, base: Number((event.target as HTMLInputElement).value) } as SpatialConditionalValue<any>)} /><output>${Number(value.base).toFixed(2)}</output>`}</label>
+      ${value.rules.map((rule, index) => html`<div class="condition-row">
+        <label><span>Entity</span><input type="text" list="ha-entity-ids" .value=${rule.entityId ?? ''} placeholder="Use element entity"
+          @change=${(event: Event) => this._updatePrimitiveRule(key, index, { entityId: (event.target as HTMLInputElement).value.trim() || undefined })} /></label>
+        <label><span>Attribute</span><input type="text" .value=${rule.attribute ?? ''} placeholder="State"
+          @change=${(event: Event) => this._updatePrimitiveRule(key, index, { attribute: (event.target as HTMLInputElement).value.trim() || undefined })} /></label>
+        <label><span>Match</span><select .value=${rule.operator} @change=${(event: Event) => this._updatePrimitiveRule(key, index, { operator: (event.target as HTMLSelectElement).value })}>
+          <option value="equals">Equals</option><option value="not-equals">Does not equal</option><option value="above">Above</option><option value="below">Below</option>
+        </select></label>
+        <label><span>Value</span><input type="text" .value=${String(rule.compare)} @change=${(event: Event) => this._updatePrimitiveRule(key, index, { compare: (event.target as HTMLInputElement).value })} /></label>
+        <label class="condition-result"><span>Result</span>${isColor ? html`<input type="color" .value=${String(rule.value)} @input=${(event: Event) => this._updatePrimitiveRule(key, index, { value: (event.target as HTMLInputElement).value })} />`
+          : html`<input type="number" min="0" max="1" step="0.05" .value=${String(rule.value)} @change=${(event: Event) => this._updatePrimitiveRule(key, index, { value: Number((event.target as HTMLInputElement).value) })} />`}</label>
+        <button class="condition-remove" title="Remove condition" @click=${() => this._removePrimitiveRule(key, index)}><ha-icon icon="mdi:close"></ha-icon></button>
+      </div>`)}
+    </div>`;
+  }
+
+  private _renderGlbSurfaceConditionalControl(
+    surface: SpatialGlbSurface,
+    key: 'color' | 'luminosity',
+    label: string,
+  ) {
+    const value = surface[key] as SpatialConditionalValue<string | number>;
+    const isColor = key === 'color';
+    return html`<div class="conditional-control">
+      <div class="conditional-heading"><strong>${label}</strong><button title=${`Add conditional ${label.toLowerCase()} rule`} @click=${() => this._addGlbSurfaceRule(key)}><ha-icon icon="mdi:plus"></ha-icon><span>Condition</span></button></div>
+      <label class="base-value"><span>Default</span>${isColor ? html`
+        <input type="color" .value=${String(value.base)} @input=${(event: Event) => this._updateGlbSurfaceConditional(key, { ...value, base: (event.target as HTMLInputElement).value } as SpatialConditionalValue<any>)} />
+        <input type="text" pattern="#[0-9a-fA-F]{6}" .value=${String(value.base)} @change=${(event: Event) => this._updateGlbSurfaceConditional(key, { ...value, base: (event.target as HTMLInputElement).value } as SpatialConditionalValue<any>)} />
+      ` : html`<input type="range" min="0" max="1" step="0.01" .value=${String(value.base)}
+        @pointerdown=${this._onPreviewEditStart} @pointerup=${this._onPreviewEditEnd}
+        @input=${(event: Event) => this._updateGlbSurfaceConditional(key, { ...value, base: Number((event.target as HTMLInputElement).value) } as SpatialConditionalValue<any>)} /><output>${Number(value.base).toFixed(2)}</output>`}</label>
+      ${value.rules.map((rule, index) => html`<div class="condition-row">
+        <label><span>Entity</span><input type="text" list="ha-entity-ids" .value=${rule.entityId ?? surface.entityId ?? ''} placeholder="Use surface entity"
+          @change=${(event: Event) => this._updateGlbSurfaceRule(key, index, { entityId: (event.target as HTMLInputElement).value.trim() || undefined })} /></label>
+        <label><span>Attribute</span><input type="text" .value=${rule.attribute ?? ''} placeholder="State"
+          @change=${(event: Event) => this._updateGlbSurfaceRule(key, index, { attribute: (event.target as HTMLInputElement).value.trim() || undefined })} /></label>
+        <label><span>Match</span><select .value=${rule.operator} @change=${(event: Event) => this._updateGlbSurfaceRule(key, index, { operator: (event.target as HTMLSelectElement).value })}>
+          <option value="equals">Equals</option><option value="not-equals">Does not equal</option><option value="above">Above</option><option value="below">Below</option>
+        </select></label>
+        <label><span>Value</span><input type="text" .value=${String(rule.compare)} @change=${(event: Event) => this._updateGlbSurfaceRule(key, index, { compare: (event.target as HTMLInputElement).value })} /></label>
+        <label class="condition-result"><span>Result</span>${isColor ? html`<input type="color" .value=${String(rule.value)} @input=${(event: Event) => this._updateGlbSurfaceRule(key, index, { value: (event.target as HTMLInputElement).value })} />`
+          : html`<input type="number" min="0" max="1" step="0.05" .value=${String(rule.value)} @change=${(event: Event) => this._updateGlbSurfaceRule(key, index, { value: Number((event.target as HTMLInputElement).value) })} />`}</label>
+        <button class="condition-remove" title="Remove condition" @click=${() => this._removeGlbSurfaceRule(key, index)}><ha-icon icon="mdi:close"></ha-icon></button>
+      </div>`)}
+    </div>`;
+  }
+
+  private _renderSetupElements() {
     const plan = this._spatial().plan ?? (this._spatial().shell ? emptySpatialPlan() : null);
     if (!plan) return nothing;
-    const selected = plan.objects.find((item) => item.id === this._selectedObjectId);
-    const selectedAsset = spatialAsset(selected?.assetId);
-    const query = this._assetSearch.trim().toLocaleLowerCase();
-    const assets = SPATIAL_ASSETS.filter((asset) => (
-      (this._assetCategory === 'All' || asset.category === this._assetCategory)
-      && (!query || `${asset.label} ${asset.category}`.toLocaleLowerCase().includes(query))
-    ));
+    const selected = plan.elements.find((item) => item.id === this._selectedElementId);
+    const primitive = selected?.primitives.find((item) => item.id === this._selectedPrimitiveId) ?? selected?.primitives[0];
+    const glbSurface = selected?.glb?.surfaces.find((item) => item.id === this._selectedGlbSurfaceId) ?? selected?.glb?.surfaces[0];
+    const glbMaterialCount = selected?.glb && glbSurface?.sourceMaterialKey
+      ? selected.glb.surfaces.filter((surface) => surface.sourceMaterialKey === glbSurface.sourceMaterialKey).length
+      : 1;
+    const glbColorCount = selected?.glb && glbSurface
+      ? selected.glb.surfaces.filter((surface) => (surface.sourceColor ?? String(surface.color.base).toLowerCase()) === (glbSurface.sourceColor ?? String(glbSurface.color.base).toLowerCase())).length
+      : 1;
+    const glbScopeCount = this._glbSurfaceScope === 'material' ? glbMaterialCount : this._glbSurfaceScope === 'color' ? glbColorCount : 1;
+    const entityOptions = Object.values(this.hass.states ?? {}).slice().sort((left, right) => {
+      const leftName = String(left.attributes?.friendly_name ?? left.entity_id);
+      const rightName = String(right.attributes?.friendly_name ?? right.entity_id);
+      return leftName.localeCompare(rightName);
+    });
     return html`
-      <p class="studio-intro">Place the objects that make rooms recognizable. Drag them in Plan view, then use precise three-dimensional controls when needed.</p>
+      <datalist id="ha-entity-ids">${entityOptions.map((state) => html`<option value=${state.entity_id}>${state.attributes?.friendly_name ?? state.entity_id}</option>`)}</datalist>
+      <p class="studio-intro">Everything in the home is an Element. It can stand alone or represent a Home Assistant entity, and custom Elements can be built from editable solid primitives.</p>
       <div class="setup-card">
-        <h3>Add furniture</h3>
-        <div class="asset-browser-tools">
-          <input class="asset-search" type="search" placeholder="Search the collection" aria-label="Search furniture collection" .value=${this._assetSearch}
-            @input=${(event: Event) => { this._assetSearch = (event.target as HTMLInputElement).value; }} />
-          <div class="asset-categories" aria-label="Furniture categories">
-            ${(['All', ...SPATIAL_ASSET_CATEGORIES] as const).map((category) => html`<button class=${this._assetCategory === category ? 'active' : ''}
-              @click=${() => { this._assetCategory = category; }}>${category}</button>`)}
-          </div>
+        <h3>Add an Element</h3>
+        <div class="element-kinds">
+          <button @click=${() => this._addSpatialElement('ceiling-light')}><ha-icon icon="mdi:ceiling-light"></ha-icon><span><strong>Ceiling light</strong><small>State beacon with practical light</small></span></button>
+          <button @click=${() => this._addSpatialElement('light-bulb')}><ha-icon icon="mdi:lightbulb-outline"></ha-icon><span><strong>Light bulb</strong><small>State beacon with practical light</small></span></button>
+          <button @click=${() => this._addSpatialElement('custom')}><ha-icon icon="mdi:shape-plus"></ha-icon><span><strong>Custom</strong><small>Build from solid primitives</small></span></button>
+          <label class="element-upload"><ha-icon icon="mdi:cube-scan"></ha-icon><span><strong>GLB sourced</strong><small>Import and map model surfaces</small></span><input type="file" accept=".glb,model/gltf-binary" hidden @change=${this._onGlbPicked} /></label>
         </div>
-        <div class="furniture-library">
-          ${assets.map((asset) => html`<button title=${`Add ${asset.label}`} @click=${() => this._addSpatialFurniture(asset)}>
-            <ha-icon icon=${asset.icon}></ha-icon><span><span class="asset-name">${asset.label}</span><span class="asset-size">${asset.dimensions[0]} × ${asset.dimensions[1]} m</span></span>
-          </button>`)}
-        </div>
-        ${assets.length ? nothing : html`<div class="architecture-empty">No objects match that search.</div>`}
-        <div class="setup-actions"><ha-button @click=${() => this._addSpatialFurniture(null)}>Add custom 3D model</ha-button></div>
+        <p class="glb-note">GLB files up to 2.5 MB are embedded in the dashboard, so they travel with backups and work on every device.</p>
+        ${this._glbStatus ? html`<div class=${`glb-status ${this._glbStatus.kind}`}><ha-icon icon=${this._glbStatus.kind === 'loading' ? 'mdi:progress-clock' : this._glbStatus.kind === 'ready' ? 'mdi:check-circle-outline' : 'mdi:alert-circle-outline'}></ha-icon><span>${this._glbStatus.message}</span></div>` : nothing}
       </div>
       ${selected ? html`<div class="setup-card">
-        <h3>${selected.name || selectedAsset?.label || 'Object'}</h3>
+        <div class="element-title"><div><span>Selected Element</span><h3>${selected.name || 'Element'}</h3></div><span class="element-type">${selected.type.replace('-', ' ')}</span></div>
         <p>Position uses metres from the plan origin. Y is height above the finished floor.</p>
-        ${selectedAsset ? html`<div class="finish-picker" aria-label="Material finish">
-          ${selectedAsset.finishes.map((finish) => html`<button class=${selected.finishId === finish.id ? 'active' : ''}
-            @click=${() => this._updateSpatialFurniture({ finishId: finish.id })}>
-            <span class="finish-swatch" style=${`background:#${finish.color.toString(16).padStart(6, '0')}`}></span>${finish.label}
-          </button>`)}
-        </div>` : nothing}
         <div class="asset-fields">
           <label><span>Name</span><input type="text" .value=${selected.name ?? ''} placeholder="Optional label"
-            @change=${(event: Event) => this._updateSpatialFurniture({ name: (event.target as HTMLInputElement).value.trim() || undefined })} /></label>
-          <label><span>GLB / GLTF model URL</span><input type="url" .value=${selected.modelUrl ?? ''} placeholder="/local/models/chair.glb"
-            @change=${(event: Event) => this._updateSpatialFurniture({ modelUrl: (event.target as HTMLInputElement).value.trim() || undefined })} /></label>
+            @change=${(event: Event) => this._updateSpatialElement({ name: (event.target as HTMLInputElement).value.trim() || undefined })} /></label>
+          <label><span>Element type</span><select .value=${selected.type} @change=${(event: Event) => {
+            const type = (event.target as HTMLSelectElement).value as SpatialElementType;
+            const primitives = elementPrimitivesForType(type);
+            this._selectedPrimitiveId = primitives[0]?.id ?? '';
+            this._selectedGlbSurfaceId = '';
+            this._updateSpatialElement({ type, primitives, glb: undefined });
+          }}><option value="ceiling-light">Ceiling light</option><option value="light-bulb">Light bulb</option><option value="custom">Custom</option><option value="glb" disabled>GLB sourced</option></select></label>
           <label><span>Represents Home Assistant device</span><select .value=${selected.entityId ?? ''}
-            @change=${(event: Event) => this._updateSpatialFurniture({ entityId: (event.target as HTMLSelectElement).value || undefined })}>
+            @change=${(event: Event) => this._updateSpatialElement({ entityId: (event.target as HTMLSelectElement).value || undefined })}>
             <option value="">No device binding</option>
-            ${this._config.entities.map((entity) => html`<option value=${entity.entity}>${entity.name ?? this.hass.states[entity.entity]?.attributes?.friendly_name ?? entity.entity}</option>`)}
+            ${entityOptions.map((state) => html`<option value=${state.entity_id}>${state.attributes?.friendly_name ?? state.entity_id} · ${state.entity_id}</option>`)}
           </select></label>
         </div>
         <div class="transform-grid">
           ${(['x', 'y', 'z'] as const).map((axis) => html`<label><span>${axis.toUpperCase()} position</span><input type="number" step="0.05" .value=${String(selected.position[axis])}
-            @change=${(event: Event) => this._updateSpatialFurniture({ position: { ...selected.position, [axis]: Number((event.target as HTMLInputElement).value) } })} /></label>`)}
+            @change=${(event: Event) => this._updateSpatialElement({ position: { ...selected.position, [axis]: Number((event.target as HTMLInputElement).value) } })} /></label>`)}
           <label><span>Rotation</span><input type="number" step="5" .value=${String(selected.rotation.y)}
-            @change=${(event: Event) => this._updateSpatialFurniture({ rotation: { ...selected.rotation, y: Number((event.target as HTMLInputElement).value) } })} /></label>
-          ${(['x', 'y', 'z'] as const).map((axis) => html`<label><span>${axis.toUpperCase()} scale</span><input type="number" min="0.1" max="20" step="0.05" .value=${String(selected.scale[axis])}
-            @change=${(event: Event) => this._updateSpatialFurniture({ scale: { ...selected.scale, [axis]: Number((event.target as HTMLInputElement).value) } })} /></label>`)}
+            @change=${(event: Event) => this._updateSpatialElement({ rotation: { ...selected.rotation, y: Number((event.target as HTMLInputElement).value) } })} /></label>
+          ${(['x', 'y', 'z'] as const).map((axis) => html`<label><span>${axis.toUpperCase()} scale</span><input type="number" min=${selected.type === 'glb' ? '0.001' : '0.05'} max="20" step=${selected.type === 'glb' ? '0.001' : '0.05'} .value=${String(selected.scale[axis])}
+            @change=${(event: Event) => this._updateSpatialElement({ scale: { ...selected.scale, [axis]: Number((event.target as HTMLInputElement).value) } })} /></label>`)}
         </div>
         <div class="setup-actions">
           <ha-button @click=${() => { this._previewMode = '3d'; }}>Inspect in 3D</ha-button>
-          <ha-button @click=${this._removeSpatialFurniture}>Remove object</ha-button>
+          <ha-button @click=${this._duplicateSpatialElement}>Duplicate Element</ha-button>
+          <ha-button @click=${this._removeSpatialElement}>Remove Element</ha-button>
         </div>
-      </div>` : html`<div class="architecture-empty">Add an object or select one on the plan to adjust it.</div>`}
+      </div>
+      ${selected.type === 'custom' ? html`<div class="setup-card primitive-builder">
+        <div class="primitive-header"><div><span>Custom geometry</span><h3>Parts</h3></div><div class="primitive-add"><button title="Add cube" @click=${() => this._addElementPrimitive('cube')}><ha-icon icon="mdi:cube-outline"></ha-icon></button><button title="Add sphere" @click=${() => this._addElementPrimitive('sphere')}><ha-icon icon="mdi:sphere"></ha-icon></button><button title="Add cylinder" @click=${() => this._addElementPrimitive('cylinder')}><ha-icon icon="mdi:cylinder"></ha-icon></button></div></div>
+        <div class="primitive-list">${selected.primitives.map((part) => html`<button class=${part.id === primitive?.id ? 'active' : ''} @click=${() => { this._selectedPrimitiveId = part.id; }}><ha-icon icon=${part.kind === 'cube' ? 'mdi:cube-outline' : part.kind === 'sphere' ? 'mdi:sphere' : 'mdi:cylinder'}></ha-icon><span>${part.name ?? part.id}</span></button>`)}</div>
+        ${primitive ? html`<div class="primitive-editor">
+          <div class="asset-fields">
+            <label><span>Part name</span><input type="text" .value=${primitive.name ?? ''} @change=${(event: Event) => this._updateElementPrimitive({ name: (event.target as HTMLInputElement).value.trim() || undefined })} /></label>
+            <label><span>Primitive</span><select .value=${primitive.kind} @change=${(event: Event) => this._updateElementPrimitive({ kind: (event.target as HTMLSelectElement).value as SpatialElementPrimitive['kind'] })}><option value="cube">Cube</option><option value="sphere">Sphere</option><option value="cylinder">Solid cylinder</option></select></label>
+          </div>
+          <div class="transform-grid primitive-transform">
+            ${(['x', 'y', 'z'] as const).map((axis) => html`<label><span>${axis.toUpperCase()} size</span><input type="number" min="0.01" step="0.01" .value=${String(primitive.size[axis])} @change=${(event: Event) => this._updateElementPrimitive({ size: { ...primitive.size, [axis]: Number((event.target as HTMLInputElement).value) } })} /></label>`)}
+            ${(['x', 'y', 'z'] as const).map((axis) => html`<label><span>${axis.toUpperCase()} offset</span><input type="number" step="0.01" .value=${String(primitive.position[axis])} @change=${(event: Event) => this._updateElementPrimitive({ position: { ...primitive.position, [axis]: Number((event.target as HTMLInputElement).value) } })} /></label>`)}
+            ${(['x', 'y', 'z'] as const).map((axis) => html`<label><span>${axis.toUpperCase()} rotation</span><input type="number" step="1" .value=${String(primitive.rotation[axis])} @change=${(event: Event) => this._updateElementPrimitive({ rotation: { ...primitive.rotation, [axis]: Number((event.target as HTMLInputElement).value) } })} /></label>`)}
+            <label><span>Edge softness</span><input type="number" min="0" max="2" step="0.01" .value=${String(primitive.bevel)} @change=${(event: Event) => this._updateElementPrimitive({ bevel: Number((event.target as HTMLInputElement).value) })} /></label>
+          </div>
+          ${this._renderConditionalControl(primitive, 'color', 'Color')}
+          ${this._renderConditionalControl(primitive, 'luminosity', 'Luminosity')}
+          ${this._renderConditionalControl(primitive, 'waves', 'Emit waves')}
+          <div class="setup-actions"><ha-button @click=${this._removeElementPrimitive}>Remove part</ha-button></div>
+        </div>` : html`<div class="architecture-empty">Add a primitive to build this Element.</div>`}
+      </div>` : nothing}
+      ${selected.type === 'glb' && selected.glb ? html`<div class="setup-card primitive-builder">
+        <div class="primitive-header"><div><span>Imported geometry</span><h3>Surfaces</h3></div><span class="element-type">${selected.glb.surfaces.length} mapped</span></div>
+        <div class="glb-source">
+          <div><strong>${selected.glb.fileName}</strong><span>${(selected.glb.byteLength / 1_000_000).toFixed(2)} MB · ${selected.glb.size.x.toFixed(2)} × ${selected.glb.size.y.toFixed(2)} × ${selected.glb.size.z.toFixed(2)} m</span></div>
+          <label class="glb-replace"><ha-icon icon="mdi:file-replace-outline"></ha-icon><span>Replace file</span><input type="file" accept=".glb,model/gltf-binary" data-replace="true" hidden @change=${this._onGlbPicked} /></label>
+        </div>
+        <div class="primitive-list">${selected.glb.surfaces.map((surface) => html`<button class=${surface.id === glbSurface?.id ? 'active' : ''} @click=${() => { this._selectedGlbSurfaceId = surface.id; this._glbSurfaceScope = 'surface'; }}><ha-icon icon="mdi:layers-triple-outline"></ha-icon><span>${surface.name}</span></button>`)}</div>
+        ${glbSurface ? html`<div class="primitive-editor">
+          <div class="asset-fields">
+            <label><span>Surface name</span><input type="text" .value=${glbSurface.name} @change=${(event: Event) => this._updateGlbSurface({ name: (event.target as HTMLInputElement).value.trim() || glbSurface.name })} /></label>
+            <label><span>Surface entity</span><select .value=${glbSurface.entityId ?? ''} @change=${(event: Event) => this._updateGlbSurfaceGroup({ entityId: (event.target as HTMLSelectElement).value || undefined })}>
+              <option value="">Use Element entity</option>
+              ${entityOptions.map((state) => html`<option value=${state.entity_id}>${state.attributes?.friendly_name ?? state.entity_id} · ${state.entity_id}</option>`)}
+            </select></label>
+          </div>
+          <div class="surface-meta">mesh ${glbSurface.nodePath} · material ${glbSurface.materialIndex + 1}</div>
+          <div class="surface-scope">
+            <div class="surface-scope-switch" role="group" aria-label="Surfaces affected by edits">
+              <button aria-pressed=${this._glbSurfaceScope === 'surface'} @click=${() => { this._glbSurfaceScope = 'surface'; }}>Selected</button>
+              <button aria-pressed=${this._glbSurfaceScope === 'material'} ?disabled=${glbMaterialCount < 2}
+                @click=${() => { this._glbSurfaceScope = 'material'; }}>Material · ${glbMaterialCount}</button>
+              <button aria-pressed=${this._glbSurfaceScope === 'color'} ?disabled=${glbColorCount < 2}
+                @click=${() => { this._glbSurfaceScope = 'color'; }}>Color · ${glbColorCount}</button>
+            </div>
+            <div class="surface-scope-header">
+              <div class="surface-scope-copy">${this._glbSurfaceScope === 'surface'
+                ? 'Changes affect only this mesh surface.'
+                : `Changes affect all ${glbScopeCount} matching surfaces.`}</div>
+              ${this._glbSurfaceScope !== 'surface' ? html`<button class="surface-apply" @click=${this._applySelectedGlbMappingToScope}>Apply selected mapping</button>` : nothing}
+            </div>
+          </div>
+          ${this._renderGlbSurfaceConditionalControl(glbSurface, 'color', 'Surface color')}
+          ${this._renderGlbSurfaceConditionalControl(glbSurface, 'luminosity', 'Light emission')}
+        </div>` : html`<div class="architecture-empty">This model has no discovered material surfaces.</div>`}
+      </div>` : nothing}
+      ` : html`<div class="architecture-empty">Add an Element or select one on the plan to adjust it.</div>`}
       <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'devices'; }}>Continue to devices</ha-button></div>
     `;
   }
@@ -2531,7 +2658,7 @@ export class ApartmentViewCardEditor extends LitElement {
       entity,
       index,
       resolved: resolveSpatialEntityState(this.hass.states ?? {}, entity.entity),
-      objectBound: Boolean(this._spatial().plan?.objects.some((object) => object.entityId === entity.entity)),
+      elementBound: Boolean(this._spatial().plan?.elements.some((element) => element.entityId === entity.entity)),
     }));
     const liveCount = wiring.filter(({ resolved }) => resolved.activity !== 'unavailable' && !resolved.usedGroupFallback).length;
     const fallbackCount = wiring.filter(({ resolved }) => resolved.usedGroupFallback).length;
@@ -2547,14 +2674,14 @@ export class ApartmentViewCardEditor extends LitElement {
           <span><strong>${missingCount}</strong><br />unavailable</span>
         </div>
         <div class="wiring-list">
-          ${wiring.map(({ entity, index, resolved, objectBound }) => {
+          ${wiring.map(({ entity, index, resolved, elementBound }) => {
             const fallback = resolved.usedGroupFallback;
             const unavailable = resolved.activity === 'unavailable';
             const stateLabel = fallback ? `Via ${resolved.sourceEntityId}` : unavailable ? 'Unavailable' : resolved.state?.state ?? 'Unknown';
-            const icon = unavailable ? 'mdi:link-off' : fallback ? 'mdi:link-variant' : objectBound ? 'mdi:cube-scan' : 'mdi:map-marker-radius-outline';
+            const icon = unavailable ? 'mdi:link-off' : fallback ? 'mdi:link-variant' : elementBound ? 'mdi:cube-scan' : 'mdi:map-marker-radius-outline';
             return html`<button class="wiring-row" @click=${() => { this._selectedEntity = index; this._previewMode = 'edit'; }}>
               <ha-icon icon=${icon}></ha-icon>
-              <span class="wiring-copy"><strong>${entity.name ?? resolved.state?.attributes?.friendly_name ?? entity.entity}</strong><span>${objectBound ? 'Bound to a 3D object' : entity.zoneId ? `Placed in ${this._config.zones.find((zone) => zone.id === entity.zoneId)?.name ?? entity.zoneId}` : 'Needs a room'}</span></span>
+              <span class="wiring-copy"><strong>${entity.name ?? resolved.state?.attributes?.friendly_name ?? entity.entity}</strong><span>${elementBound ? 'Represented by an Element' : entity.zoneId ? `Placed in ${this._config.zones.find((zone) => zone.id === entity.zoneId)?.name ?? entity.zoneId}` : 'Needs a room'}</span></span>
               <span class="wiring-state ${fallback ? 'fallback' : unavailable ? '' : 'live'}">${stateLabel}</span>
             </button>`;
           })}
@@ -2601,9 +2728,14 @@ export class ApartmentViewCardEditor extends LitElement {
         </div>
         <label class="visibility-toggle"><input type="checkbox" .checked=${selectedSpatial?.visible ?? true}
           @change=${(event: Event) => this._updateSelectedEntitySpatial({ visible: (event.target as HTMLInputElement).checked })} /><span>Show a marker in the 3D home</span></label>
+        <label class="visibility-toggle"><input type="checkbox" .checked=${selected.overviewVisibility !== 'hidden'}
+          @change=${(event: Event) => this._updateSelectedEntity({
+            overviewVisibility: (event.target as HTMLInputElement).checked ? 'always' : 'hidden',
+            roomVisibility: 'always',
+          })} /><span>Visible in apartment overview</span></label>
         <div class="setup-actions"><ha-button @click=${() => { this._previewMode = '3d'; }}>Inspect in 3D</ha-button></div>
       </div>` : nothing}
-      <div class="setup-card"><h3>Need something specific?</h3><p>The advanced editor supports every Home Assistant entity, custom labels, directional effects, device behavior, and service-powered actions.</p><div class="setup-actions"><ha-button @click=${() => { this._mode = 'advanced'; this._tab = 'devices'; }}>Add a specific device</ha-button><ha-button @click=${() => { this._setupStep = 'review'; }}>Review setup</ha-button></div></div>
+      <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'actions'; }}>Continue to Actions</ha-button><ha-button @click=${() => { this._setupStep = 'review'; }}>Review setup</ha-button></div>
     `;
   }
 
@@ -2635,15 +2767,36 @@ export class ApartmentViewCardEditor extends LitElement {
           <div class="health-item ${unplaced.length ? 'warning' : 'ready'}"><ha-icon icon=${unplaced.length ? 'mdi:map-marker-alert-outline' : 'mdi:check-circle-outline'}></ha-icon><span>${unplaced.length ? `${unplaced.length} device${unplaced.length === 1 ? ' needs' : 's need'} a room.` : 'Every device belongs to a room.'}</span></div>
           <div class="health-item ${overlaps.length ? 'warning' : 'ready'}"><ha-icon icon=${overlaps.length ? 'mdi:vector-intersection' : 'mdi:check-circle-outline'}></ha-icon><span>${overlaps.length ? `${overlaps.length} overlapping room ${overlaps.length === 1 ? 'boundary' : 'boundaries'} found.` : 'Room boundaries are clean.'}</span></div>
           ${needsRevealImage ? html`<div class="health-item warning"><ha-icon icon="mdi:image-alert-outline"></ha-icon><span>Reveal lighting needs an all-lights render, or switch back to render-free lighting.</span></div>` : nothing}
-          ${plan ? html`<div class="health-item ready"><ha-icon icon="mdi:sofa-outline"></ha-icon><span>${plan.objects.length} spatial object${plan.objects.length === 1 ? '' : 's'} placed.</span></div>` : nothing}
+          ${plan ? html`<div class="health-item ready"><ha-icon icon="mdi:shape-outline"></ha-icon><span>${plan.elements.length} Element${plan.elements.length === 1 ? '' : 's'} placed.</span></div>` : nothing}
         </div>
         <div class="setup-actions">
           ${unplaced.length || !this._config.entities.length ? html`<ha-button @click=${() => { this._setupStep = 'devices'; }}>Place devices</ha-button>` : nothing}
           ${!this._config.zones.length || overlaps.length ? html`<ha-button @click=${() => { this._setupStep = 'rooms'; }}>Review rooms</ha-button>` : nothing}
-          <ha-button @click=${() => { this._mode = 'advanced'; this._tab = 'lighting'; }}>Fine tune appearance</ha-button>
+          <ha-button @click=${() => { this._setupStep = 'elements'; }}>Review Elements</ha-button>
         </div>
       </div>
     `;
+  }
+
+  private _renderAdvanced() {
+    return html`<div class="advanced-workspace">
+      <p class="studio-intro">Portable backups for the complete card: architecture, rooms, Elements, entity bindings, lighting, and actions.</p>
+      <div class="setup-card backup-card">
+        <div class="backup-icon"><ha-icon icon="mdi:tray-arrow-down"></ha-icon></div>
+        <div class="backup-copy"><h3>Download configuration</h3><p>Keep a human-readable YAML copy or an exact JSON copy. Both contain the same complete configuration.</p></div>
+        <div class="backup-actions">
+          <button @click=${() => this._downloadBackup('json')}><ha-icon icon="mdi:code-json"></ha-icon><span><strong>Download JSON</strong><small>Exact structured backup</small></span></button>
+          <button @click=${() => this._downloadBackup('yaml')}><ha-icon icon="mdi:file-code-outline"></ha-icon><span><strong>Download YAML</strong><small>Easy to read and edit</small></span></button>
+        </div>
+      </div>
+      <div class="setup-card backup-card">
+        <div class="backup-icon"><ha-icon icon="mdi:backup-restore"></ha-icon></div>
+        <div class="backup-copy"><h3>Restore a backup</h3><p>Choose a JSON or YAML file. It is parsed, normalized, and checked for broken geometry and invalid Elements before you can restore it.</p></div>
+        <label class="backup-picker"><ha-icon icon="mdi:file-upload-outline"></ha-icon><span>Choose backup file</span><input type="file" accept=".json,.yaml,.yml,application/json,application/yaml,text/yaml" hidden @change=${this._onBackupPicked} /></label>
+        ${this._backupStatus ? html`<div class="backup-status ${this._backupStatus.kind}"><ha-icon icon=${this._backupStatus.kind === 'error' ? 'mdi:alert-circle-outline' : this._backupStatus.kind === 'ready' ? 'mdi:check-decagram-outline' : 'mdi:check-circle-outline'}></ha-icon><span><strong>${this._backupStatus.kind === 'error' ? 'Backup rejected' : this._backupStatus.kind === 'ready' ? this._pendingRestoreName : 'Restore complete'}</strong>${this._backupStatus.message}</span></div>` : nothing}
+        ${this._pendingRestore ? html`<button class="restore-button" @click=${this._restorePendingBackup}><ha-icon icon="mdi:restore"></ha-icon><span>Restore validated backup</span></button>` : nothing}
+      </div>
+    </div>`;
   }
 
   private _renderSetupStudio() {
@@ -2651,8 +2804,9 @@ export class ApartmentViewCardEditor extends LitElement {
     switch (this._setupStep) {
       case 'rooms': content = this._renderSetupRooms(); break;
       case 'architecture': content = this._renderSetupArchitecture(); break;
-      case 'furniture': content = this._renderSetupFurniture(); break;
+      case 'elements': content = this._renderSetupElements(); break;
       case 'devices': content = this._renderSetupDevices(); break;
+      case 'actions': content = html`<p class="studio-intro">Add the contextual commands that should be available from the spatial home.</p>${this._renderActions()}`; break;
       case 'review': content = this._renderSetupReview(); break;
       default: content = this._renderSetupFloorplan();
     }
@@ -2702,7 +2856,7 @@ export class ApartmentViewCardEditor extends LitElement {
         .entities=${this._config.entities}
         .selectedWallId=${this._selectedWallId}
         .selectedOpeningId=${this._selectedOpeningId}
-        .selectedObjectId=${this._selectedObjectId}
+        .selectedElementId=${this._selectedElementId}
         .selectedRoomId=${this._selectedRoomId}
         @spatial-plan-changed=${this._onSpatialPlanChanged}
         @spatial-shell-changed=${this._onSpatialShellChanged}
@@ -2710,160 +2864,21 @@ export class ApartmentViewCardEditor extends LitElement {
         @spatial-edit-end=${this._onPreviewEditEnd}
         @spatial-wall-selected=${this._onPreviewWallSelected}
         @spatial-opening-selected=${this._onPreviewOpeningSelected}
-        @spatial-object-selected=${this._onSpatialObjectSelected}
+        @spatial-element-selected=${this._onSpatialElementSelected}
         @spatial-room-selected=${this._onSpatialRoomSelected}
         @spatial-entity-selected=${this._onSpatialEntitySelected}
         @spatial-entity-moved=${this._onSpatialEntityMoved}
-      ></spatial-plan-editor>` : this._mode === 'setup' ? html`<div class="spatial-empty-preview">
+      ></spatial-plan-editor>` : html`<div class="spatial-empty-preview">
         <ha-icon icon="mdi:vector-square"></ha-icon><strong>Your 3D home starts here</strong><span>Choose a structure below to begin.</span>
-      </div>` : html`<preview-canvas
-        .base=${this._config.images.base}
-        .entities=${this._config.entities}
-        .zones=${this._config.zones}
-        .openings=${this._spatial().openings}
-        .walls=${this._spatial().walls}
-        .selectedEntity=${this._selectedEntity}
-        .architectureMode=${false}
-        .selectedWallId=${this._selectedWallId}
-        .selectedOpeningId=${this._selectedOpeningId}
-        .drawingZone=${this._drawingZone}
-        @preview-entity-moved=${this._onPreviewEntityMoved}
-        @preview-entity-selected=${this._onPreviewEntitySelected}
-        @preview-wall-selected=${this._onPreviewWallSelected}
-        @preview-opening-selected=${this._onPreviewOpeningSelected}
-        @preview-edit-start=${this._onPreviewEditStart}
-        @preview-edit-end=${this._onPreviewEditEnd}
-        @preview-zone-drawn=${this._onZoneDrawn}
-        @preview-zone-draw-cancelled=${this._onZoneDrawCancelled}
-      ></preview-canvas>`}
-      </section>
-      <section class="controls-panel" aria-label="Card settings">
-      ${this._mode === 'setup' ? this._renderSetupStudio() : html`
-      <div class="tabs" role="tablist">
-        ${TABS.map(
-          (t) => html`<button
-            role="tab"
-            class="tab ${this._tab === t.id ? 'active' : ''}"
-            aria-selected=${this._tab === t.id ? 'true' : 'false'}
-            @click=${() => {
-              this._tab = t.id;
-            }}
-          >
-            <ha-icon icon=${t.icon}></ha-icon><span>${t.label}</span>
-          </button>`,
-        )}
-      </div>
-      <div class="tab-pane tab-floorplan ${this._tab === 'floorplan' ? 'active' : ''}">
-        ${this._renderFloorplanTab()}
-      </div>
-      <div class="tab-pane tab-devices ${this._tab === 'devices' ? 'active' : ''}">
-        ${this._renderEntities()}
-      </div>
-      <div class="tab-pane tab-lighting ${this._tab === 'lighting' ? 'active' : ''}">
-        ${this._renderLightingTab()}
-      </div>
-      <div class="tab-pane tab-zones ${this._tab === 'zones' ? 'active' : ''}">
-        ${this._renderZones()}
-      </div>
-      <div class="tab-pane tab-actions ${this._tab === 'actions' ? 'active' : ''}">
-        ${this._renderActions()}
       </div>`}
       </section>
+      <section class="controls-panel" aria-label="Card settings">
+      ${this._mode === 'setup' ? this._renderSetupStudio() : this._renderAdvanced()}
+      </section>
       </div>
     `;
   }
 
-  private _renderFloorplanTab() {
-    return html`
-      <div class="section">
-        <div class="section-title">Images</div>
-        ${IMAGE_FIELDS.map((f) => {
-          const value = this._config.images[f.key];
-          return html`
-            <div class="image-field">
-              <label class="image-label">${f.label}</label>
-              <div class="image-row">
-                ${value
-                  ? html`<img class="image-thumb" src=${value} alt="" />`
-                  : html`<div class="image-thumb image-thumb--empty">no image</div>`}
-                <input
-                  class="image-url image-${f.key}"
-                  type="text"
-                  .value=${value ?? ''}
-                  placeholder="Upload, or paste /local/floorplan.png or a URL"
-                  @change=${(ev: Event) =>
-                    this._onImageChanged(
-                      f.key,
-                      (ev.target as HTMLInputElement).value.trim() || null,
-                    )}
-                />
-                <label class="image-upload-btn">
-                  ${this._uploadingKey === f.key ? 'Uploading…' : 'Upload'}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    hidden
-                    @change=${(ev: Event) => this._onImageFilePicked(f.key, ev)}
-                  />
-                </label>
-                ${value && f.key !== 'base'
-                  ? html`<button
-                      class="image-clear"
-                      title="Remove"
-                      @click=${() => this._onImageChanged(f.key, null)}
-                    >
-                      ✕
-                    </button>`
-                  : ''}
-              </div>
-            </div>
-          `;
-        })}
-      </div>
-      <div class="section">
-        <div class="section-title">View &amp; motion</div>
-        <ha-form
-          class="options"
-          .hass=${this.hass}
-          .data=${this._config.options}
-          .schema=${stageOptionsSchema()}
-          .computeLabel=${this._optionsLabel}
-          @value-changed=${this._onOptionsChanged}
-        ></ha-form>
-      </div>
-    `;
-  }
-
-  private _renderLightingTab() {
-    return html`
-      <div class="section">
-        <div class="section-title">Light style</div>
-        <ha-form
-          class="lighting-options"
-          .hass=${this.hass}
-          .data=${this._config.options}
-          .schema=${lightingOptionsSchema()}
-          .computeLabel=${this._optionsLabel}
-          @value-changed=${this._onOptionsChanged}
-        ></ha-form>
-      </div>
-      <div class="section">
-        <div class="section-title">Labels</div>
-        <div class="section-hint">
-          A glanceable value beside each marker. "Smart" picks a sensible value per device
-          (temperature, now-playing…) and leaves lights quiet. Override per entity below.
-        </div>
-        <ha-form
-          class="labels"
-          .hass=${this.hass}
-          .data=${this._config.options.labels}
-          .schema=${labelsSchema()}
-          .computeLabel=${this._labelsLabel}
-          @value-changed=${this._onLabelsChanged}
-        ></ha-form>
-      </div>
-    `;
-  }
 }
 
 declare global {

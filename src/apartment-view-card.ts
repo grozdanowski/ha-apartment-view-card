@@ -277,8 +277,16 @@ export class ApartmentViewCard extends LitElement {
       color: var(--primary-text-color, #f8fbfb) !important;
     }
     .spatial-room-back ha-icon { --mdc-icon-size: 24px; }
+    .spatial-room-divider {
+      flex: 0 0 1px;
+      width: 1px;
+      height: 28px;
+      align-self: center;
+      background: color-mix(in srgb, var(--primary-text-color, #f8fbfb) 22%, transparent);
+    }
     @media (max-width: 600px) {
       .spatial-room-navigation { gap: 8px; }
+      .spatial-room-divider { height: 24px; }
       .spatial-room-rail { gap: 28px; }
       .spatial-room-navigation button { min-height: 52px; padding: 2px 0 10px; font-size: 19px; }
     }
@@ -2301,9 +2309,8 @@ export class ApartmentViewCard extends LitElement {
             aria-label="Back to apartment overview" title="Overview"
             @click=${() => this._setSpatialRoomFocus(null)}>
             <ha-icon icon="mdi:arrow-left"></ha-icon>
-          </button>` : nothing}
+          </button><span class="spatial-room-divider" aria-hidden="true"></span>` : nothing}
           <div class="spatial-room-rail">
-            ${this._spatialFocusedZoneId === null ? html`<button type="button" aria-pressed="true">Overview</button>` : nothing}
             ${this.config.zones.map((zone) => html`<button type="button"
               aria-pressed=${this._spatialFocusedZoneId === zone.id}
               @click=${() => this._setSpatialRoomFocus(zone.id ?? null)}>${zone.name}</button>`)}

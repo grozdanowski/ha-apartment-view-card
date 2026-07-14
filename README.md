@@ -114,13 +114,15 @@ spatial:
           - { wallId: wall-2, reversed: false }
           - { wallId: wall-3, reversed: false }
           - { wallId: wall-4, reversed: false }
-    objects:
-      - id: sofa-1
-        kind: sofa
+    elements:
+      - id: pendant
+        type: ceiling-light
         zoneId: living-room
-        position: { x: 3, y: 0, z: 3.5 }
-        rotation: { x: 0, y: 180, z: 0 }
+        entityId: light.living_room_pendant
+        position: { x: 3, y: 2.5, z: 3.5 }
+        rotation: { x: 0, y: 0, z: 0 }
         scale: { x: 1, y: 1, z: 1 }
+        primitives: []
 ```
 
 ### Coordinates
@@ -130,38 +132,33 @@ spatial:
 - Rotations are degrees.
 - Wall `curve` is signed from `-1` to `1`; `0` is straight.
 - Opening `position` is the normalized centre point along its parent wall.
-- Object scale is relative to the built-in object or normalized custom model.
+- Element scale is applied to its complete compound geometry.
 
-### Furniture And Models
+### Elements
 
-The editor ships with an original Scandinavian catalog sized in real metres. It includes Fjord sofas, the Holm lounge chair, Aska tables and benches, Linea dining chairs, Sund beds, Natt bedside tables, low media storage, Form and Havn cabinets, the Arc floor lamp, a Studio TV, the Holme kitchen island, a Fjord bath, the Sten vanity, Ull rugs, and greenery. Each design offers a restrained set of material finishes.
+Everything placed in the 3D home is an Element. Ceiling lights and light bulbs use the same floating state beacon while casting their live Home Assistant brightness and color into the model. Custom Elements are assembled from editable cubes, spheres, and solid cylinders.
 
-Saved objects keep a stable `assetId` and `finishId`, so a home looks the same after editing, exporting, and importing:
+Each primitive has independent position, rotation, size, color, edge softness, luminosity, and waves. Color, luminosity, and waves can react to a bound Home Assistant entity or explicit entity-state rules:
 
 ```yaml
-- id: sofa-1
-  kind: sofa
-  assetId: fjord-sofa-3
-  finishId: mist
+- id: media-console
+  type: custom
+  name: Media console
   zoneId: living-room
   position: { x: 3, y: 0, z: 3.5 }
   rotation: { x: 0, y: 180, z: 0 }
   scale: { x: 1, y: 1, z: 1 }
+  primitives:
+    - id: body
+      kind: cube
+      position: { x: 0, y: 0.25, z: 0 }
+      rotation: { x: 0, y: 0, z: 0 }
+      size: { x: 1.8, y: 0.5, z: 0.45 }
+      bevel: 0.04
+      color: { base: "#59605f", rules: [] }
+      luminosity: { base: 0, rules: [] }
+      waves: { base: 0, rules: [] }
 ```
-
-Set `modelUrl` on a spatial object to use a custom `.glb` or `.gltf` asset:
-
-```yaml
-- id: lounge-chair
-  kind: custom
-  name: Lounge chair
-  modelUrl: /local/models/lounge-chair.glb
-  position: { x: 4.2, y: 0, z: 3.1 }
-  rotation: { x: 0, y: 35, z: 0 }
-  scale: { x: 0.9, y: 0.9, z: 0.9 }
-```
-
-The loader normalizes the model's longest axis to one metre before applying object scale. Use models you are licensed to redistribute and host them locally when possible.
 
 ### Imported Architecture
 

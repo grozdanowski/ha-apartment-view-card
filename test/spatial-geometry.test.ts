@@ -22,7 +22,7 @@ function plan(): SpatialPlan {
         { wallId: 'north', reversed: false }, { wallId: 'west', reversed: false },
       ],
     }],
-    objects: [],
+    elements: [],
   };
 }
 

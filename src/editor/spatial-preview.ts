@@ -3,16 +3,20 @@ import { customElement, property, state } from 'lit/decorators.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { clone as cloneObject } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import * as SunCalc from 'suncalc';
-import { wallIdFor, type EntityConfig, type OpeningConfig, type SiteConfig, type SpatialDimensions, type SpatialFloorFinish, type SpatialPlan, type SpatialShellConfig, type SpatialShellOpening, type SpatialShellWall, type WallConfig, type ZoneConfig } from '../core/config';
+import { wallIdFor, type EntityConfig, type OpeningConfig, type SiteConfig, type SpatialDimensions, type SpatialElement, type SpatialElementPrimitive, type SpatialFloorFinish, type SpatialGlbSurface, type SpatialPlan, type SpatialShellConfig, type SpatialShellOpening, type SpatialShellWall, type WallConfig, type ZoneConfig } from '../core/config';
 import type { HassLike } from '../core/ha-types';
 import { iconForEntity } from '../core/entity-state';
-import { spatialAsset, spatialAssetFinish } from '../core/spatial-assets';
+import { resolveLightColor } from '../core/light-color';
+import { elementPrimitivesForType, resolveSpatialValue } from '../core/spatial-elements';
+import { objectAtGlbNodePath } from '../core/spatial-glb';
 import { assignShellOpenings, shellSegments } from '../core/spatial-shell';
 import { resolveSpatialEntityState, resolveSpatialEnvironment, spatialEntityPresentation, type SpatialEffectKind, type SpatialEnvironment, type SpatialLightingMode } from '../core/spatial-state';
 
@@ -25,37 +29,6 @@ export interface SpatialZoneConfig extends ZoneConfig {
   /** Optional room outline in floorplan coordinates. Rectangles remain the editor default. */
   footprint?: SpatialPoint[];
   floorColor?: number;
-}
-
-export type FurnishingKind =
-  | 'sofa'
-  | 'armchair'
-  | 'bed'
-  | 'table'
-  | 'chair'
-  | 'tv'
-  | 'console'
-  | 'cabinet'
-  | 'vanity'
-  | 'bathtub'
-  | 'island'
-  | 'rug'
-  | 'plant'
-  | 'floorlamp'
-  | 'window'
-  | 'door';
-
-export interface FurnishingConfig {
-  id: string;
-  kind: FurnishingKind;
-  x: number;
-  y: number;
-  width: number;
-  depth: number;
-  rotation?: number;
-  height?: number;
-  color?: number;
-  zoneId?: string;
 }
 
 interface CameraTween {
@@ -147,7 +120,6 @@ export class SpatialPreview extends LitElement {
   @property({ attribute: false }) dimensions: SpatialDimensions = { width: 10, aspectRatio: 1, wallHeight: 2.6 };
   @property({ attribute: false }) plan: SpatialPlan | null = null;
   @property({ attribute: false }) hass?: HassLike;
-  @property({ attribute: false }) furnishings: FurnishingConfig[] = [];
   @property({ attribute: false }) shell: SpatialShellConfig | null = null;
   @property() modelUrl = '';
   @property({ attribute: false }) focusedZoneId: string | null = null;
@@ -170,7 +142,6 @@ export class SpatialPreview extends LitElement {
   private _model?: THREE.Group;
   private _observer?: ResizeObserver;
   private _frame = 0;
-  private _objectLoadGeneration = 0;
   private _cameraTween?: CameraTween;
   private _sun?: THREE.DirectionalLight;
   private _sky?: THREE.HemisphereLight;
@@ -185,6 +156,8 @@ export class SpatialPreview extends LitElement {
   private _environment?: SpatialEnvironment;
   private _effectMeshes: THREE.Mesh[] = [];
   private readonly _entityVisuals = new Map<string, THREE.Object3D>();
+  private readonly _glbElementCache = new Map<string, Promise<THREE.Object3D>>();
+  private _elementLoadGeneration = 0;
   private _prefersReducedMotion = false;
   private readonly _raycaster = new THREE.Raycaster();
   private readonly _pointer = new THREE.Vector2();
@@ -246,6 +219,13 @@ export class SpatialPreview extends LitElement {
       color: #f8fbfb;
     }
     .room-back ha-icon { --mdc-icon-size: 24px; }
+    .room-divider {
+      flex: 0 0 1px;
+      width: 1px;
+      height: 28px;
+      align-self: center;
+      background: color-mix(in srgb, #f1f4f4 22%, transparent);
+    }
     .room-rail {
       display: flex;
       box-sizing: border-box;
@@ -305,22 +285,25 @@ export class SpatialPreview extends LitElement {
       pointer-events: none;
     }
     .entity-beacon {
+      --entity-marker-size: 36px;
+      --entity-marker-half: 18px;
+      --entity-icon-size: 19px;
       position: absolute;
       top: 0;
       left: 0;
       display: flex;
       align-items: center;
-      width: 36px;
-      max-width: min(260px, calc(100% - 20px));
-      height: 36px;
+      width: var(--entity-marker-size);
+      max-width: min(204px, calc(100% - 20px));
+      height: var(--entity-marker-size);
       padding: 0;
       overflow: hidden;
-      border-radius: 18px;
+      border-radius: var(--entity-marker-half);
       color: #e9eeee;
       background: rgba(10, 15, 16, 0.9);
       box-shadow: 0 3px 8px rgba(0, 0, 0, 0.28);
       pointer-events: auto;
-      translate: calc(var(--entity-x, -100px) - 18px) calc(var(--entity-y, -100px) - 18px);
+      translate: calc(var(--entity-x, -100px) - var(--entity-marker-half)) calc(var(--entity-y, -100px) - var(--entity-marker-half));
       opacity: var(--entity-visible, 0);
       transition: width 200ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms ease-out, color 160ms ease-out;
       will-change: translate;
@@ -328,24 +311,41 @@ export class SpatialPreview extends LitElement {
     .entity-beacon[data-activity='active'] { color: #bce7ec; }
     .entity-beacon[data-activity='attention'] { color: #ffc8bf; }
     .entity-beacon[data-activity='unavailable'] { color: #8a9496; opacity: calc(var(--entity-visible, 0) * 0.68); }
+    .entity-beacon[data-context='overview'] {
+      --entity-marker-size: 28.8px;
+      --entity-marker-half: 14.4px;
+      --entity-icon-size: 15px;
+    }
+    .entity-beacon[data-domain='light'] {
+      color: var(--entity-accent, #aebabc);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--entity-accent, #aebabc) 34%, transparent), 0 3px 8px rgba(0, 0, 0, 0.28);
+    }
+    .entity-beacon[data-domain='light'][data-activity='active'] {
+      color: var(--entity-accent, #fff4d8);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--entity-accent, #fff4d8) 58%, transparent), 0 0 16px color-mix(in srgb, var(--entity-accent, #fff4d8) 22%, transparent), 0 3px 8px rgba(0, 0, 0, 0.28);
+    }
+    .entity-beacon[data-domain='light'] .entity-icon {
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--entity-accent, #aebabc) 12%, transparent);
+    }
     .entity-beacon[data-side='end'] {
       flex-direction: row-reverse;
-      translate: calc(var(--entity-x, -100px) - 100% + 18px) calc(var(--entity-y, -100px) - 18px);
+      translate: calc(var(--entity-x, -100px) - 100% + var(--entity-marker-half)) calc(var(--entity-y, -100px) - var(--entity-marker-half));
     }
-    .entity-beacon:hover,
-    .entity-beacon:focus-visible,
-    .entity-beacon.expanded {
-      width: min(var(--entity-width, 220px), calc(100% - 20px));
+    .entity-beacon[data-context='room']:hover,
+    .entity-beacon[data-context='room']:focus-visible,
+    .entity-beacon[data-context='room'].expanded {
+      width: min(var(--entity-width, 188px), calc(100% - 20px));
       z-index: 2;
     }
     .entity-icon {
       display: grid;
-      flex: 0 0 36px;
-      width: 36px;
-      height: 36px;
+      flex: 0 0 var(--entity-marker-size);
+      width: var(--entity-marker-size);
+      height: var(--entity-marker-size);
       place-items: center;
     }
-    .entity-icon ha-icon { --mdc-icon-size: 19px; }
+    .entity-icon ha-icon { --mdc-icon-size: var(--entity-icon-size); }
     .entity-copy {
       display: grid;
       min-width: 0;
@@ -356,9 +356,9 @@ export class SpatialPreview extends LitElement {
       transition: opacity 120ms ease-out 20ms;
     }
     .entity-beacon[data-side='end'] .entity-copy { padding: 0 2px 0 12px; }
-    .entity-beacon:hover .entity-copy,
-    .entity-beacon:focus-visible .entity-copy,
-    .entity-beacon.expanded .entity-copy { opacity: 1; }
+    .entity-beacon[data-context='room']:hover .entity-copy,
+    .entity-beacon[data-context='room']:focus-visible .entity-copy,
+    .entity-beacon[data-context='room'].expanded .entity-copy { opacity: 1; }
     .entity-copy strong,
     .entity-copy span {
       overflow: hidden;
@@ -385,11 +385,11 @@ export class SpatialPreview extends LitElement {
     @container (max-width: 600px) {
       .viewport { min-height: 0; aspect-ratio: var(--spatial-aspect-mobile, 4 / 5); }
       .room-navigation { gap: 8px; }
+      .room-divider { height: 24px; }
       .room-rail { gap: 28px; }
       .room-rail button { min-height: 52px; padding: 2px 0 10px; font-size: 19px; }
-      .entity-beacon { width: 40px; height: 40px; border-radius: 20px; translate: calc(var(--entity-x, -100px) - 20px) calc(var(--entity-y, -100px) - 20px); }
-      .entity-beacon[data-side='end'] { translate: calc(var(--entity-x, -100px) - 100% + 20px) calc(var(--entity-y, -100px) - 20px); }
-      .entity-icon { flex-basis: 40px; width: 40px; height: 40px; }
+      .entity-beacon { --entity-marker-size: 40px; --entity-marker-half: 20px; --entity-icon-size: 20px; }
+      .entity-beacon[data-context='overview'] { --entity-marker-size: 32px; --entity-marker-half: 16px; --entity-icon-size: 16px; }
     }
     @media (prefers-reduced-motion: reduce) {
       button { transition: none; }
@@ -450,19 +450,12 @@ export class SpatialPreview extends LitElement {
       this._sky = new THREE.HemisphereLight(0xc7d8df, 0x0b0e10, 0);
       this._scene.add(this._sky);
       this._sun = new THREE.DirectionalLight(0xffedcf, 0);
-      this._sun.castShadow = true;
       const shadowSize = this.clientWidth < 600 ? 1024 : 2048;
-      this._sun.shadow.mapSize.set(shadowSize, shadowSize);
-      this._sun.shadow.camera.left = -8;
-      this._sun.shadow.camera.right = 8;
-      this._sun.shadow.camera.top = 8;
-      this._sun.shadow.camera.bottom = -8;
-      this._sun.shadow.bias = -0.00035;
-      this._sun.shadow.normalBias = 0.018;
-      this._sun.shadow.radius = 2.4;
+      this._configureExteriorShadow(this._sun, shadowSize);
       this._scene.add(this._sun);
       this._fill = new THREE.DirectionalLight(0x9ebac4, 0);
       this._fill.position.set(7, 6, -9);
+      this._configureExteriorShadow(this._fill, Math.min(1024, shadowSize));
       this._scene.add(this._fill);
       this._warmBounce = new THREE.RectAreaLight(0xffd2a0, 0, 11, 9);
       this._warmBounce.position.set(-1.5, 5.5, 1.2);
@@ -483,7 +476,7 @@ export class SpatialPreview extends LitElement {
   }
 
   protected updated(changed: Map<PropertyKey, unknown>): void {
-    if (this._scene && (changed.has('zones') || changed.has('entities') || changed.has('openings') || changed.has('walls') || changed.has('dimensions') || changed.has('furnishings') || changed.has('shell') || changed.has('plan'))) {
+    if (this._scene && (changed.has('zones') || changed.has('entities') || changed.has('openings') || changed.has('walls') || changed.has('dimensions') || changed.has('shell') || changed.has('plan'))) {
       this._buildModel();
     }
     if (changed.has('modelUrl') && this._scene) void this._loadModel();
@@ -505,18 +498,16 @@ export class SpatialPreview extends LitElement {
   }
 
   private _entityLightColor(entityId: string): THREE.Color {
-    const attributes = resolveSpatialEntityState(this.hass?.states ?? {}, entityId).state?.attributes ?? {};
-    const rgb = attributes.rgb_color;
-    if (Array.isArray(rgb) && rgb.length >= 3) return new THREE.Color(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
-    const temperature = Number(attributes.color_temp_kelvin);
-    if (Number.isFinite(temperature) && temperature >= 4000) return new THREE.Color(0xcfe8ff);
-    return new THREE.Color(0xffd7a0);
+    const state = resolveSpatialEntityState(this.hass?.states ?? {}, entityId).state;
+    if (!state) return new THREE.Color(0xfffae6);
+    const rgb = resolveLightColor(state);
+    return new THREE.Color(rgb.r / 255, rgb.g / 255, rgb.b / 255);
   }
 
   private _entityLightIntensity(entityId: string): number {
     if (!this._entityIsActive(entityId)) return 0;
     const brightness = Number(resolveSpatialEntityState(this.hass?.states ?? {}, entityId).state?.attributes?.brightness);
-    const level = Number.isFinite(brightness) ? Math.max(0.2, brightness / 255) : 0.72;
+    const level = Number.isFinite(brightness) ? Math.max(0.03, brightness / 255) : 0.72;
     return 18 * level;
   }
 
@@ -530,8 +521,71 @@ export class SpatialPreview extends LitElement {
 
   private _updateEntityStateVisuals(): void {
     this._model?.traverse((node) => {
-      if (!node.userData.entityId) return;
-      const entityId = node.userData.entityId as string;
+      const element = node.userData.spatialElementId
+        ? this.plan?.elements.find((candidate) => candidate.id === node.userData.spatialElementId)
+        : undefined;
+      const primitive = node.userData.elementPrimitive
+        ?? node.userData.elementPrimitiveLight
+        ?? node.userData.elementPrimitiveWave;
+      const elementAppearance = element && primitive
+        ? this._elementPrimitiveAppearance(element, primitive as SpatialElementPrimitive)
+        : undefined;
+      const glbSurfaceId = node.userData.elementGlbSurfaceLight as string | undefined;
+      if (element && glbSurfaceId && node instanceof THREE.PointLight) {
+        const surface = element.glb?.surfaces.find((candidate) => candidate.id === glbSurfaceId);
+        if (!surface) return;
+        const appearance = this._elementGlbSurfaceAppearance(element, surface);
+        node.color.copy(appearance.color);
+        node.intensity = appearance.luminosity * 12;
+        node.visible = appearance.luminosity > 0;
+        return;
+      }
+      const glbSurfaceIds = node.userData.elementGlbSurfaceIds as string[] | undefined;
+      if (element && glbSurfaceIds && node instanceof THREE.Mesh) {
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        materials.forEach((material, materialIndex) => {
+          if (!(material instanceof THREE.MeshStandardMaterial)) return;
+          const surface = element.glb?.surfaces.find((candidate) => candidate.id === glbSurfaceIds[materialIndex]);
+          if (!surface) return;
+          const appearance = this._elementGlbSurfaceAppearance(element, surface);
+          material.color.copy(appearance.color);
+          material.emissive.copy(appearance.color);
+          material.emissiveIntensity = appearance.luminosity * 3.5;
+          material.needsUpdate = true;
+        });
+        return;
+      }
+      if (node instanceof THREE.PointLight && node.userData.elementPrimitiveLight && elementAppearance) {
+        node.color.copy(elementAppearance.color);
+        node.intensity = elementAppearance.luminosity * (node.userData.semanticLight ? 18 : 12);
+        node.visible = elementAppearance.luminosity > 0;
+        return;
+      }
+      if (node instanceof THREE.Mesh && node.userData.elementPrimitive && elementAppearance) {
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        materials.forEach((material) => {
+          if (!(material instanceof THREE.MeshStandardMaterial)) return;
+          material.color.copy(elementAppearance.color);
+          material.emissive.copy(elementAppearance.color);
+          material.emissiveIntensity = elementAppearance.luminosity * 3.5;
+        });
+        return;
+      }
+      if (node instanceof THREE.Mesh && node.userData.elementPrimitiveWave && elementAppearance) {
+        node.visible = elementAppearance.waves > 0;
+        node.userData.effectStrength = elementAppearance.waves;
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        materials.forEach((material) => {
+          if (!(material instanceof THREE.MeshStandardMaterial)) return;
+          material.color.copy(elementAppearance.color);
+          material.emissive.copy(elementAppearance.color);
+          material.opacity = Number(node.userData.effectOpacity ?? 0.28) * elementAppearance.waves;
+        });
+        return;
+      }
+
+      const entityId = node.userData.entityId as string | undefined;
+      if (!entityId) return;
       const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entityId);
       const active = resolved.activity === 'active' || resolved.activity === 'attention';
       const strength = spatialEntityPresentation(entityId, resolved.state).strength;
@@ -562,10 +616,18 @@ export class SpatialPreview extends LitElement {
         }
         if (node.userData.entityMarker) {
           const unavailable = resolved.activity === 'unavailable';
-          material.color.setHex(unavailable ? 0x596164 : active ? 0xb8e2e8 : 0x789095);
-          material.emissive.setHex(active ? 0x315f68 : 0x081113);
-          material.emissiveIntensity = active ? 1.35 : 0.2;
-          material.opacity = unavailable ? 0.18 : active ? 1 : 0.42;
+          if (resolved.effect === 'light') {
+            const lightColor = this._entityLightColor(entityId);
+            material.color.copy(unavailable ? new THREE.Color(0x596164) : lightColor);
+            material.emissive.copy(active ? lightColor : new THREE.Color(0x080a0a));
+            material.emissiveIntensity = active ? 1.2 + strength * 3.8 : 0.08;
+            material.opacity = unavailable ? 0.18 : active ? 0.82 + strength * 0.18 : 0.3;
+          } else {
+            material.color.setHex(unavailable ? 0x596164 : active ? 0xb8e2e8 : 0x789095);
+            material.emissive.setHex(active ? 0x315f68 : 0x081113);
+            material.emissiveIntensity = active ? 1.35 : 0.2;
+            material.opacity = unavailable ? 0.18 : active ? 1 : 0.42;
+          }
           material.transparent = material.opacity < 1;
         }
       });
@@ -601,7 +663,9 @@ export class SpatialPreview extends LitElement {
     marker.userData.zoneId = zoneId;
     marker.castShadow = true;
     root.add(marker);
-    if (resolved.effect !== 'none') {
+    // Lights illuminate the model through practical scene lights. Atmospheric
+    // rings are reserved for devices whose state is expressed as motion/flow.
+    if (resolved.effect !== 'none' && resolved.effect !== 'light') {
       const ringCount = resolved.effect === 'media' || resolved.effect === 'air' ? 3 : 2;
       for (let index = 0; index < ringCount; index += 1) {
         const ring = new THREE.Mesh(
@@ -794,66 +858,223 @@ export class SpatialPreview extends LitElement {
     return this.plan ? this._planCenter(this.plan) : new THREE.Vector2();
   }
 
-  private _createPlanObject(item: SpatialPlan['objects'][number], generation: number): THREE.Group {
-    const knownKinds = new Set<FurnishingKind>([
-      'sofa', 'armchair', 'bed', 'table', 'chair', 'tv', 'console', 'cabinet',
-      'vanity', 'bathtub', 'island', 'rug', 'plant', 'floorlamp', 'window', 'door',
-    ]);
-    const defaults: Record<string, [number, number, number]> = {
-      sofa: [2.2, 0.95, 0.82], armchair: [0.9, 0.9, 0.86], bed: [1.8, 2, 0.62],
-      table: [1.6, 0.9, 0.76], chair: [0.48, 0.52, 0.88], tv: [1.4, 0.16, 0.82],
-      console: [1.5, 0.42, 0.58], cabinet: [1.2, 0.5, 1.8], vanity: [1.1, 0.52, 0.86],
-      bathtub: [1.7, 0.75, 0.58], island: [1.8, 0.9, 0.92], rug: [2.2, 1.6, 0.025],
-      plant: [0.55, 0.55, 1.25], floorlamp: [0.5, 0.5, 1.55], window: [1.2, 0.12, 1.2], door: [0.9, 0.12, 2.1],
+  private _primitiveGeometry(primitive: SpatialElementPrimitive): THREE.BufferGeometry {
+    const { x, y, z } = primitive.size;
+    if (primitive.kind === 'sphere') {
+      const geometry = new THREE.SphereGeometry(0.5, 32, 20);
+      geometry.scale(x, y, z);
+      return geometry;
+    }
+    if (primitive.kind === 'cylinder') {
+      const normalizedBevel = Math.min(0.45, Math.max(0, primitive.bevel / Math.max(0.001, Math.min(x, y, z))));
+      if (normalizedBevel <= 0.001) {
+        const geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 32, 3, false);
+        geometry.scale(x, y, z);
+        return geometry;
+      }
+      const points: THREE.Vector2[] = [new THREE.Vector2(0, -0.5)];
+      const cornerRadius = normalizedBevel;
+      const radialCenter = 0.5 - cornerRadius;
+      const bottomCenter = -0.5 + cornerRadius;
+      const topCenter = 0.5 - cornerRadius;
+      for (let index = 0; index <= 5; index += 1) {
+        const angle = -Math.PI / 2 + (index / 5) * Math.PI / 2;
+        points.push(new THREE.Vector2(
+          radialCenter + Math.cos(angle) * cornerRadius,
+          bottomCenter + Math.sin(angle) * cornerRadius,
+        ));
+      }
+      for (let index = 0; index <= 5; index += 1) {
+        const angle = (index / 5) * Math.PI / 2;
+        points.push(new THREE.Vector2(
+          radialCenter + Math.cos(angle) * cornerRadius,
+          topCenter + Math.sin(angle) * cornerRadius,
+        ));
+      }
+      points.push(new THREE.Vector2(0, 0.5));
+      const geometry = new THREE.LatheGeometry(points, 40);
+      geometry.scale(x, y, z);
+      return geometry;
+    }
+    const radius = Math.min(primitive.bevel, Math.min(x, y, z) * 0.49);
+    return new RoundedBoxGeometry(x, y, z, radius > 0 ? 4 : 1, Math.max(0.0001, radius));
+  }
+
+  private _elementPrimitiveAppearance(element: SpatialElement, primitive: SpatialElementPrimitive): { color: THREE.Color; luminosity: number; waves: number } {
+    const states = this.hass?.states ?? {};
+    const color = new THREE.Color(resolveSpatialValue(primitive.color, states, element.entityId));
+    let luminosity = resolveSpatialValue(primitive.luminosity, states, element.entityId);
+    const boundState = element.entityId ? states[element.entityId] : undefined;
+    if ((element.type === 'ceiling-light' || element.type === 'light-bulb') && boundState) {
+      const active = boundState.state === 'on';
+      const brightness = Number(boundState.attributes?.brightness);
+      luminosity = active ? (Number.isFinite(brightness) ? Math.max(0.02, brightness / 255) : 1) : 0;
+      const rgb = resolveLightColor(boundState);
+      color.setRGB(rgb.r / 255, rgb.g / 255, rgb.b / 255);
+    }
+    return {
+      color,
+      luminosity: Math.min(1, Math.max(0, luminosity)),
+      waves: Math.min(1, Math.max(0, resolveSpatialValue(primitive.waves, states, element.entityId))),
     };
-    const asset = spatialAsset(item.assetId);
-    const kind = knownKinds.has((asset?.kind ?? item.kind) as FurnishingKind) ? (asset?.kind ?? item.kind) as FurnishingKind : 'cabinet';
-    const [width, depth, height] = asset?.dimensions ?? defaults[kind] ?? defaults.cabinet;
-    const finish = spatialAssetFinish(item.assetId, item.finishId);
-    const group = this._createFurnishing({
-      id: item.id,
-      kind,
-      x: 0,
-      y: 0,
-      width: width * 100 / this.dimensions.width,
-      depth: depth * 100 / (this.dimensions.width / this.dimensions.aspectRatio),
-      height,
-      color: finish?.color,
-      zoneId: item.zoneId,
-    });
-    if (item.modelUrl) {
-      const loader = new GLTFLoader();
-      loader.load(item.modelUrl, (gltf) => {
-        if (generation !== this._objectLoadGeneration || !group.parent) return;
-        group.traverse((node) => {
-          if (!(node instanceof THREE.Mesh)) return;
-          node.geometry.dispose();
-          const materials = Array.isArray(node.material) ? node.material : [node.material];
-          materials.forEach((material) => material.dispose());
-        });
-        group.clear();
-        const model = gltf.scene;
-        const box = new THREE.Box3().setFromObject(model);
-        const size = box.getSize(new THREE.Vector3());
-        const center = box.getCenter(new THREE.Vector3());
-        const longest = Math.max(size.x, size.y, size.z, 0.001);
-        model.position.set(-center.x, -box.min.y, -center.z);
-        model.scale.setScalar(1 / longest);
-        this._solidifyObject(model);
-        model.traverse((node) => {
-          if (!(node instanceof THREE.Mesh)) return;
+  }
+
+  private _elementGlbSurfaceAppearance(element: SpatialElement, surface: SpatialGlbSurface): { color: THREE.Color; luminosity: number } {
+    const states = this.hass?.states ?? {};
+    const entityId = surface.entityId ?? element.entityId;
+    return {
+      color: new THREE.Color(resolveSpatialValue(surface.color, states, entityId)),
+      luminosity: THREE.MathUtils.clamp(resolveSpatialValue(surface.luminosity, states, entityId), 0, 1),
+    };
+  }
+
+  private _cachedGlbElement(uri: string): Promise<THREE.Object3D> {
+    const cached = this._glbElementCache.get(uri);
+    if (cached) return cached;
+    const loading = new GLTFLoader().loadAsync(uri).then((gltf) => gltf.scene);
+    this._glbElementCache.set(uri, loading);
+    loading.catch(() => this._glbElementCache.delete(uri));
+    return loading;
+  }
+
+  private async _loadGlbElement(element: SpatialElement, group: THREE.Group, generation: number): Promise<void> {
+    if (!element.glb) return;
+    try {
+      const source = await this._cachedGlbElement(element.glb.uri);
+      if (generation !== this._elementLoadGeneration || !group.parent) return;
+      const imported = cloneObject(source);
+      imported.traverse((node) => {
+        if (!(node instanceof THREE.Mesh)) return;
+        node.geometry = node.geometry.clone();
+      });
+      this._solidifyObject(imported);
+      imported.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(imported);
+      const center = bounds.getCenter(new THREE.Vector3());
+      imported.position.set(-center.x, -bounds.min.y, -center.z);
+      element.glb.surfaces.forEach((surface) => {
+        const node = objectAtGlbNodePath(imported, surface.nodePath);
+        if (!(node instanceof THREE.Mesh)) return;
+        const materials = Array.isArray(node.material) ? [...node.material] : [node.material];
+        materials[surface.materialIndex] = materials[surface.materialIndex]?.clone();
+        node.material = Array.isArray(node.material) ? materials : materials[0];
+        const ids = Array.isArray(node.userData.elementGlbSurfaceIds)
+          ? [...node.userData.elementGlbSurfaceIds]
+          : new Array(materials.length).fill('');
+        ids[surface.materialIndex] = surface.id;
+        node.userData.elementGlbSurfaceIds = ids;
+        const canEmit = surface.luminosity.base > 0 || surface.luminosity.rules.some((rule) => Number(rule.value) > 0);
+        if (canEmit) {
+          node.geometry.computeBoundingSphere();
+          const light = new THREE.PointLight(0xffffff, 0, 3.8, 1.8);
+          light.position.copy(node.geometry.boundingSphere?.center ?? new THREE.Vector3());
+          light.userData.elementGlbSurfaceLight = surface.id;
+          light.userData.spatialElementId = element.id;
+          light.userData.entityId = surface.entityId ?? element.entityId;
+          node.add(light);
+        }
+      });
+      imported.traverse((node) => {
+        node.userData.zoneId = element.zoneId;
+        node.userData.spatialElementId = element.id;
+        node.userData.entityId ??= element.entityId;
+        if (node instanceof THREE.Mesh) {
           node.castShadow = true;
           node.receiveShadow = true;
-        });
-        group.add(model);
-      }, undefined, () => undefined);
+        }
+      });
+      group.add(imported);
+      this._updateEntityStateVisuals();
+      this._refreshModelBounds();
+    } catch (error) {
+      this.dispatchEvent(new CustomEvent('spatial-element-load-error', {
+        detail: { elementId: element.id, message: error instanceof Error ? error.message : 'The GLB Element could not be loaded.' },
+        bubbles: true,
+        composed: true,
+      }));
     }
+  }
+
+  private _createSpatialElement(element: SpatialElement, generation = this._elementLoadGeneration): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.spatialElementId = element.id;
+    group.userData.entityId = element.entityId;
+    if (element.type === 'glb') {
+      void this._loadGlbElement(element, group, generation);
+      return group;
+    }
+    const semanticLight = element.type === 'ceiling-light' || element.type === 'light-bulb';
+    if (semanticLight) {
+      const primitive = element.primitives[0] ?? elementPrimitivesForType(element.type)[0];
+      if (!primitive) return group;
+      const appearance = this._elementPrimitiveAppearance(element, primitive);
+      const practical = new THREE.PointLight(appearance.color, appearance.luminosity * 18, 4.2, 1.65);
+      practical.userData.entityId = element.entityId;
+      practical.userData.spatialElementId = element.id;
+      practical.userData.elementPrimitiveLight = primitive;
+      practical.userData.elementType = element.type;
+      practical.userData.semanticLight = true;
+      group.add(practical);
+      return group;
+    }
+    element.primitives.forEach((primitive) => {
+      const appearance = this._elementPrimitiveAppearance(element, primitive);
+      const material = new THREE.MeshStandardMaterial({
+        color: appearance.color,
+        emissive: appearance.color,
+        emissiveIntensity: appearance.luminosity * 3.5,
+        roughness: 0.82,
+        metalness: 0.02,
+      });
+      const mesh = new THREE.Mesh(this._primitiveGeometry(primitive), material);
+      mesh.position.set(primitive.position.x, primitive.position.y, primitive.position.z);
+      mesh.rotation.set(
+        THREE.MathUtils.degToRad(primitive.rotation.x),
+        THREE.MathUtils.degToRad(primitive.rotation.y),
+        THREE.MathUtils.degToRad(primitive.rotation.z),
+      );
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.userData.entityId = element.entityId;
+      mesh.userData.spatialElementId = element.id;
+      mesh.userData.elementPrimitive = primitive;
+      mesh.userData.elementType = element.type;
+      group.add(mesh);
+
+      const practical = new THREE.PointLight(appearance.color, appearance.luminosity * 12, 3.8, 1.8);
+      practical.position.copy(mesh.position);
+      practical.userData.entityId = element.entityId;
+      practical.userData.spatialElementId = element.id;
+      practical.userData.elementPrimitiveLight = primitive;
+      practical.userData.elementType = element.type;
+      group.add(practical);
+
+      for (let index = 0; index < 3; index += 1) {
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(0.16 + index * 0.075, 0.007, 8, 42, Math.PI * 1.52),
+          new THREE.MeshStandardMaterial({ color: appearance.color, emissive: appearance.color, emissiveIntensity: 1.2, transparent: true, opacity: appearance.waves * (0.28 - index * 0.05), depthWrite: false }),
+        );
+        ring.position.copy(mesh.position);
+        ring.rotation.x = Math.PI / 2;
+        ring.rotation.z = index * 0.72;
+        ring.visible = appearance.waves > 0;
+        ring.userData.entityId = element.entityId;
+        ring.userData.spatialElementId = element.id;
+        ring.userData.elementPrimitiveWave = primitive;
+        ring.userData.effectKind = 'air';
+        ring.userData.effectIndex = index;
+        ring.userData.effectStrength = appearance.waves;
+        ring.userData.effectOpacity = 0.28 - index * 0.05;
+        group.add(ring);
+        this._effectMeshes.push(ring);
+      }
+    });
     return group;
   }
 
   private _buildModel(): void {
     if (!this._scene) return;
-    const objectLoadGeneration = ++this._objectLoadGeneration;
+    const generation = ++this._elementLoadGeneration;
     this._disposeModel();
     const group = new THREE.Group();
     const usesImportedModel = Boolean(this._importedModel);
@@ -861,6 +1082,7 @@ export class SpatialPreview extends LitElement {
     this._activeShell = activeShell;
     if (this._importedModel) group.add(this._importedModel);
     if (activeShell && !usesImportedModel) group.add(this._createSurveyShell(activeShell));
+    if (activeShell) group.add(this._createCeilingShadowShell(activeShell));
     const wallMaterial = new THREE.MeshStandardMaterial({
       color: ARCHITECTURAL_WALL,
       roughness: 0.87,
@@ -902,6 +1124,7 @@ export class SpatialPreview extends LitElement {
         floor.userData.zoneId = zone.id;
         floor.userData.roomFloor = true;
         room.add(floor);
+        if (!activeShell) room.add(this._createCeilingShadowOccluder(points, zone.id));
       }
 
       if (usesImportedModel || activeShell) {
@@ -947,61 +1170,35 @@ export class SpatialPreview extends LitElement {
       group.add(wallGroup);
     });
 
-    this.furnishings.forEach((furnishing) => {
-      const object = this._createFurnishing(furnishing);
-      object.userData.zoneId = furnishing.zoneId;
-      object.position.set(
-        (furnishing.x - 50) * this.dimensions.width / 100,
-        0,
-        (furnishing.y - 50) * this.dimensions.width / this.dimensions.aspectRatio / 100,
-      );
-      object.rotation.y = THREE.MathUtils.degToRad(furnishing.rotation ?? 0);
-      object.traverse((node) => {
-        node.userData.zoneId = furnishing.zoneId;
-        if (node instanceof THREE.Mesh) {
-          node.castShadow = true;
-          node.receiveShadow = true;
-        }
-      });
-      group.add(object);
-    });
-
-    const objectBoundEntities = new Set(this.plan?.objects.flatMap((item) => item.entityId ? [item.entityId] : []) ?? []);
+    const elementBoundEntities = new Set(this.plan?.elements.flatMap((item) => [
+      ...(item.entityId ? [item.entityId] : []),
+      ...(item.glb?.surfaces.flatMap((surface) => surface.entityId ? [surface.entityId] : []) ?? []),
+    ]) ?? []);
     if (this.plan) {
       const center = this._spatialCenter();
-      this.plan.objects.forEach((item) => {
-        const object = this._createPlanObject(item, objectLoadGeneration);
-        object.position.set(item.position.x - center.x, item.position.y, item.position.z - center.y);
-        object.rotation.set(
+      this.plan.elements.forEach((item) => {
+        const element = this._createSpatialElement(item, generation);
+        element.position.set(item.position.x - center.x, item.position.y, item.position.z - center.y);
+        element.rotation.set(
           THREE.MathUtils.degToRad(item.rotation.x),
           THREE.MathUtils.degToRad(item.rotation.y),
           THREE.MathUtils.degToRad(item.rotation.z),
         );
-        object.scale.set(item.scale.x, item.scale.y, item.scale.z);
-        object.userData.spatialObjectId = item.id;
-        object.userData.entityId = item.entityId;
-        object.traverse((node) => {
+        element.scale.set(item.scale.x, item.scale.y, item.scale.z);
+        element.userData.spatialElementId = item.id;
+        element.userData.entityId = item.entityId;
+        element.traverse((node) => {
           node.userData.zoneId = item.zoneId;
-          node.userData.spatialObjectId = item.id;
+          node.userData.spatialElementId = item.id;
           node.userData.entityId = item.entityId;
         });
-        group.add(object);
+        group.add(element);
         if (item.entityId) {
-          const visual = this._createEntityVisual(
-            item.entityId,
-            new THREE.Vector3(object.position.x, Math.max(0.12, item.position.y + 0.12), object.position.z),
-            item.zoneId,
-          );
-          group.add(visual);
+          this._entityVisuals.set(item.entityId, element);
         }
-        if (item.entityId?.startsWith('light.')) {
-          const light = new THREE.PointLight(0xffd7a0, 0, 4.2, 1.65);
-          light.position.set(object.position.x, Math.max(1.55, item.position.y + 0.48), object.position.z);
-          light.userData.entityId = item.entityId;
-          light.userData.entityLight = true;
-          light.userData.zoneId = item.zoneId;
-          group.add(light);
-        }
+        item.glb?.surfaces.forEach((surface) => {
+          if (surface.entityId) this._entityVisuals.set(surface.entityId, element);
+        });
       });
     }
 
@@ -1012,7 +1209,7 @@ export class SpatialPreview extends LitElement {
         entity.spatial ? entity.spatial.position.y : 0.16,
         entity.spatial ? entity.spatial.position.z - center.y : (entity.y - 50) * this.dimensions.width / this.dimensions.aspectRatio / 100,
       );
-      if (!objectBoundEntities.has(entity.entity)) {
+      if (!elementBoundEntities.has(entity.entity)) {
         const visual = this._createEntityVisual(entity.entity, position, entity.zoneId, entity.spatial?.visible ?? true);
         visual.rotation.set(
           THREE.MathUtils.degToRad(entity.spatial?.rotation.x ?? 0),
@@ -1022,7 +1219,7 @@ export class SpatialPreview extends LitElement {
         group.add(visual);
       }
       if ((entity.entity.startsWith('light.') || entity.light)
-        && !objectBoundEntities.has(entity.entity)
+        && !elementBoundEntities.has(entity.entity)
         && !this._isConfiguredGroupWithPlacedChildren(entity.entity)) {
         const light = new THREE.PointLight(0xffd7a0, 0, 4, 1.65);
         light.position.copy(position);
@@ -1048,6 +1245,17 @@ export class SpatialPreview extends LitElement {
     this._updateEntityStateVisuals();
     this._applyFocus();
     this._moveCameraTo(this.focusedZoneId);
+  }
+
+  private _refreshModelBounds(): void {
+    if (!this._model) return;
+    this._model.updateMatrixWorld(true);
+    const bounds = new THREE.Box3().setFromObject(this._model);
+    if (bounds.isEmpty()) return;
+    this._overviewBounds = bounds.clone();
+    const size = bounds.getSize(new THREE.Vector3());
+    this._modelRadius = Math.max(1, Math.hypot(size.x, size.z) / 2);
+    this._fitSunShadow(bounds);
   }
 
   private _createSurveyShell(shell: SpatialShellConfig): THREE.Group {
@@ -1193,16 +1401,66 @@ export class SpatialPreview extends LitElement {
         glassMaterial.emissiveIntensity = 0.5;
         glassMaterial.clippingPlanes = [cutawayPlane];
         glassMaterial.clipShadows = true;
+        this._configureGlazing(glass);
         result.add(glass);
       }
     });
     result.traverse((node) => {
       if (node instanceof THREE.Mesh) {
-        node.castShadow = true;
+        node.castShadow = !node.userData.glazing;
         node.receiveShadow = true;
       }
     });
     return result;
+  }
+
+  private _createCeilingShadowShell(shell: SpatialShellConfig): THREE.Group {
+    const result = new THREE.Group();
+    result.userData.ceilingShadowShell = true;
+    const minX = Math.min(...shell.outer.map(([x]) => x));
+    const maxX = Math.max(...shell.outer.map(([x]) => x));
+    const minZ = Math.min(...shell.outer.map(([, z]) => z));
+    const maxZ = Math.max(...shell.outer.map(([, z]) => z));
+    const centerX = (minX + maxX) / 2;
+    const centerZ = (minZ + maxZ) / 2;
+    const roomRegions = (shell.rooms ?? []).flatMap((room) => [room.floor, ...(room.floors ?? [])]
+      .map((points) => ({ points, zoneId: room.zoneId })));
+    const regions = roomRegions.length
+      ? roomRegions
+      : [shell.floor, ...(shell.floors ?? [])].map((points) => ({ points, zoneId: undefined }));
+
+    regions.filter(({ points }) => points.length >= 3).forEach(({ points, zoneId }) => {
+      const projected = points.map(([x, z]) => new THREE.Vector2(x - centerX, z - centerZ));
+      result.add(this._createCeilingShadowOccluder(projected, zoneId));
+    });
+    return result;
+  }
+
+  private _createCeilingShadowOccluder(points: THREE.Vector2[], zoneId?: string): THREE.Mesh {
+    const centroid = points.reduce((sum, point) => sum.add(point), new THREE.Vector2()).divideScalar(points.length);
+    const expanded = points.map((point) => {
+      const direction = point.clone().sub(centroid);
+      return direction.lengthSq() > 0 ? point.clone().add(direction.normalize().multiplyScalar(0.04)) : point.clone();
+    });
+    const shape = new THREE.Shape();
+    shape.moveTo(expanded[0].x, expanded[0].y);
+    expanded.slice(1).forEach((point) => shape.lineTo(point.x, point.y));
+    shape.closePath();
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    material.colorWrite = false;
+    const ceiling = new THREE.Mesh(new THREE.ShapeGeometry(shape), material);
+    ceiling.geometry.rotateX(Math.PI / 2);
+    ceiling.position.y = this.dimensions.wallHeight;
+    ceiling.castShadow = true;
+    ceiling.receiveShadow = false;
+    ceiling.userData.ceilingShadowOccluder = true;
+    ceiling.userData.zoneId = zoneId;
+    ceiling.raycast = () => {};
+    return ceiling;
   }
 
   private _createSurveyWalls(
@@ -1275,6 +1533,7 @@ export class SpatialPreview extends LitElement {
             );
             glass.position.set(openingCenter, opening.bottom + visibleHeight / 2, 0);
             glass.userData.wallOpening = true;
+            this._configureGlazing(glass);
             segmentGroup.add(glass);
             const floorGlazing = opening.bottom <= 0.08;
             [-1, 1].forEach((side) => {
@@ -1427,6 +1686,7 @@ export class SpatialPreview extends LitElement {
       insert.castShadow = opening.kind === 'door';
       insert.receiveShadow = true;
       insert.userData.wallOpening = true;
+      if (opening.kind === 'window') this._configureGlazing(insert);
       insert.userData.openingId = opening.id;
       insert.userData.openingWidth = to - from;
       insert.userData.smoothContinuous = true;
@@ -1726,6 +1986,12 @@ export class SpatialPreview extends LitElement {
     return new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.02 });
   }
 
+  private _configureGlazing(mesh: THREE.Mesh): void {
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    mesh.userData.glazing = true;
+  }
+
   private _solidifyObject(root: THREE.Object3D): void {
     const replacements = new Map<THREE.Material, THREE.MeshStandardMaterial>();
     const solid = (source: THREE.Material): THREE.MeshStandardMaterial => {
@@ -1788,147 +2054,6 @@ export class SpatialPreview extends LitElement {
     return mesh;
   }
 
-  private _createFurnishing(item: FurnishingConfig): THREE.Group {
-    const group = new THREE.Group();
-    const width = Math.max(0.08, item.width * this.dimensions.width / 100);
-    const depth = Math.max(0.08, item.depth * this.dimensions.width / this.dimensions.aspectRatio / 100);
-    const height = item.height ?? 0.75;
-    const color = item.color ?? 0xbfc5c4;
-    if (item.kind === 'rug') {
-      group.add(this._box(width, 0.018, depth, color, 0.012));
-    } else if (item.kind === 'sofa') {
-      group.add(this._box(width, height * 0.42, depth, color, height * 0.21, 0.04));
-      group.add(this._box(width, height * 0.72, depth * 0.24, color, height * 0.58, 0.03));
-      const cushionCount = Math.max(2, Math.round(item.width / 8));
-      for (let index = 0; index < cushionCount; index += 1) {
-        const cushion = this._box(width / cushionCount * 0.9, height * 0.18, depth * 0.68, 0xd8dcdb, height * 0.47, 0.03);
-        cushion.position.x = -width / 2 + (index + 0.5) * (width / cushionCount);
-        cushion.position.z = depth * 0.08;
-        group.add(cushion);
-      }
-      const armWidth = Math.min(width * 0.12, 0.18);
-      const left = this._box(armWidth, height * 0.62, depth, color, height * 0.34);
-      left.position.x = -width / 2 + armWidth / 2;
-      const right = left.clone();
-      right.position.x = width / 2 - armWidth / 2;
-      group.add(left, right);
-    } else if (item.kind === 'armchair') {
-      const sofa: FurnishingConfig = { ...item, kind: 'sofa', width: item.width, depth: item.depth };
-      return this._createFurnishing(sofa);
-    } else if (item.kind === 'bed') {
-      group.add(this._box(width, height * 0.38, depth, 0xa38d73, height * 0.19));
-      group.add(this._box(width * 0.94, height * 0.34, depth * 0.9, color, height * 0.42));
-      const headboard = this._box(width, height * 1.25, depth * 0.08, 0x81766d, height * 0.63);
-      headboard.position.z = -depth / 2 + depth * 0.04;
-      group.add(headboard);
-      [-0.24, 0.24].forEach((offset) => {
-        const pillow = this._box(width * 0.39, height * 0.16, depth * 0.22, 0xe2e3df, height * 0.64);
-        pillow.position.set(width * offset, height * 0.64, -depth * 0.28);
-        group.add(pillow);
-      });
-    } else if (item.kind === 'table' || item.kind === 'island') {
-      const topHeight = item.kind === 'island' ? Math.max(height, 0.42) : Math.max(height, 0.32);
-      group.add(this._box(width, 0.08, depth, color, topHeight));
-      const inset = Math.min(width, depth) * 0.16;
-      [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([x, z]) => {
-        const leg = this._box(0.055, topHeight, 0.055, 0x3a3e3e, topHeight / 2);
-        leg.position.set(x * (width / 2 - inset), topHeight / 2, z * (depth / 2 - inset));
-        group.add(leg);
-      });
-    } else if (item.kind === 'chair') {
-      group.add(this._box(width, height * 0.12, depth, color, height * 0.54));
-      const back = this._box(width, height * 0.78, depth * 0.12, color, height * 0.87);
-      back.position.z = -depth / 2 + depth * 0.06;
-      group.add(back);
-      [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([x, z]) => {
-        const leg = this._box(0.035, height * 0.54, 0.035, 0x414545, height * 0.27);
-        leg.position.set(x * width * 0.36, height * 0.27, z * depth * 0.36);
-        group.add(leg);
-      });
-    } else if (item.kind === 'tv') {
-      const screen = this._box(width, Math.max(height, depth * 0.62), 0.035, 0x07090a, Math.max(height, depth * 0.62) / 2 + 0.22);
-      const display = new THREE.Mesh(
-        new THREE.PlaneGeometry(width * 0.92, Math.max(height, depth * 0.62) * 0.84),
-        new THREE.MeshStandardMaterial({ color: 0x16272b, emissive: 0x071417, emissiveIntensity: 0.5, roughness: 0.22 }),
-      );
-      display.position.set(0, screen.position.y, 0.019);
-      display.userData.stateSurface = true;
-      group.add(screen, display);
-    } else if (item.kind === 'bathtub') {
-      const rimHeight = Math.max(0.46, height);
-      const rim = 0.09;
-      group.add(this._box(width, rimHeight * 0.76, depth, 0xd8dedc, rimHeight * 0.38, 0.05));
-      const basin = this._box(width - rim * 2, 0.025, depth - rim * 2, 0x6f8587, rimHeight * 0.77);
-      const basinMaterial = basin.material as THREE.MeshStandardMaterial;
-      basinMaterial.roughness = 0.28;
-      basinMaterial.metalness = 0.08;
-      group.add(basin);
-      const longRimDepth = Math.max(0.04, rim);
-      [-1, 1].forEach((side) => {
-        const edge = this._box(width, 0.055, longRimDepth, 0xf1f3f1, rimHeight * 0.82);
-        edge.position.z = side * (depth / 2 - longRimDepth / 2);
-        group.add(edge);
-      });
-      [-1, 1].forEach((side) => {
-        const edge = this._box(rim, 0.055, depth - rim * 2, 0xf1f3f1, rimHeight * 0.82);
-        edge.position.x = side * (width / 2 - rim / 2);
-        group.add(edge);
-      });
-    } else if (item.kind === 'vanity') {
-      const cabinetHeight = Math.max(0.68, height);
-      group.add(this._box(width, cabinetHeight, depth, color, cabinetHeight / 2));
-      group.add(this._box(width * 1.03, 0.045, depth * 1.08, 0xe7e9e6, cabinetHeight + 0.022));
-      const sink = new THREE.Mesh(
-        new THREE.CylinderGeometry(Math.min(width * 0.18, 0.19), Math.min(width * 0.16, 0.17), 0.035, 24),
-        new THREE.MeshStandardMaterial({ color: 0xc4d0cf, roughness: 0.24, metalness: 0.05 }),
-      );
-      sink.position.set(0, cabinetHeight + 0.05, 0);
-      group.add(sink);
-    } else if (item.kind === 'console' || item.kind === 'cabinet') {
-      group.add(this._box(width, Math.max(height, 0.24), depth, color, Math.max(height, 0.24) / 2));
-      if (item.kind === 'console') {
-        const seam = this._box(0.012, Math.max(height, 0.24) * 0.72, depth * 1.01, 0x303535, Math.max(height, 0.24) / 2);
-        group.add(seam);
-      }
-    } else if (item.kind === 'plant') {
-      const pot = new THREE.Mesh(new THREE.CylinderGeometry(width * 0.24, width * 0.34, Math.max(0.16, height * 0.45), 16), this._material(0x66605a));
-      pot.position.y = Math.max(0.16, height * 0.45) / 2;
-      group.add(pot);
-      for (let index = 0; index < 9; index += 1) {
-        const leaf = new THREE.Mesh(new THREE.SphereGeometry(width * (0.18 + (index % 3) * 0.04), 10, 8), this._material(index % 2 ? 0x52664f : 0x65765c, 0.9));
-        const angle = (index / 9) * Math.PI * 2;
-        leaf.scale.set(0.75, 1.45, 0.65);
-        leaf.position.set(Math.cos(angle) * width * 0.24, height * (0.5 + (index % 3) * 0.17), Math.sin(angle) * width * 0.24);
-        group.add(leaf);
-      }
-    } else if (item.kind === 'floorlamp') {
-      const metal = this._material(color, 0.52);
-      const base = new THREE.Mesh(new THREE.CylinderGeometry(width * 0.3, width * 0.34, 0.045, 24), metal);
-      base.position.y = 0.023;
-      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.022, height * 0.78, 16), metal);
-      stem.position.y = height * 0.39;
-      const shade = new THREE.Mesh(
-        new THREE.CylinderGeometry(width * 0.24, width * 0.38, height * 0.22, 24, 1, true),
-        new THREE.MeshStandardMaterial({ color: 0xd9d5c9, roughness: 0.84, emissive: 0x362f20, emissiveIntensity: 0.18, side: THREE.DoubleSide }),
-      );
-      shade.position.y = height * 0.84;
-      group.add(base, stem, shade);
-    } else if (item.kind === 'window') {
-      const glass = this._box(width, Math.max(height, 0.48), 0.025, 0x8eb8c2, Math.max(height, 0.48) / 2 + 0.14);
-      (glass.material as THREE.MeshStandardMaterial).transparent = true;
-      (glass.material as THREE.MeshStandardMaterial).opacity = 0.42;
-      group.add(glass);
-      [-0.5, 0, 0.5].forEach((offset) => {
-        const mullion = this._box(0.025, Math.max(height, 0.48) + 0.05, 0.035, 0x424a4c, Math.max(height, 0.48) / 2 + 0.14);
-        mullion.position.x = offset * width;
-        group.add(mullion);
-      });
-    } else if (item.kind === 'door') {
-      group.add(this._box(width, Math.max(height, 0.64), 0.04, color, Math.max(height, 0.64) / 2));
-    }
-    return group;
-  }
-
   private _wallWithOpenings(
     length: number,
     height: number,
@@ -1974,6 +2099,7 @@ export class SpatialPreview extends LitElement {
           new THREE.MeshPhysicalMaterial({ color: 0x9cc6cf, transparent: true, opacity: 0.34, roughness: 0.12, metalness: 0.05 }),
         );
         glass.position.set(center, bottom + insertHeight / 2, 0);
+        this._configureGlazing(glass);
         result.add(glass);
       } else {
         const door = new THREE.Mesh(
@@ -2030,6 +2156,7 @@ export class SpatialPreview extends LitElement {
       );
       insert.position.set(center.x, opening.kind === 'door' ? insertHeight / 2 : height * 0.3 + insertHeight / 2, center.y);
       insert.rotation.y = -Math.atan2(after.y - before.y, after.x - before.x);
+      if (opening.kind === 'window') this._configureGlazing(insert);
       result.add(insert);
     });
     return result;
@@ -2065,17 +2192,31 @@ export class SpatialPreview extends LitElement {
     if (this._renderer) this._renderer.toneMappingExposure = environment.exposure;
   }
 
+  private _configureExteriorShadow(light: THREE.DirectionalLight, mapSize: number): void {
+    light.castShadow = true;
+    light.shadow.mapSize.set(mapSize, mapSize);
+    light.shadow.camera.left = -8;
+    light.shadow.camera.right = 8;
+    light.shadow.camera.top = 8;
+    light.shadow.camera.bottom = -8;
+    light.shadow.bias = -0.00035;
+    light.shadow.normalBias = 0.018;
+    light.shadow.radius = 2.4;
+  }
+
   private _fitSunShadow(bounds: THREE.Box3): void {
-    if (!this._sun) return;
     const size = bounds.getSize(new THREE.Vector3());
     const radius = Math.max(4, Math.max(size.x, size.z) * 0.62);
-    this._sun.shadow.camera.left = -radius;
-    this._sun.shadow.camera.right = radius;
-    this._sun.shadow.camera.top = radius;
-    this._sun.shadow.camera.bottom = -radius;
-    this._sun.shadow.camera.near = 0.1;
-    this._sun.shadow.camera.far = 36;
-    this._sun.shadow.camera.updateProjectionMatrix();
+    [this._sun, this._fill].forEach((light) => {
+      if (!light) return;
+      light.shadow.camera.left = -radius;
+      light.shadow.camera.right = radius;
+      light.shadow.camera.top = radius;
+      light.shadow.camera.bottom = -radius;
+      light.shadow.camera.near = 0.1;
+      light.shadow.camera.far = 36;
+      light.shadow.camera.updateProjectionMatrix();
+    });
   }
 
   private _surveyRoomMetrics(zoneId: string): { center: THREE.Vector3; radius: number } | undefined {
@@ -2247,6 +2388,16 @@ export class SpatialPreview extends LitElement {
       });
     });
     this._applyWallCutaway();
+    this._applyEntityMarkerFocus();
+  }
+
+  private _applyEntityMarkerFocus(): void {
+    if (!this._model) return;
+    this._model.traverse((node) => {
+      if (!(node instanceof THREE.Mesh) || !node.userData.entityMarker) return;
+      const zoneId = node.userData.zoneId as string | undefined;
+      node.visible = this.focusedZoneId === null || zoneId === this.focusedZoneId;
+    });
   }
 
   private _applyWallCutaway(): void {
@@ -2336,7 +2487,8 @@ export class SpatialPreview extends LitElement {
       if (!visible) return;
       const side = x > width * 0.55 ? 'end' : 'start';
       const expandedWidth = Number.parseFloat(beacon.style.getPropertyValue('--entity-width')) || 154;
-      const markerSize = this.clientWidth <= 600 ? 40 : 36;
+      const roomFocused = beacon.dataset.context === 'room';
+      const markerSize = (this.clientWidth <= 600 ? 40 : 36) * (roomFocused ? 1 : 0.8);
       placements.push({
         beacon,
         x,
@@ -2348,7 +2500,7 @@ export class SpatialPreview extends LitElement {
     });
     const placed: Array<{ left: number; top: number; right: number; bottom: number }> = [];
     placements.sort((left, right) => left.y - right.y).forEach((placement) => {
-      const halfIcon = (this.clientWidth <= 600 ? 40 : 36) / 2;
+      const halfIcon = placement.height / 2;
       const left = placement.side === 'end'
         ? placement.x - placement.width + halfIcon
         : placement.x - halfIcon;
@@ -2377,8 +2529,15 @@ export class SpatialPreview extends LitElement {
   }
 
   private _renderEntityBeacon(entity: EntityConfig) {
+    const element = this.plan?.elements.find((candidate) => candidate.entityId === entity.entity);
     if (!(entity.spatial?.visible ?? true)) return '';
     const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entity.entity);
+    const roomFocused = this.focusedZoneId !== null;
+    if (roomFocused && entity.zoneId !== this.focusedZoneId) return '';
+    const visibility = roomFocused ? entity.roomVisibility ?? 'always' : entity.overviewVisibility ?? 'auto';
+    if (visibility === 'hidden'
+      || (visibility === 'active' && !['active', 'attention'].includes(resolved.activity))
+      || (visibility === 'attention' && resolved.activity !== 'attention')) return '';
     const fallbackState = resolved.state ?? { entity_id: entity.entity, state: 'unavailable', attributes: {} };
     const presentation = spatialEntityPresentation(
       entity.entity,
@@ -2391,7 +2550,9 @@ export class SpatialPreview extends LitElement {
     const domain = entity.entity.split('.')[0] ?? '';
     const deviceClass = String(fallbackState.attributes?.device_class ?? '');
     let icon = iconForEntity(fallbackState, entity);
-    if (!entity.icon && resolved.activity === 'off') {
+    if (!entity.icon && element?.type === 'ceiling-light') icon = 'mdi:ceiling-light';
+    if (!entity.icon && element?.type === 'light-bulb') icon = resolved.activity === 'active' ? 'mdi:lightbulb-on' : 'mdi:lightbulb-outline';
+    if (!entity.icon && !element && resolved.activity === 'off') {
       if (domain === 'light') icon = 'mdi:lightbulb-outline';
       if (domain === 'fan') icon = 'mdi:fan-off';
       if (domain === 'climate') icon = 'mdi:thermostat-off';
@@ -2402,23 +2563,58 @@ export class SpatialPreview extends LitElement {
     } else if (!entity.icon && resolved.activity === 'attention' && domain === 'lock') {
       icon = 'mdi:lock-open-variant';
     }
-    const expanded = resolved.activity === 'attention'
-      || (resolved.activity === 'active' && ['media_player', 'fan', 'humidifier', 'climate', 'vacuum'].includes(domain))
-      || (this.focusedZoneId !== null && entity.zoneId === this.focusedZoneId);
-    const width = Math.min(260, Math.max(154, Math.max(presentation.name.length, presentation.status.length) * 7 + 54));
+    const expanded = roomFocused;
+    const width = Math.min(188, Math.max(118, Math.max(presentation.name.length, presentation.status.length) * 5.4 + 42));
+    const lightColor = domain === 'light' && resolved.activity === 'active' ? resolveLightColor(fallbackState) : null;
+    const accent = lightColor ? `rgb(${lightColor.r} ${lightColor.g} ${lightColor.b})` : '#91a0a3';
     return html`<button
       type="button"
       class="entity-beacon ${expanded ? 'expanded' : ''}"
       data-entity-id=${entity.entity}
       data-activity=${resolved.activity}
-      style=${`--entity-width:${width}px`}
+      data-domain=${domain}
+      data-context=${roomFocused ? 'room' : 'overview'}
+      style=${`--entity-width:${width}px;--entity-accent:${accent}`}
       aria-label=${`${presentation.name}: ${presentation.status}`}
-      title=${`${presentation.name} · ${presentation.status}`}
+      title=${roomFocused ? `${presentation.name} · ${presentation.status}` : ''}
       @click=${() => this._selectEntity(entity.entity)}
     >
       <span class="entity-icon"><ha-icon icon=${icon}></ha-icon></span>
       <span class="entity-copy"><strong>${presentation.name}</strong><span>${presentation.status}</span></span>
     </button>`;
+  }
+
+  private _beaconEntities(): EntityConfig[] {
+    const entities = new Map(this.entities.map((entity) => [entity.entity, entity]));
+    this.plan?.elements.forEach((element) => {
+      if (element.entityId && !entities.has(element.entityId)) {
+        entities.set(element.entityId, {
+          entity: element.entityId,
+          name: element.name,
+          icon: element.type === 'ceiling-light' ? 'mdi:ceiling-light' : element.type === 'light-bulb' ? 'mdi:lightbulb-outline' : undefined,
+          x: 50,
+          y: 50,
+          size: 'medium',
+          tap: 'more-info',
+          orientation: null,
+          zoneId: element.zoneId,
+        });
+      }
+      element.glb?.surfaces.forEach((surface) => {
+        if (!surface.entityId || entities.has(surface.entityId)) return;
+        entities.set(surface.entityId, {
+          entity: surface.entityId,
+          name: surface.name,
+          x: 50,
+          y: 50,
+          size: 'medium',
+          tap: 'more-info',
+          orientation: null,
+          zoneId: element.zoneId,
+        });
+      });
+    });
+    return [...entities.values()];
   }
 
   private _onPointerDown = (event: PointerEvent): void => {
@@ -2433,6 +2629,17 @@ export class SpatialPreview extends LitElement {
     this._pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
     this._raycaster.setFromCamera(this._pointer, this._camera);
     const hits = this._raycaster.intersectObjects(this._model.children, true);
+    const surfaceHit = hits.find((hit) => Array.isArray(hit.object.userData.elementGlbSurfaceIds));
+    if (surfaceHit) {
+      const ids = surfaceHit.object.userData.elementGlbSurfaceIds as string[];
+      const surfaceId = ids[surfaceHit.face?.materialIndex ?? 0];
+      const elementId = surfaceHit.object.userData.spatialElementId as string | undefined;
+      const surface = this.plan?.elements.find((candidate) => candidate.id === elementId)?.glb?.surfaces.find((candidate) => candidate.id === surfaceId);
+      if (surface?.entityId) {
+        this._selectEntity(surface.entityId);
+        return;
+      }
+    }
     const entity = hits.find((hit) => hit.object.userData.entityId);
     if (entity) {
       this._selectEntity(entity.object.userData.entityId as string);
@@ -2500,23 +2707,22 @@ export class SpatialPreview extends LitElement {
     return html`${this.showRoomControls && this.zones.length ? html`<nav class="room-navigation" aria-label="Rooms">
       ${this.focusedZoneId !== null ? html`<button class="room-back" aria-label="Back to apartment overview" title="Overview"
         @pointerup=${(event: PointerEvent) => this._focusZoneFromPointer(event, null)}
-        @click=${() => this._focusZone(null)}><ha-icon icon="mdi:arrow-left"></ha-icon></button>` : ''}
+        @click=${() => this._focusZone(null)}><ha-icon icon="mdi:arrow-left"></ha-icon></button><span class="room-divider" aria-hidden="true"></span>` : ''}
       <div class="room-rail">
-        ${this.focusedZoneId === null ? html`<button aria-pressed="true">Overview</button>` : ''}
         ${this.zones.map((zone) => html`<button aria-pressed=${this.focusedZoneId === zone.id} @pointerup=${(event: PointerEvent) => this._focusZoneFromPointer(event, zone.id ?? null)} @click=${() => this._focusZone(zone.id ?? null)}>${zone.name}</button>`)}
       </div>
     </nav>` : ''}
     <div class="viewport">
       <canvas aria-label="Generated interactive 3D apartment preview"></canvas>
       <div class="entity-layer" role="group" aria-label="Devices">
-        ${this.entities.map((entity) => this._renderEntityBeacon(entity))}
+        ${this._beaconEntities().map((entity) => this._renderEntityBeacon(entity))}
       </div>
       ${!this.zones.length ? html`<div class="empty">Name the enclosed rooms to unlock room navigation and Home Assistant devices.</div>` : ''}
       ${this._loadingModel ? html`<div class="empty">Loading spatial model…</div>` : ''}
       ${this._error ? html`<div class="error">${this._error}</div>` : ''}
     </div>
     <div class="entity-shortcuts" role="group" aria-label="Devices">
-      ${this.entities.filter((entity) => entity.spatial?.visible ?? true).map((entity) => html`<button @click=${() => this._selectEntity(entity.entity)}>${entity.name ?? entity.entity}</button>`)}
+      ${this._beaconEntities().filter((entity) => entity.spatial?.visible ?? true).map((entity) => html`<button @click=${() => this._selectEntity(entity.entity)}>${entity.name ?? entity.entity}</button>`)}
     </div>`;
   }
 }

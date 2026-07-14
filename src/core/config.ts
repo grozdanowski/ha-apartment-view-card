@@ -12,8 +12,11 @@ export type WallSide = 'top' | 'right' | 'bottom' | 'left';
 export type OpeningKind = 'door' | 'window';
 export type SpatialMount = 'floor' | 'wall' | 'ceiling' | 'surface' | 'free';
 export type SpatialFloorFinish = 'wood' | 'tile' | 'stone' | 'carpet' | 'custom';
+export type SpatialElementType = 'ceiling-light' | 'light-bulb' | 'custom' | 'glb';
+export type SpatialPrimitiveKind = 'cube' | 'sphere' | 'cylinder';
+export type SpatialConditionOperator = 'equals' | 'not-equals' | 'above' | 'below';
 
-export const CURRENT_MODEL_VERSION = 6;
+export const CURRENT_MODEL_VERSION = 7;
 export const CURRENT_SPATIAL_VERSION = 1;
 
 export interface SpatialVector3 {
@@ -38,7 +41,7 @@ export interface SpatialPlacement {
   position: SpatialVector3;
   rotation: SpatialRotation;
   mount: SpatialMount;
-  /** Wall, room, or furniture id used for semantic snapping. */
+  /** Wall, room, or Element id used for semantic snapping. */
   parentId?: string;
   /** A bound object can carry state without rendering a separate marker. */
   visible: boolean;
@@ -76,20 +79,77 @@ export interface SpatialRoom {
   floorColor?: string;
 }
 
-export interface SpatialObject {
+export interface SpatialConditionalRule<T> {
+  /** Defaults to the entity associated with the parent element. */
+  entityId?: string;
+  /** Match this state attribute; omit it to compare the entity's primary state. */
+  attribute?: string;
+  operator: SpatialConditionOperator;
+  compare: string | number | boolean;
+  value: T;
+}
+
+export interface SpatialConditionalValue<T> {
+  base: T;
+  rules: SpatialConditionalRule<T>[];
+}
+
+export interface SpatialElementPrimitive {
   id: string;
-  kind: string;
+  name?: string;
+  kind: SpatialPrimitiveKind;
+  position: SpatialVector3;
+  rotation: SpatialRotation;
+  /** Full dimensions in metres before the parent element's scale is applied. */
+  size: SpatialVector3;
+  /** Edge radius in metres. Spheres are already fully rounded. */
+  bevel: number;
+  color: SpatialConditionalValue<string>;
+  luminosity: SpatialConditionalValue<number>;
+  waves: SpatialConditionalValue<number>;
+}
+
+export interface SpatialGlbSurface {
+  id: string;
+  name: string;
+  /** Stable child-index path inside the imported GLB scene. */
+  nodePath: string;
+  /** Material slot on the mesh at nodePath. */
+  materialIndex: number;
+  /** Stable import-time grouping for repeated uses of the same source material. */
+  sourceMaterialKey?: string;
+  /** Original imported color, retained so equal-color surfaces can be edited together. */
+  sourceColor?: string;
+  /** Optional surface-specific entity; falls back to the Element entity. */
+  entityId?: string;
+  color: SpatialConditionalValue<string>;
+  luminosity: SpatialConditionalValue<number>;
+}
+
+export interface SpatialGlbSource {
+  fileName: string;
+  /** Embedded data URI today; URL-compatible for externally hosted assets. */
+  uri: string;
+  byteLength: number;
+  /** Imported model bounds in metres before the Element scale is applied. */
+  size: SpatialVector3;
+  surfaces: SpatialGlbSurface[];
+}
+
+export interface SpatialElement {
+  id: string;
+  type: SpatialElementType;
   name?: string;
   zoneId?: string;
-  modelUrl?: string;
   position: SpatialVector3;
   rotation: SpatialRotation;
   scale: SpatialVector3;
-  /** Optional entity whose state is represented by this object. */
+  /** Optional Home Assistant entity whose state can drive this element. */
   entityId?: string;
-  /** Built-in catalog design and selected material finish. */
-  assetId?: string;
-  finishId?: string;
+  /** Compound geometry used by custom elements. */
+  primitives: SpatialElementPrimitive[];
+  /** Imported geometry and independently bindable material surfaces. */
+  glb?: SpatialGlbSource;
 }
 
 export interface SpatialShellOpening {
@@ -140,7 +200,7 @@ export interface SpatialPlan {
   vertices: SpatialVertex[];
   walls: SpatialWallSegment[];
   rooms: SpatialRoom[];
-  objects: SpatialObject[];
+  elements: SpatialElement[];
 }
 
 /** Input-behavior toggles (spec v2.5 §7). All optional in YAML; defaulted here. */
@@ -366,6 +426,9 @@ const VALID_WALL_SIDES: readonly WallSide[] = ['top', 'right', 'bottom', 'left']
 const VALID_OPENING_KINDS: readonly OpeningKind[] = ['door', 'window'];
 const VALID_SPATIAL_MOUNTS: readonly SpatialMount[] = ['floor', 'wall', 'ceiling', 'surface', 'free'];
 const VALID_FLOOR_FINISHES: readonly SpatialFloorFinish[] = ['wood', 'tile', 'stone', 'carpet', 'custom'];
+const VALID_ELEMENT_TYPES: readonly SpatialElementType[] = ['ceiling-light', 'light-bulb', 'custom', 'glb'];
+const VALID_PRIMITIVE_KINDS: readonly SpatialPrimitiveKind[] = ['cube', 'sphere', 'cylinder'];
+const VALID_CONDITION_OPERATORS: readonly SpatialConditionOperator[] = ['equals', 'not-equals', 'above', 'below'];
 
 function slugId(value: string, fallback: string): string {
   const slug = value
@@ -427,6 +490,100 @@ function normalizeSpatialRotation(raw: any): SpatialRotation {
     x: clamp(raw?.x, -360, 360, 0),
     y: clamp(raw?.y, -360, 360, 0),
     z: clamp(raw?.z, -360, 360, 0),
+  };
+}
+
+function normalizeConditionalValue<T>(
+  raw: any,
+  fallback: T,
+  normalizeValue: (value: unknown, fallback: T) => T,
+): SpatialConditionalValue<T> {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : { base: raw };
+  const base = normalizeValue(source.base, fallback);
+  const rules = (Array.isArray(source.rules) ? source.rules : [])
+    .slice(0, 50)
+    .map((rule: any): SpatialConditionalRule<T> | null => {
+      if (!rule || typeof rule !== 'object') return null;
+      const compare = rule.compare;
+      if (!['string', 'number', 'boolean'].includes(typeof compare)) return null;
+      const normalized: SpatialConditionalRule<T> = {
+        operator: VALID_CONDITION_OPERATORS.includes(rule.operator) ? rule.operator : 'equals',
+        compare,
+        value: normalizeValue(rule.value, base),
+      };
+      if (typeof rule.entityId === 'string' && rule.entityId.length) normalized.entityId = rule.entityId;
+      if (typeof rule.attribute === 'string' && rule.attribute.length) normalized.attribute = rule.attribute;
+      return normalized;
+    })
+    .filter((rule: SpatialConditionalRule<T> | null): rule is SpatialConditionalRule<T> => rule !== null);
+  return { base, rules };
+}
+
+function normalizeHexColor(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback;
+  const candidate = value.trim();
+  return /^#[0-9a-f]{6}$/i.test(candidate) ? candidate.toLowerCase() : fallback;
+}
+
+function normalizeElementPrimitives(raw: unknown): SpatialElementPrimitive[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const used = new Set<string>();
+  return raw.slice(0, 100).map((item: any, index: number): SpatialElementPrimitive | null => {
+    if (!item || typeof item !== 'object') return null;
+    const kind = VALID_PRIMITIVE_KINDS.includes(item.kind) ? item.kind : 'cube';
+    const id = uniqueId(slugId(typeof item.id === 'string' ? item.id : `part-${index + 1}`, `part-${index + 1}`), used);
+    const primitive: SpatialElementPrimitive = {
+      id,
+      kind,
+      position: normalizeSpatialVector(item.position, { x: 0, y: 0, z: 0 }, -100, 100),
+      rotation: normalizeSpatialRotation(item.rotation),
+      size: normalizeSpatialVector(item.size, { x: 0.5, y: 0.5, z: 0.5 }, 0.01, 100),
+      bevel: clamp(item.bevel, 0, 2, 0),
+      color: normalizeConditionalValue(item.color, '#d6dcda', normalizeHexColor),
+      luminosity: normalizeConditionalValue(item.luminosity, 0, (value, fallback) => clamp(value, 0, 1, fallback)),
+      waves: normalizeConditionalValue(item.waves, 0, (value, fallback) => clamp(value, 0, 1, fallback)),
+    };
+    if (typeof item.name === 'string' && item.name.trim()) primitive.name = item.name.trim();
+    return primitive;
+  }).filter((item: SpatialElementPrimitive | null): item is SpatialElementPrimitive => item !== null);
+}
+
+function normalizeGlbSource(raw: unknown): SpatialGlbSource | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const source = raw as Record<string, unknown>;
+  if (typeof source.uri !== 'string') return undefined;
+  const uri = source.uri.trim();
+  const embedded = uri.startsWith('data:model/gltf-binary;base64,');
+  const external = /^(https?:\/\/|\/|\.\/|\.\.\/)/i.test(uri);
+  if ((!embedded && !external) || uri.length > (embedded ? 4_000_000 : 4_096)) return undefined;
+  const used = new Set<string>();
+  const surfaces = (Array.isArray(source.surfaces) ? source.surfaces : [])
+    .slice(0, 250)
+    .map((item: any, index: number): SpatialGlbSurface | null => {
+      if (!item || typeof item !== 'object' || typeof item.nodePath !== 'string' || !/^\d+(\/\d+)*$/.test(item.nodePath)) return null;
+      const fallbackName = `Surface ${index + 1}`;
+      const name = typeof item.name === 'string' && item.name.trim() ? item.name.trim().slice(0, 120) : fallbackName;
+      const id = uniqueId(slugId(typeof item.id === 'string' ? item.id : name, `surface-${index + 1}`), used);
+      const surface: SpatialGlbSurface = {
+        id,
+        name,
+        nodePath: item.nodePath,
+        materialIndex: Math.round(clamp(item.materialIndex, 0, 63, 0)),
+        color: normalizeConditionalValue(item.color, '#d6dcda', normalizeHexColor),
+        luminosity: normalizeConditionalValue(item.luminosity, 0, (value, fallback) => clamp(value, 0, 1, fallback)),
+      };
+      if (typeof item.sourceMaterialKey === 'string' && item.sourceMaterialKey.trim()) surface.sourceMaterialKey = item.sourceMaterialKey.trim().slice(0, 180);
+      if (/^#[0-9a-f]{6}$/i.test(item.sourceColor)) surface.sourceColor = item.sourceColor.toLowerCase();
+      if (typeof item.entityId === 'string' && item.entityId.length) surface.entityId = item.entityId;
+      return surface;
+    })
+    .filter((item: SpatialGlbSurface | null): item is SpatialGlbSurface => item !== null);
+  return {
+    fileName: typeof source.fileName === 'string' && source.fileName.trim() ? source.fileName.trim().slice(0, 180) : 'element.glb',
+    uri,
+    byteLength: Math.round(clamp(source.byteLength, 0, 100_000_000, 0)),
+    size: normalizeSpatialVector(source.size, { x: 0.5, y: 0.5, z: 0.5 }, 0.001, 1000),
+    surfaces,
   };
 }
 
@@ -497,33 +654,33 @@ function normalizeSpatialPlan(raw: any, zoneIds: Set<string>): SpatialPlan | und
       return room;
     })
     .filter((room: SpatialRoom | null): room is SpatialRoom => room !== null);
-  const usedObjects = new Set<string>();
-  const objects: SpatialObject[] = (Array.isArray(raw.objects) ? raw.objects : [])
-    .map((item: any, index: number): SpatialObject | null => {
-      if (typeof item?.kind !== 'string' || !item.kind.length) return null;
-      const id = uniqueId(slugId(typeof item.id === 'string' ? item.id : `object-${index + 1}`, `object-${index + 1}`), usedObjects);
-      const object: SpatialObject = {
+  const usedElements = new Set<string>();
+  const elements: SpatialElement[] = (Array.isArray(raw.elements) ? raw.elements : [])
+    .map((item: any, index: number): SpatialElement | null => {
+      if (!VALID_ELEMENT_TYPES.includes(item?.type)) return null;
+      const id = uniqueId(slugId(typeof item.id === 'string' ? item.id : `element-${index + 1}`, `element-${index + 1}`), usedElements);
+      const element: SpatialElement = {
         id,
-        kind: item.kind,
+        type: item.type,
         position: normalizeSpatialVector(item.position, { x: 0, y: 0, z: 0 }),
         rotation: normalizeSpatialRotation(item.rotation),
-        scale: normalizeSpatialVector(item.scale, { x: 1, y: 1, z: 1 }, 0.05, 20),
+        scale: normalizeSpatialVector(item.scale, { x: 1, y: 1, z: 1 }, 0.001, 20),
+        primitives: normalizeElementPrimitives(item.primitives) ?? [],
       };
-      if (typeof item.name === 'string' && item.name.length) object.name = item.name;
-      if (typeof item.zoneId === 'string' && zoneIds.has(item.zoneId)) object.zoneId = item.zoneId;
-      if (typeof item.modelUrl === 'string' && item.modelUrl.length) object.modelUrl = item.modelUrl;
-      if (typeof item.entityId === 'string' && item.entityId.length) object.entityId = item.entityId;
-      if (typeof item.assetId === 'string' && item.assetId.length) object.assetId = item.assetId;
-      if (typeof item.finishId === 'string' && item.finishId.length) object.finishId = item.finishId;
-      return object;
+      if (typeof item.name === 'string' && item.name.length) element.name = item.name;
+      if (typeof item.zoneId === 'string' && zoneIds.has(item.zoneId)) element.zoneId = item.zoneId;
+      if (typeof item.entityId === 'string' && item.entityId.length) element.entityId = item.entityId;
+      const glb = normalizeGlbSource(item.glb);
+      if (glb) element.glb = glb;
+      return element;
     })
-    .filter((object: SpatialObject | null): object is SpatialObject => object !== null);
+    .filter((element: SpatialElement | null): element is SpatialElement => element !== null);
   return {
     version: CURRENT_SPATIAL_VERSION,
     vertices,
     walls,
     rooms,
-    objects,
+    elements,
   };
 }
 
@@ -922,15 +1079,12 @@ export function normalizeConfig(raw: any): ApartmentViewConfig {
   const source = raw ?? {};
   const rawEntities: any[] = Array.isArray(source.entities)
     ? source.entities
-    : Array.isArray(source.objects)
-      ? source.objects
-      : [];
+    : [];
   const rawZones: any[] = Array.isArray(source.zones) ? source.zones : [];
 
   // Spread unknown keys first, then overwrite the canonical shape. Strip the
   // legacy flat keys we have folded into `images`/`entities`.
   const {
-    objects: _objects,
     dayImage: _dayImage,
     allLightsImage: _allLightsImage,
     nightImage: _nightImage,

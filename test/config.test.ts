@@ -145,42 +145,6 @@ describe('normalizeConfig', () => {
     expect(cfg.images.base).toBe('/new.png');
   });
 
-  it('maps legacy objects[] -> entities[] with per-field renames', () => {
-    const cfg = normalizeConfig({
-      images: { base: '/b.png' },
-      objects: [
-        {
-          entityName: 'light.kitchen',
-          customName: 'Kitchen',
-          customIcon: 'mdi:ceiling-light',
-          offsetX: 35,
-          offsetY: 16,
-          size: 'small',
-          disableService: true,
-        },
-      ],
-    });
-    expect(cfg.entities).toHaveLength(1);
-    expect(cfg.entities[0]).toEqual({
-      entity: 'light.kitchen',
-      name: 'Kitchen',
-      icon: 'mdi:ceiling-light',
-      x: 35,
-      y: 16,
-      size: 'small',
-      tap: 'none',
-      orientation: null,
-    });
-  });
-
-  it('maps disableService:false -> tap:toggle', () => {
-    const cfg = normalizeConfig({
-      images: { base: '/b.png' },
-      objects: [{ entityName: 'light.a', disableService: false }],
-    });
-    expect(cfg.entities[0].tap).toBe('toggle');
-  });
-
   it('fills entity defaults for a v2 entity', () => {
     const cfg = normalizeConfig({
       images: { base: '/b.png' },
@@ -231,7 +195,7 @@ describe('normalizeConfig', () => {
         { name: 'Living Room', x: 50, y: 0, width: 50, height: 50 },
       ],
     });
-    expect(cfg.modelVersion).toBe(6);
+    expect(cfg.modelVersion).toBe(7);
     expect(cfg.zones.map((zone) => zone.id)).toEqual(['living-room', 'living-room-2']);
     expect(cfg.zones[0].areaId).toBe('living_room');
   });
@@ -311,10 +275,14 @@ describe('normalizeConfig', () => {
               { wallId: 'North Wall' }, { wallId: 'West Wall' },
             ],
           }],
-          objects: [{
-            id: 'Sofa', kind: 'sofa', name: 'Main sofa', zoneId: 'living', entityId: 'sensor.sofa',
-            assetId: 'fjord-sofa-3', finishId: 'lichen',
+          elements: [{
+            id: 'Sofa', type: 'custom', name: 'Main sofa', zoneId: 'living', entityId: 'sensor.sofa',
             position: { x: 2, y: 0, z: 3 }, rotation: { y: 180 }, scale: { x: 2.2, y: 1, z: 0.9 },
+            primitives: [{
+              id: 'Seat', kind: 'cube', size: { x: 1.8, y: 0.35, z: 0.8 }, bevel: 0.08,
+              color: { base: '#445566', rules: [{ operator: 'equals', compare: 'on', value: '#ffffff' }] },
+              luminosity: { base: 0, rules: [] }, waves: { base: 0, rules: [] },
+            }],
           }],
         },
       },
@@ -325,9 +293,15 @@ describe('normalizeConfig', () => {
     expect(cfg.spatial?.plan?.walls).toHaveLength(4);
     expect(cfg.spatial?.plan?.walls[0]).toEqual({ id: 'south-wall', start: 'a', end: 'b', thickness: 0.18, curve: 0 });
     expect(cfg.spatial?.plan?.rooms[0]).toMatchObject({ id: 'lounge', zoneId: 'living', floorFinish: 'wood' });
-    expect(cfg.spatial?.plan?.objects[0]).toEqual({
-      id: 'sofa', kind: 'sofa', name: 'Main sofa', zoneId: 'living', entityId: 'sensor.sofa', assetId: 'fjord-sofa-3', finishId: 'lichen',
+    expect(cfg.spatial?.plan?.elements[0]).toEqual({
+      id: 'sofa', type: 'custom', name: 'Main sofa', zoneId: 'living', entityId: 'sensor.sofa',
       position: { x: 2, y: 0, z: 3 }, rotation: { x: 0, y: 180, z: 0 }, scale: { x: 2.2, y: 1, z: 0.9 },
+      primitives: [{
+        id: 'seat', kind: 'cube', position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 },
+        size: { x: 1.8, y: 0.35, z: 0.8 }, bevel: 0.08,
+        color: { base: '#445566', rules: [{ operator: 'equals', compare: 'on', value: '#ffffff' }] },
+        luminosity: { base: 0, rules: [] }, waves: { base: 0, rules: [] },
+      }],
     });
     expect(cfg.spatial?.openings[0]).toEqual({
       id: 'balcony', kind: 'door', wallId: 'south-wall', position: 0.5, width: 0.2,
@@ -355,12 +329,23 @@ describe('normalizeConfig', () => {
             { id: 'same', start: 'a', end: 'a' },
           ],
           rooms: [{ id: 'broken', boundary: [{ wallId: 'dangling' }] }],
-          objects: [{ id: 'lamp', kind: 'lamp', scale: { x: 0, y: 99, z: 1 } }],
+          elements: [{
+            id: 'lamp', type: 'custom', scale: { x: 0, y: 99, z: 1 },
+            primitives: [{
+              id: 'body', kind: 'cube', size: { x: 0, y: 400, z: 1 }, bevel: 9,
+              color: { base: 'invalid', rules: [] },
+              luminosity: { base: -2, rules: [{ operator: 'above', compare: 10, value: 4 }] },
+              waves: { base: 2, rules: [] },
+            }],
+          }],
         },
       },
     });
-    expect(cfg.spatial?.plan).toEqual({ version: 1, vertices: [{ id: 'a', x: 0, z: 0 }], walls: [], rooms: [], objects: [{
-      id: 'lamp', kind: 'lamp', position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 0.05, y: 20, z: 1 },
+    expect(cfg.spatial?.plan).toEqual({ version: 1, vertices: [{ id: 'a', x: 0, z: 0 }], walls: [], rooms: [], elements: [{
+      id: 'lamp', type: 'custom', position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 0.001, y: 20, z: 1 }, primitives: [{
+        id: 'body', kind: 'cube', position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, size: { x: 0.01, y: 100, z: 1 }, bevel: 2,
+        color: { base: '#d6dcda', rules: [] }, luminosity: { base: 0, rules: [{ operator: 'above', compare: 10, value: 1 }] }, waves: { base: 1, rules: [] },
+      }],
     }] });
     expect(cfg.entities[0].spatial).toEqual({
       position: { x: 1000, y: -1000, z: 2 }, rotation: { x: 0, y: 360, z: 0 }, mount: 'free', visible: true,
@@ -558,5 +543,43 @@ describe('normalizeConfig icon sizing', () => {
     const none = normalizeConfig({ images: { base: '/b.png' }, options: { iconSizeMobile: -1 } });
     expect('iconSizeMobile' in none.options).toBe(false);
     expect('iconSizeMaxMobile' in none.options).toBe(false);
+  });
+});
+
+describe('normalizeConfig GLB Elements', () => {
+  it('keeps portable model metadata and validates surface mappings', () => {
+    const cfg = normalizeConfig({
+      type: 'custom:apartment-view-card',
+      spatial: {
+        plan: {
+          vertices: [], walls: [], rooms: [],
+          elements: [{
+            id: 'television', type: 'glb', primitives: [],
+            glb: {
+              fileName: 'television.glb',
+              uri: 'data:model/gltf-binary;base64,AAAA',
+              byteLength: 3,
+              size: { x: 1.4, y: 0.8, z: 0.12 },
+              surfaces: [{
+                id: 'screen', name: 'Screen', nodePath: '0/2', materialIndex: 1,
+                sourceMaterialKey: 'name:display', sourceColor: '#111111',
+                entityId: 'media_player.tv',
+                color: { base: '#111111', rules: [{ operator: 'equals', compare: 'playing', value: '#ffffff' }] },
+                luminosity: { base: 0, rules: [{ operator: 'equals', compare: 'playing', value: 0.7 }] },
+              }],
+            },
+          }],
+        },
+      },
+    });
+
+    expect(cfg.spatial?.plan?.elements[0]).toMatchObject({
+      type: 'glb',
+      glb: {
+        fileName: 'television.glb',
+        size: { x: 1.4, y: 0.8, z: 0.12 },
+        surfaces: [{ id: 'screen', nodePath: '0/2', materialIndex: 1, sourceMaterialKey: 'name:display', sourceColor: '#111111', entityId: 'media_player.tv' }],
+      },
+    });
   });
 });

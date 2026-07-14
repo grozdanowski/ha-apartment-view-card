@@ -3,7 +3,9 @@ import {
   type SpatialPlan,
   type SpatialRoom,
   type SpatialRoomBoundary,
-  type SpatialObject,
+  type SpatialElement,
+  type SpatialElementType,
+  type SpatialElementPrimitive,
   type SpatialVertex,
   type SpatialWallSegment,
 } from './config';
@@ -114,7 +116,7 @@ export function withDerivedSpatialRooms(plan: SpatialPlan): SpatialPlan {
 }
 
 export function emptySpatialPlan(): SpatialPlan {
-  return { version: CURRENT_SPATIAL_VERSION, vertices: [], walls: [], rooms: [], objects: [] };
+  return { version: CURRENT_SPATIAL_VERSION, vertices: [], walls: [], rooms: [], elements: [] };
 }
 
 export function rectangularSpatialPlan(width = 8, depth = 6): SpatialPlan {
@@ -144,7 +146,7 @@ export function rectangularSpatialPlan(width = 8, depth = 6): SpatialPlan {
       ],
       floorFinish: 'wood',
     }],
-    objects: [],
+    elements: [],
   };
 }
 
@@ -229,27 +231,28 @@ export function updateSpatialWall(
   };
 }
 
-export function addSpatialObject(
+export function addSpatialElement(
   plan: SpatialPlan,
-  kind: string,
+  type: SpatialElementType,
   position: SpatialPlanPoint = { x: 0, z: 0 },
-  patch: Partial<Omit<SpatialObject, 'id' | 'kind' | 'position' | 'rotation' | 'scale'>> = {},
+  patch: Partial<Omit<SpatialElement, 'id' | 'type' | 'position' | 'rotation' | 'scale' | 'primitives'>> & { primitives?: SpatialElementPrimitive[] } = {},
 ): SpatialPlan {
-  const object: SpatialObject = {
-    id: nextId(kind || 'object', plan.objects.map((item) => item.id)),
-    kind: kind || 'cabinet',
+  const element: SpatialElement = {
+    id: nextId(type || 'element', plan.elements.map((item) => item.id)),
+    type,
     position: { x: position.x, y: 0, z: position.z },
     rotation: { x: 0, y: 0, z: 0 },
     scale: { x: 1, y: 1, z: 1 },
+    primitives: [],
     ...patch,
   };
-  return { ...plan, objects: [...plan.objects, object] };
+  return { ...plan, elements: [...plan.elements, element] };
 }
 
-export function updateSpatialObject(plan: SpatialPlan, objectId: string, patch: Partial<SpatialObject>): SpatialPlan {
+export function updateSpatialElement(plan: SpatialPlan, elementId: string, patch: Partial<SpatialElement>): SpatialPlan {
   return {
     ...plan,
-    objects: plan.objects.map((item) => item.id === objectId ? {
+    elements: plan.elements.map((item) => item.id === elementId ? {
       ...item,
       ...patch,
       position: patch.position ? { ...item.position, ...patch.position } : item.position,
@@ -259,6 +262,39 @@ export function updateSpatialObject(plan: SpatialPlan, objectId: string, patch: 
   };
 }
 
-export function removeSpatialObject(plan: SpatialPlan, objectId: string): SpatialPlan {
-  return { ...plan, objects: plan.objects.filter((item) => item.id !== objectId) };
+export function removeSpatialElement(plan: SpatialPlan, elementId: string): SpatialPlan {
+  return { ...plan, elements: plan.elements.filter((item) => item.id !== elementId) };
+}
+
+export function duplicateSpatialElement(plan: SpatialPlan, elementId: string): SpatialPlan {
+  const source = plan.elements.find((item) => item.id === elementId);
+  if (!source) return plan;
+  const id = nextId(source.type, plan.elements.map((item) => item.id));
+  const duplicate: SpatialElement = {
+    ...source,
+    id,
+    name: source.name ? `${source.name} copy` : undefined,
+    position: { ...source.position, x: source.position.x + 0.25, z: source.position.z + 0.25 },
+    rotation: { ...source.rotation },
+    scale: { ...source.scale },
+    primitives: source.primitives.map((primitive, index) => ({
+      ...primitive,
+      id: `${id}-part-${index + 1}`,
+      position: { ...primitive.position },
+      rotation: { ...primitive.rotation },
+      size: { ...primitive.size },
+      color: { ...primitive.color, rules: primitive.color.rules.map((rule) => ({ ...rule })) },
+      luminosity: { ...primitive.luminosity, rules: primitive.luminosity.rules.map((rule) => ({ ...rule })) },
+      waves: { ...primitive.waves, rules: primitive.waves.rules.map((rule) => ({ ...rule })) },
+    })),
+    glb: source.glb ? {
+      ...source.glb,
+      surfaces: source.glb.surfaces.map((surface) => ({
+        ...surface,
+        color: { ...surface.color, rules: surface.color.rules.map((rule) => ({ ...rule })) },
+        luminosity: { ...surface.luminosity, rules: surface.luminosity.rules.map((rule) => ({ ...rule })) },
+      })),
+    } : undefined,
+  };
+  return { ...plan, elements: [...plan.elements, duplicate] };
 }

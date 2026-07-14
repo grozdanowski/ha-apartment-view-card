@@ -32,17 +32,6 @@ describe('setConfig', () => {
     const el = document.createElement('apartment-view-card') as Card;
     expect(() => el.setConfig({ type: 'custom:apartment-view-card', images: {} })).toThrow();
   });
-  it('normalizes legacy keys via normalizeConfig (objects/offsetX/entityName)', () => {
-    const el = document.createElement('apartment-view-card') as Card;
-    el.setConfig({
-      type: 'custom:apartment-view-card',
-      images: { base: '/b.png' },
-      objects: [{ entityName: 'light.k', offsetX: 30, offsetY: 20, size: 'small' }],
-    });
-    expect(el.config.entities[0].entity).toBe('light.k');
-    expect(el.config.entities[0].x).toBe(30);
-    expect(el.config.entities[0].y).toBe(20);
-  });
 });
 
 describe('render', () => {
