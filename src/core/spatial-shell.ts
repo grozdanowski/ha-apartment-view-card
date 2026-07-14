@@ -72,3 +72,61 @@ export function assignShellOpenings(shell: SpatialShellConfig): AssignedShellOpe
 export function shellSegmentById(shell: SpatialShellConfig, id: string): SpatialShellSegment | undefined {
   return shellSegments(shell).find((segment) => segment.id === id);
 }
+
+function sameShellPoint(left: [number, number], right: [number, number], tolerance = 0.025): boolean {
+  return Math.hypot(left[0] - right[0], left[1] - right[1]) <= tolerance;
+}
+
+function movePolygonPoint(
+  polygon: [number, number][],
+  from: [number, number],
+  to: [number, number],
+): [number, number][] {
+  return polygon.map((point) => sameShellPoint(point, from) ? [to[0], to[1]] : point);
+}
+
+/** Move one shared architectural point through the entire surveyed model.
+ * Floors, room boundaries, wall runs, and wall-mounted openings remain coherent. */
+export function moveShellPoint(
+  shell: SpatialShellConfig,
+  from: [number, number],
+  to: [number, number],
+): SpatialShellConfig {
+  const assignments = assignShellOpenings(shell).map(({ opening, segment, along }) => ({
+    openingId: opening.id,
+    segmentId: segment.id,
+    position: segment.length > 0 ? Math.min(1, Math.max(0, along / segment.length)) : 0.5,
+  }));
+  const next: SpatialShellConfig = {
+    ...shell,
+    outer: movePolygonPoint(shell.outer, from, to),
+    holes: shell.holes.map((polygon) => movePolygonPoint(polygon, from, to)),
+    floor: movePolygonPoint(shell.floor, from, to),
+    ...(shell.floors ? { floors: shell.floors.map((polygon) => movePolygonPoint(polygon, from, to)) } : {}),
+    ...(shell.rooms ? {
+      rooms: shell.rooms.map((room) => ({
+        ...room,
+        floor: movePolygonPoint(room.floor, from, to),
+        ...(room.floors ? { floors: room.floors.map((polygon) => movePolygonPoint(polygon, from, to)) } : {}),
+      })),
+    } : {}),
+    ...(shell.walls ? {
+      walls: shell.walls.map((wall) => ({ ...wall, points: movePolygonPoint(wall.points, from, to) })),
+    } : {}),
+  };
+  const nextSegments = new Map(shellSegments(next).map((segment) => [segment.id, segment]));
+  const assignmentByOpening = new Map(assignments.map((assignment) => [assignment.openingId, assignment]));
+  next.openings = shell.openings.map((opening) => {
+    const assignment = assignmentByOpening.get(opening.id);
+    const segment = assignment ? nextSegments.get(assignment.segmentId) : undefined;
+    if (!assignment || !segment) return opening;
+    return {
+      ...opening,
+      x: segment.start[0] + (segment.end[0] - segment.start[0]) * assignment.position,
+      z: segment.start[1] + (segment.end[1] - segment.start[1]) * assignment.position,
+      rotation: segment.rotation,
+      depth: segment.thickness,
+    };
+  });
+  return next;
+}

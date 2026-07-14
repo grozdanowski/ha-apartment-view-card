@@ -59,7 +59,7 @@ type HomeChange =
   | { kind: 'new-devices'; areaId: string; areaName: string; count: number }
   | { kind: 'missing-area'; zoneId: string; zoneName: string };
 const TABS: { id: EditorTab; label: string; icon: string }[] = [
-  { id: 'floorplan', label: 'Floorplan', icon: 'mdi:floor-plan' },
+  { id: 'floorplan', label: 'Structure', icon: 'mdi:floor-plan' },
   { id: 'devices', label: 'Devices', icon: 'mdi:devices' },
   { id: 'lighting', label: 'Lighting', icon: 'mdi:lightbulb-group' },
   { id: 'zones', label: 'Zones', icon: 'mdi:select-group' },
@@ -242,6 +242,13 @@ export class ApartmentViewCardEditor extends LitElement {
     }
     .setup-card h3 { margin: 0 0 8px; font-size: 22px; font-weight: 520; }
     .setup-card p { max-width: 720px; margin: 0; color: var(--secondary-text-color); font-size: 15px; line-height: 1.5; }
+    .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+    .section-heading h3 { margin: 2px 0 0; }
+    .section-heading > ha-icon { --mdc-icon-size: 22px; color: var(--secondary-text-color); }
+    .section-kicker { color: var(--studio-accent); font-size: 12px; font-weight: 650; text-transform: uppercase; }
+    .structure-hint { display: flex; align-items: center; gap: 10px; margin: 18px 0 0; color: var(--secondary-text-color); font-size: 14px; line-height: 1.45; }
+    .structure-hint ha-icon { flex: 0 0 auto; --mdc-icon-size: 20px; color: var(--studio-accent); }
+    .wall-editor-card .opening-editor { margin-top: 18px; }
     .setup-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
     .suggestion-list { display: grid; gap: 8px; margin-top: 12px; }
     .suggestion {
@@ -1170,10 +1177,17 @@ export class ApartmentViewCardEditor extends LitElement {
     this._applyConfig({ ...this._config, spatial: { ...this._spatial(), plan: withDerivedSpatialRooms(plan) } }, record);
   }
 
+  private _onSpatialShellChanged(ev: CustomEvent): void {
+    ev.stopPropagation();
+    const { shell, record = true } = ev.detail as { shell: SpatialConfig['shell']; record?: boolean };
+    if (!shell) return;
+    this._applyConfig({ ...this._config, spatial: { ...this._spatial(), shell } }, record);
+  }
+
   private _onPreviewWallSelected(ev: CustomEvent): void {
     this._selectedWallId = (ev.detail as { wallId: string }).wallId;
     this._selectedOpeningId = '';
-    this._setupStep = 'architecture';
+    if (this._mode !== 'setup' || this._setupStep !== 'floorplan') this._setupStep = 'architecture';
     this._previewMode = 'edit';
   }
 
@@ -1363,6 +1377,9 @@ export class ApartmentViewCardEditor extends LitElement {
       const length = wallLength(planWall, new Map(plan.vertices.map((vertex) => [vertex.id, vertex])));
       return `Wall ${index} · ${length.toFixed(2)} m`;
     }
+    const shell = this._spatial().shell;
+    const shellSegment = shell ? shellSegmentById(shell, wallId) : undefined;
+    if (shellSegment) return `Wall ${shellSegment.wallIndex + 1}.${shellSegment.segmentIndex + 1} · ${shellSegment.length.toFixed(2)} m`;
     const parts = wallParts(wallId);
     const zone = parts && this._config.zones.find((candidate) => candidate.id === parts.zoneId);
     return parts && zone ? `${zone.name} · ${parts.side} wall` : 'Selected wall';
@@ -1372,6 +1389,27 @@ export class ApartmentViewCardEditor extends LitElement {
     const plan = this._spatial().plan;
     if (!plan) return;
     this._commitSpatial({ ...this._spatial(), plan: updateSpatialWall(plan, wallId, patch) });
+  }
+
+  private _updateShellWall(wallId: string, patch: { thickness?: number; smooth?: boolean }): void {
+    const shell = this._spatial().shell;
+    const segment = shell ? shellSegmentById(shell, wallId) : undefined;
+    if (!shell || !segment || !shell.walls) return;
+    const walls = shell.walls.map((wall, wallIndex) => {
+      if (wallIndex !== segment.wallIndex) return wall;
+      const next = { ...wall };
+      if (patch.smooth !== undefined) next.smooth = patch.smooth;
+      if (patch.thickness !== undefined) {
+        const thicknesses = Array.from(
+          { length: Math.max(0, wall.points.length - 1) },
+          (_, index) => wall.segmentThicknesses?.[index] ?? wall.thickness ?? 0.12,
+        );
+        thicknesses[segment.segmentIndex] = Math.min(2, Math.max(0.03, patch.thickness));
+        next.segmentThicknesses = thicknesses;
+      }
+      return next;
+    });
+    this._commitSpatial({ ...this._spatial(), shell: { ...shell, walls } });
   }
 
   private _addSpatialFurniture(asset: SpatialAssetDefinition | null): void {
@@ -1952,6 +1990,8 @@ export class ApartmentViewCardEditor extends LitElement {
     const wallCount = surveyWallCount || plan?.walls.length || 0;
     const roomCount = shell?.rooms?.length || plan?.rooms.length || 0;
     const objectCount = plan?.objects.length || 0;
+    const selectedShellSegment = shell ? shellSegmentById(shell, this._selectedWallId) : undefined;
+    const selectedPlanWall = plan?.walls.find((wall) => wall.id === this._selectedWallId);
     return html`
       <p class="studio-intro">Build the physical home in metres. Shared corners, walls, openings, furniture, light, and every device will use this one model.</p>
       ${plan || shell ? html`
@@ -1959,11 +1999,52 @@ export class ApartmentViewCardEditor extends LitElement {
           <h3>Your structure</h3>
           <p>${wallCount} wall segment${wallCount === 1 ? '' : 's'}, ${roomCount} room${roomCount === 1 ? '' : 's'}, and ${objectCount} placed object${objectCount === 1 ? '' : 's'}.</p>
           <div class="setup-actions">
-            <ha-button @click=${() => { this._previewMode = 'edit'; }}>${shell ? 'Edit imported plan' : 'Edit structure'}</ha-button>
+            <ha-button @click=${() => { this._previewMode = 'edit'; }}>Edit structure</ha-button>
             <ha-button @click=${() => { this._previewMode = '3d'; }}>Inspect in 3D</ha-button>
             <ha-button @click=${() => { this._setupStep = 'rooms'; }}>Continue to rooms</ha-button>
           </div>
         </div>
+        ${selectedShellSegment || selectedPlanWall ? html`
+          <div class="setup-card wall-editor-card">
+            <div class="section-heading">
+              <div><span class="section-kicker">Selected wall</span><h3>${this._wallName(this._selectedWallId)}</h3></div>
+              <ha-icon icon="mdi:wall"></ha-icon>
+            </div>
+            <p>Drag either end in the plan to reshape this wall. Connected floors, rooms, and openings move with it.</p>
+            <div class="opening-editor">
+              <div class="opening-control">
+                <label for="structure-wall-thickness">Thickness</label>
+                <input id="structure-wall-thickness" type="number" min="0.03" max="2" step="0.01"
+                  .value=${String(selectedShellSegment?.thickness ?? selectedPlanWall?.thickness ?? 0.12)}
+                  @change=${(event: Event) => {
+                    const thickness = Number((event.target as HTMLInputElement).value);
+                    if (selectedShellSegment) this._updateShellWall(selectedShellSegment.id, { thickness });
+                    else if (selectedPlanWall) this._updatePlanWall(selectedPlanWall.id, { thickness });
+                  }} />
+                <output>m</output>
+              </div>
+              ${selectedShellSegment ? html`
+                <div class="opening-control">
+                  <label for="structure-wall-shape">Shape</label>
+                  <select id="structure-wall-shape" .value=${selectedShellSegment.wall.smooth ? 'smooth' : 'straight'}
+                    @change=${(event: Event) => this._updateShellWall(selectedShellSegment.id, { smooth: (event.target as HTMLSelectElement).value === 'smooth' })}>
+                    <option value="straight">Straight segments</option>
+                    <option value="smooth">Smooth curve</option>
+                  </select>
+                  <output></output>
+                </div>
+              ` : html`
+                <div class="opening-control">
+                  <label for="structure-wall-curve">Curve</label>
+                  <input id="structure-wall-curve" type="range" min="-100" max="100" step="1" .value=${String(Math.round((selectedPlanWall?.curve ?? 0) * 100))}
+                    @pointerdown=${this._onPreviewEditStart} @pointerup=${this._onPreviewEditEnd}
+                    @input=${(event: Event) => selectedPlanWall && this._updateWallCurve(selectedPlanWall.id, Number((event.target as HTMLInputElement).value) / 100, !this._dragStartConfig)} />
+                  <output>${Math.round((selectedPlanWall?.curve ?? 0) * 100)}%</output>
+                </div>
+              `}
+            </div>
+          </div>
+        ` : html`<p class="structure-hint"><ha-icon icon="mdi:cursor-default-click-outline"></ha-icon><span>Select a wall to edit its thickness and shape, or drag a corner directly in the plan.</span></p>`}
       ` : html`
         <div class="setup-card">
           <h3>How would you like to begin?</h3>
@@ -1988,7 +2069,7 @@ export class ApartmentViewCardEditor extends LitElement {
     const surveyedRooms = this._spatial().shell?.rooms ?? [];
     const areas = this._areaList();
     if ((!plan || !plan.rooms.length) && surveyedRooms.length) return html`
-      <p class="studio-intro">${surveyedRooms.length} imported room${surveyedRooms.length === 1 ? ' is' : 's are'} ready to name and connect to Home Assistant Areas.</p>
+      <p class="studio-intro">${surveyedRooms.length} room${surveyedRooms.length === 1 ? ' is' : 's are'} ready to name and connect to Home Assistant Areas.</p>
       <div class="setup-card">
         <h3>Your rooms</h3>
         <div class="room-mapping-list">
@@ -2099,10 +2180,10 @@ export class ApartmentViewCardEditor extends LitElement {
       ? openings.filter((opening) => opening.wallId === this._selectedWallId)
       : [];
     if (this._spatial().shell && !plan?.walls.length) return html`
-      <p class="studio-intro">This imported floor plan stays dimensionally exact. Select a wall to add an opening, or select a door or window to edit it.</p>
+      <p class="studio-intro">Select a wall to add an opening, or select a door or window to edit it.</p>
       <div class="setup-card">
         <h3>Doors &amp; windows</h3>
-        <p>${surveyOpenings.length} opening${surveyOpenings.length === 1 ? '' : 's'} in the imported plan.</p>
+        <p>${surveyOpenings.length} opening${surveyOpenings.length === 1 ? '' : 's'} in your structure.</p>
         <div class="opening-list">
           ${shellAssignments.map(({ opening, segment }) => html`<button class="opening-row ${opening.id === this._selectedOpeningId ? 'selected' : ''}"
             @click=${() => { this._selectedOpeningId = opening.id; this._selectedWallId = segment.id; }}>
@@ -2569,6 +2650,9 @@ export class ApartmentViewCardEditor extends LitElement {
         .selectedObjectId=${this._selectedObjectId}
         .selectedRoomId=${this._selectedRoomId}
         @spatial-plan-changed=${this._onSpatialPlanChanged}
+        @spatial-shell-changed=${this._onSpatialShellChanged}
+        @spatial-edit-start=${this._onPreviewEditStart}
+        @spatial-edit-end=${this._onPreviewEditEnd}
         @spatial-wall-selected=${this._onPreviewWallSelected}
         @spatial-opening-selected=${this._onPreviewOpeningSelected}
         @spatial-object-selected=${this._onSpatialObjectSelected}

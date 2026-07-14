@@ -165,7 +165,7 @@ The loader normalizes the model's longest axis to one metre before applying obje
 
 ### Imported Architecture
 
-For imported or professionally dimensioned homes, `spatial.shell` stores finished floor polygons, centerline wall runs, wall thickness, room polygons, doors, and windows directly. The runtime and editor use this exact shell instead of trying to infer architecture from rendered mesh faces. Doors and windows can be selected, repositioned, resized, added, or removed in the visual editor while the imported floor and room geometry remains exact.
+For surveyed or professionally dimensioned homes, `spatial.shell` stores finished floor polygons, centerline wall runs, wall thickness, room polygons, doors, and windows directly. The runtime and editor use this exact shell instead of trying to infer architecture from rendered mesh faces. Walls, doors, and windows remain editable while the floor and room geometry stays coherent.
 
 The shell is portable and contains no dependency on the original SketchUp or GLB file.
 

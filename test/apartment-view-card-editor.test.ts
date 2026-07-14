@@ -661,7 +661,7 @@ describe('apartment-view-card-editor: setup studio', () => {
     expect(preview.focusedZoneId).toBe('living');
   });
 
-  it('presents imported geometry as editable architecture', async () => {
+  it('presents surveyed geometry as one editable structure', async () => {
     const el = await mountStudio({
       ...baseConfig(),
       type: 'custom:apartment-view-card',
@@ -681,10 +681,24 @@ describe('apartment-view-card-editor: setup studio', () => {
     const planEditor = el.shadowRoot.querySelector('spatial-plan-editor') as any;
     await planEditor.updateComplete;
     expect(planEditor.shadowRoot.querySelectorAll('.survey-wall')).toHaveLength(2);
-    expect(planEditor.shadowRoot.textContent).toContain('Select a wall to add an opening');
+    expect(planEditor.shadowRoot.querySelectorAll('.survey-vertex')).toHaveLength(3);
+    expect(planEditor.shadowRoot.textContent).toContain('drag any corner');
+    expect(el.shadowRoot.textContent).not.toContain('imported');
+
+    planEditor.dispatchEvent(new CustomEvent('spatial-wall-selected', {
+      detail: { wallId: 'shell:wall:0' }, bubbles: true, composed: true,
+    }));
+    await el.updateComplete;
+    expect(el._setupStep).toBe('floorplan');
+    expect(el.shadowRoot.querySelector('#structure-wall-thickness')).toBeTruthy();
+    const thickness = el.shadowRoot.querySelector('#structure-wall-thickness') as HTMLInputElement;
+    thickness.value = '0.24';
+    thickness.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(el.config.spatial.shell.walls[0].segmentThicknesses[0]).toBe(0.24);
+
     el._setupStep = 'architecture';
     await el.updateComplete;
-    expect(el.shadowRoot.textContent).toContain('1 opening in the imported plan');
+    expect(el.shadowRoot.textContent).toContain('1 opening in your structure');
     expect(el.shadowRoot.textContent).toContain('0.90 × 2.10 m');
     const opening = el.shadowRoot.querySelector('.opening-row') as HTMLButtonElement;
     opening.click();
@@ -698,7 +712,7 @@ describe('apartment-view-card-editor: setup studio', () => {
     expect(el.config.spatial.shell.openings[0].color).toBe('#2f5962');
   });
 
-  it('edits and selects imported rooms instead of rendering them read-only', async () => {
+  it('edits and selects surveyed rooms instead of rendering them read-only', async () => {
     const el = await mountStudio({
       ...baseConfig(),
       zones: [{ id: 'living', name: 'Living Room', x: 0, y: 0, width: 100, height: 100 }],

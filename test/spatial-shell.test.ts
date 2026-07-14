@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { SpatialShellConfig } from '../src/core/config';
-import { assignShellOpenings, shellSegmentById } from '../src/core/spatial-shell';
+import { assignShellOpenings, moveShellPoint, shellSegmentById } from '../src/core/spatial-shell';
 
-describe('imported architecture openings', () => {
+describe('surveyed architecture', () => {
   const shell: SpatialShellConfig = {
     outer: [[0, 0], [5, 0], [5, 4], [0, 4]],
     holes: [],
@@ -26,5 +26,23 @@ describe('imported architecture openings', () => {
 
   it('exposes stable segment ids for editor updates', () => {
     expect(shellSegmentById(shell, 'shell:facade:1')).toMatchObject({ length: expect.any(Number), rotation: expect.any(Number) });
+  });
+
+  it('moves shared wall, floor, room, and opening geometry as one architectural point', () => {
+    const editable: SpatialShellConfig = {
+      ...shell,
+      rooms: [{ zoneId: 'living', floor: [[0, 0], [5, 0], [5, 4], [0, 4]] }],
+    };
+    const moved = moveShellPoint(editable, [5, 0], [6, 0.5]);
+
+    expect(moved.outer).toContainEqual([6, 0.5]);
+    expect(moved.floor).toContainEqual([6, 0.5]);
+    expect(moved.rooms?.[0].floor).toContainEqual([6, 0.5]);
+    expect(moved.walls?.[0].points.at(-1)).toEqual([6, 0.5]);
+    expect(moved.walls?.[1].points[0]).toEqual([6, 0.5]);
+    const sideWindow = moved.openings.find((opening) => opening.id === 'side-window');
+    expect(sideWindow?.x).toBeCloseTo(5.5);
+    expect(sideWindow?.z).toBeCloseTo(2.25);
+    expect(sideWindow?.rotation).not.toBe(89);
   });
 });
