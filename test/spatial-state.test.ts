@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveSpatialEntityState, resolveSpatialEnvironment } from '../src/core/spatial-state';
+import { resolveSpatialEntityState, resolveSpatialEnvironment, spatialEntityPresentation, spatialEntityStrength } from '../src/core/spatial-state';
 import type { HassEntity } from '../src/core/ha-types';
 
 function entity(entityId: string, state: string, attributes: Record<string, unknown> = {}): HassEntity {
@@ -71,5 +71,24 @@ describe('spatial Home Assistant state', () => {
     expect(environment.illuminance).toBe(8500);
     expect(environment.daylight).toBeGreaterThan(0.5);
     expect(environment.daylight).toBeLessThanOrEqual(1);
+  });
+
+  it('maps a fan percentage to spatial effect strength', () => {
+    const purifier = entity('fan.air_purifier', 'on', { percentage: 72, preset_mode: 'Manual' });
+    expect(spatialEntityStrength(purifier.entity_id, purifier)).toBeCloseTo(0.72);
+    expect(spatialEntityStrength(purifier.entity_id, { ...purifier, state: 'off' })).toBe(0);
+  });
+
+  it('describes media with title, artist, and source', () => {
+    const media = entity('media_player.naim', 'playing', {
+      friendly_name: 'Naim Mu-so',
+      media_title: 'All The Stars',
+      media_artist: 'Kendrick Lamar & SZA',
+      source: 'Spotify',
+    });
+    expect(spatialEntityPresentation(media.entity_id, media)).toMatchObject({
+      name: 'Naim Mu-so',
+      status: 'All The Stars · Kendrick Lamar & SZA · Spotify',
+    });
   });
 });

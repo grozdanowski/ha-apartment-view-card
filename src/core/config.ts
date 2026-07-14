@@ -102,6 +102,8 @@ export interface SpatialShellOpening {
   rotation: number;
   bottom: number;
   height: number;
+  /** Solid panel color used when this opening is a door. */
+  color?: string;
 }
 
 export interface SpatialShellWall {
@@ -211,6 +213,8 @@ export interface OpeningConfig {
   hinge?: 'left' | 'right';
   /** Signed door swing direction. */
   swing?: 'in' | 'out';
+  /** Solid panel color used when this opening is a door. */
+  color?: string;
 }
 
 export interface WallConfig {
@@ -581,7 +585,7 @@ function normalizeSpatialShell(raw: any, zoneIds: Set<string>): SpatialShellConf
   const openings: SpatialShellOpening[] = (Array.isArray(raw.openings) ? raw.openings : [])
     .map((item: any, index: number): SpatialShellOpening | null => {
       if (!VALID_OPENING_KINDS.includes(item?.kind) || !Number.isFinite(item?.x) || !Number.isFinite(item?.z)) return null;
-      return {
+      const opening: SpatialShellOpening = {
         id: uniqueId(slugId(typeof item.id === 'string' ? item.id : `${item.kind}-${index + 1}`, `${item.kind}-${index + 1}`), usedOpenings),
         kind: item.kind,
         x: clamp(item.x, -1000, 1000, 0),
@@ -592,6 +596,8 @@ function normalizeSpatialShell(raw: any, zoneIds: Set<string>): SpatialShellConf
         bottom: clamp(item.bottom, 0, 5, item.kind === 'door' ? 0 : 0.9),
         height: clamp(item.height, 0.2, 5, item.kind === 'door' ? 2.1 : 1.2),
       };
+      if (item.kind === 'door' && /^#[0-9a-f]{6}$/i.test(item.color)) opening.color = item.color.toLowerCase();
+      return opening;
     })
     .filter((opening: SpatialShellOpening | null): opening is SpatialShellOpening => opening !== null);
   return {
@@ -634,6 +640,7 @@ function normalizeSpatial(raw: any, zones: ZoneConfig[]): SpatialConfig {
       if (Number.isFinite(item.bottom)) opening.bottom = clamp(item.bottom, 0, 5, item.kind === 'door' ? 0 : 0.9);
       if (item.hinge === 'left' || item.hinge === 'right') opening.hinge = item.hinge;
       if (item.swing === 'in' || item.swing === 'out') opening.swing = item.swing;
+      if (item.kind === 'door' && /^#[0-9a-f]{6}$/i.test(item.color)) opening.color = item.color.toLowerCase();
       return opening;
     })
     .filter((opening: OpeningConfig | null): opening is OpeningConfig => opening !== null);

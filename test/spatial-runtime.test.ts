@@ -130,6 +130,54 @@ describe('3D spatial runtime', () => {
     expect(practical.color.g).toBeCloseTo(180 / 255);
   });
 
+  it('scales air effects from live fan percentage', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.hass = {
+      states: {
+        'fan.purifier': {
+          entity_id: 'fan.purifier',
+          state: 'on',
+          attributes: { percentage: 80 },
+        },
+      },
+    };
+    const effect = new THREE.Mesh(
+      new THREE.TorusGeometry(0.2, 0.01),
+      new THREE.MeshStandardMaterial(),
+    );
+    effect.userData.entityId = 'fan.purifier';
+    effect.userData.entityEffect = true;
+    effect.userData.effectOpacity = 0.34;
+    const model = new THREE.Group();
+    model.add(effect);
+    preview._model = model;
+    preview._updateEntityStateVisuals();
+    expect(effect.userData.effectStrength).toBeCloseTo(0.8);
+    expect(effect.scale.x).toBeCloseTo(1.34);
+    expect((effect.material as THREE.MeshStandardMaterial).opacity).toBeGreaterThan(0.25);
+  });
+
+  it('renders state-rich media beacons instead of anonymous dots', async () => {
+    const { preview } = await mount();
+    preview.entities = [{
+      entity: 'media_player.naim', name: 'Naim Mu-so', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'living',
+      spatial: { position: { x: 4, y: 0.5, z: 3 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'surface', visible: true },
+    }];
+    preview.hass = {
+      states: {
+        'media_player.naim': {
+          entity_id: 'media_player.naim', state: 'playing',
+          attributes: { device_class: 'speaker', media_title: 'All The Stars', media_artist: 'Kendrick Lamar & SZA', source: 'Spotify' },
+        },
+      },
+    };
+    await preview.updateComplete;
+    const beacon = preview.shadowRoot.querySelector('.entity-beacon') as HTMLElement;
+    expect(beacon.classList.contains('expanded')).toBe(true);
+    expect(beacon.getAttribute('aria-label')).toContain('All The Stars · Kendrick Lamar & SZA · Spotify');
+    expect(beacon.querySelector('ha-icon')?.getAttribute('icon')).toBe('mdi:speaker-play');
+  });
+
   it('fits every apartment corner inside a narrow mobile overview', () => {
     const preview = document.createElement('spatial-preview') as any;
     Object.defineProperty(preview, 'clientWidth', { value: 390 });
@@ -236,5 +284,26 @@ describe('3D spatial runtime', () => {
     window.geometry.computeBoundingBox();
     const size = window.geometry.boundingBox.getSize(new THREE.Vector3());
     expect(Math.hypot(size.x, size.z)).toBeGreaterThan(0.72);
+  });
+
+  it('uses the configured solid color for a door panel', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.dimensions = { width: 4, aspectRatio: 1, wallHeight: 2.6 };
+    const model = preview._createSurveyWalls({
+      outer: [[0, 0], [3, 0], [3, 2], [0, 2]],
+      holes: [],
+      floor: [[0, 0], [3, 0], [3, 2], [0, 2]],
+      walls: [{ id: 'colored-wall', points: [[0, 0], [3, 0]], thickness: 0.18 }],
+      openings: [{
+        id: 'colored-door', kind: 'door', x: 1.5, z: 0, width: 0.9, depth: 0.18,
+        rotation: 0, bottom: 0, height: 2.1, color: '#2f5962',
+      }],
+    }, 1.5, 1);
+    let panel: THREE.Mesh | undefined;
+    model.traverse((node: THREE.Object3D) => {
+      if (node instanceof THREE.Mesh && node.userData.wallOpening) panel = node;
+    });
+    expect(panel).toBeTruthy();
+    expect((panel!.material as THREE.MeshStandardMaterial).color.getHex()).toBe(0x2f5962);
   });
 });

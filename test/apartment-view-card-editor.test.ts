@@ -691,6 +691,11 @@ describe('apartment-view-card-editor: setup studio', () => {
     await el.updateComplete;
     expect(el.shadowRoot.querySelector('#shell-opening-position')).toBeTruthy();
     expect(el.shadowRoot.querySelector('#shell-opening-width')).toBeTruthy();
+    const color = el.shadowRoot.querySelector('#shell-opening-color') as HTMLInputElement;
+    expect(color.value).toBe('#8f887d');
+    color.value = '#2f5962';
+    color.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(el.config.spatial.shell.openings[0].color).toBe('#2f5962');
   });
 
   it('edits and selects imported rooms instead of rendering them read-only', async () => {
@@ -766,7 +771,11 @@ describe('apartment-view-card-editor: setup studio', () => {
       .find((button: any) => button.textContent?.includes('Add door')) as HTMLElement;
     addDoor.click();
     await el.updateComplete;
-    expect(el.config.spatial.openings[0]).toMatchObject({ kind: 'door', wallId: 'wall-1', position: 0.5, widthMeters: 0.9, height: 2.1 });
+    expect(el.config.spatial.openings[0]).toMatchObject({ kind: 'door', wallId: 'wall-1', position: 0.5, widthMeters: 0.9, height: 2.1, color: '#8f887d' });
+    const doorColor = el.shadowRoot.querySelector('#opening-color') as HTMLInputElement;
+    doorColor.value = '#48605c';
+    doorColor.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(el.config.spatial.openings[0].color).toBe('#48605c');
     const size = el.shadowRoot.querySelector('#opening-size') as HTMLInputElement;
     size.value = '1.15';
     size.dispatchEvent(new Event('change', { bubbles: true }));

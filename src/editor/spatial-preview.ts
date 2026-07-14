@@ -11,9 +11,10 @@ import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLigh
 import * as SunCalc from 'suncalc';
 import { wallIdFor, type EntityConfig, type OpeningConfig, type SiteConfig, type SpatialDimensions, type SpatialFloorFinish, type SpatialPlan, type SpatialShellConfig, type SpatialShellOpening, type SpatialShellWall, type WallConfig, type ZoneConfig } from '../core/config';
 import type { HassLike } from '../core/ha-types';
+import { iconForEntity } from '../core/entity-state';
 import { spatialAsset, spatialAssetFinish } from '../core/spatial-assets';
 import { assignShellOpenings, shellSegments } from '../core/spatial-shell';
-import { resolveSpatialEntityState, resolveSpatialEnvironment, type SpatialEffectKind, type SpatialEnvironment, type SpatialLightingMode } from '../core/spatial-state';
+import { resolveSpatialEntityState, resolveSpatialEnvironment, spatialEntityPresentation, type SpatialEffectKind, type SpatialEnvironment, type SpatialLightingMode } from '../core/spatial-state';
 
 export interface SpatialPoint {
   x: number;
@@ -102,6 +103,7 @@ const FLOOR_HEIGHT = 0.06;
 const OVERVIEW_ZOOM_OUT_MARGIN = 1.16;
 const ARCHITECTURAL_WALL = 0xd4dad8;
 const WINDOW_GLASS = 0x9ebfc4;
+const DEFAULT_DOOR_COLOR = '#8f887d';
 const GRAIN_SHADER = {
   uniforms: {
     tDiffuse: { value: null },
@@ -182,6 +184,7 @@ export class SpatialPreview extends LitElement {
   private _pointerStart?: THREE.Vector2;
   private _environment?: SpatialEnvironment;
   private _effectMeshes: THREE.Mesh[] = [];
+  private readonly _entityVisuals = new Map<string, THREE.Object3D>();
   private _prefersReducedMotion = false;
   private readonly _raycaster = new THREE.Raycaster();
   private readonly _pointer = new THREE.Vector2();
@@ -295,6 +298,75 @@ export class SpatialPreview extends LitElement {
       clip-path: none;
       white-space: normal;
     }
+    .entity-layer {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      pointer-events: none;
+    }
+    .entity-beacon {
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: flex;
+      align-items: center;
+      width: 36px;
+      max-width: min(260px, calc(100% - 20px));
+      height: 36px;
+      padding: 0;
+      overflow: hidden;
+      border-radius: 18px;
+      color: #e9eeee;
+      background: rgba(10, 15, 16, 0.9);
+      box-shadow: 0 3px 8px rgba(0, 0, 0, 0.28);
+      pointer-events: auto;
+      translate: calc(var(--entity-x, -100px) - 18px) calc(var(--entity-y, -100px) - 18px);
+      opacity: var(--entity-visible, 0);
+      transition: width 200ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms ease-out, color 160ms ease-out;
+      will-change: translate;
+    }
+    .entity-beacon[data-activity='active'] { color: #bce7ec; }
+    .entity-beacon[data-activity='attention'] { color: #ffc8bf; }
+    .entity-beacon[data-activity='unavailable'] { color: #8a9496; opacity: calc(var(--entity-visible, 0) * 0.68); }
+    .entity-beacon[data-side='end'] {
+      flex-direction: row-reverse;
+      translate: calc(var(--entity-x, -100px) - 100% + 18px) calc(var(--entity-y, -100px) - 18px);
+    }
+    .entity-beacon:hover,
+    .entity-beacon:focus-visible,
+    .entity-beacon.expanded {
+      width: min(var(--entity-width, 220px), calc(100% - 20px));
+      z-index: 2;
+    }
+    .entity-icon {
+      display: grid;
+      flex: 0 0 36px;
+      width: 36px;
+      height: 36px;
+      place-items: center;
+    }
+    .entity-icon ha-icon { --mdc-icon-size: 19px; }
+    .entity-copy {
+      display: grid;
+      min-width: 0;
+      padding: 0 12px 0 2px;
+      text-align: left;
+      line-height: 1.2;
+      opacity: 0;
+      transition: opacity 120ms ease-out 20ms;
+    }
+    .entity-beacon[data-side='end'] .entity-copy { padding: 0 2px 0 12px; }
+    .entity-beacon:hover .entity-copy,
+    .entity-beacon:focus-visible .entity-copy,
+    .entity-beacon.expanded .entity-copy { opacity: 1; }
+    .entity-copy strong,
+    .entity-copy span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .entity-copy strong { color: #f5f7f7; font-size: 12px; font-weight: 650; }
+    .entity-copy span { margin-top: 1px; color: #aebabc; font-size: 10px; }
     .empty, .error {
       position: absolute;
       inset: 0;
@@ -315,6 +387,9 @@ export class SpatialPreview extends LitElement {
       .room-navigation { gap: 8px; }
       .room-rail { gap: 28px; }
       .room-rail button { min-height: 52px; padding: 2px 0 10px; font-size: 19px; }
+      .entity-beacon { width: 40px; height: 40px; border-radius: 20px; translate: calc(var(--entity-x, -100px) - 20px) calc(var(--entity-y, -100px) - 20px); }
+      .entity-beacon[data-side='end'] { translate: calc(var(--entity-x, -100px) - 100% + 20px) calc(var(--entity-y, -100px) - 20px); }
+      .entity-icon { flex-basis: 40px; width: 40px; height: 40px; }
     }
     @media (prefers-reduced-motion: reduce) {
       button { transition: none; }
@@ -459,6 +534,7 @@ export class SpatialPreview extends LitElement {
       const entityId = node.userData.entityId as string;
       const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entityId);
       const active = resolved.activity === 'active' || resolved.activity === 'attention';
+      const strength = spatialEntityPresentation(entityId, resolved.state).strength;
       if (node instanceof THREE.PointLight && node.userData.entityLight) {
         node.color.copy(this._entityLightColor(entityId));
         node.intensity = this._entityLightIntensity(entityId);
@@ -470,8 +546,11 @@ export class SpatialPreview extends LitElement {
         if (!(material instanceof THREE.MeshStandardMaterial)) return;
         if (node.userData.entityEffect) {
           node.visible = active;
-          material.opacity = active ? Number(node.userData.effectOpacity ?? 0.42) : 0;
-          material.emissiveIntensity = active ? 1.4 : 0;
+          node.userData.effectStrength = strength;
+          const scale = 0.62 + strength * 0.9;
+          node.scale.setScalar(scale);
+          material.opacity = active ? Number(node.userData.effectOpacity ?? 0.42) * (0.38 + strength * 0.62) : 0;
+          material.emissiveIntensity = active ? 0.8 + strength * 1.15 : 0;
           return;
         }
         if (node.userData.stateSurface) {
@@ -512,6 +591,7 @@ export class SpatialPreview extends LitElement {
     root.userData.entityId = entityId;
     root.userData.zoneId = zoneId;
     root.visible = visible;
+    this._entityVisuals.set(entityId, root);
     const marker = new THREE.Mesh(
       new THREE.CylinderGeometry(0.055, 0.07, 0.075, 20),
       new THREE.MeshStandardMaterial({ color, roughness: 0.32, emissive: color, emissiveIntensity: 0.2, transparent: true, opacity: 0.42 }),
@@ -559,6 +639,7 @@ export class SpatialPreview extends LitElement {
 
   private _disposeModel(): void {
     this._effectMeshes = [];
+    this._entityVisuals.clear();
     if (!this._model) return;
     this._model.traverse((node) => {
       if (!(node instanceof THREE.Mesh)) return;
@@ -656,6 +737,7 @@ export class SpatialPreview extends LitElement {
         rotation: THREE.MathUtils.radToDeg(Math.atan2(after[1] - before[1], after[0] - before[0])),
         bottom: opening.bottom ?? (opening.kind === 'door' ? 0 : 0.9),
         height: opening.height ?? (opening.kind === 'door' ? 2.1 : 1.2),
+        ...(opening.color ? { color: opening.color } : {}),
       }];
     });
     const rooms = plan.rooms.flatMap((room) => {
@@ -1090,6 +1172,14 @@ export class SpatialPreview extends LitElement {
         lintelMaterial.clipShadows = true;
         result.add(lintel);
       }
+      if (opening.kind === 'door') {
+        const panel = this._box(opening.width * 0.94, opening.height * 0.98, 0.045, new THREE.Color(opening.color ?? DEFAULT_DOOR_COLOR).getHex(), opening.height * 0.49);
+        panel.position.x = x;
+        panel.position.z = z;
+        panel.rotation.y = -angle;
+        panel.userData.wallOpening = true;
+        result.add(panel);
+      }
       if (opening.kind === 'window') {
         const visibleHeight = Math.max(0.2, Math.min(opening.height, 1.28 - opening.bottom));
         const glass = this._box(opening.width * 0.92, visibleHeight, 0.025, WINDOW_GLASS, opening.bottom + visibleHeight / 2);
@@ -1205,7 +1295,7 @@ export class SpatialPreview extends LitElement {
             const panelHeight = Math.min(opening.height, sectionHeight - 0.01);
             const panel = new THREE.Mesh(
               new THREE.BoxGeometry(Math.max(0.04, to - from - 0.045), panelHeight, 0.045),
-              new THREE.MeshStandardMaterial({ color: 0x8f887d, roughness: 0.78 }),
+              new THREE.MeshStandardMaterial({ color: opening.color ?? DEFAULT_DOOR_COLOR, roughness: 0.78 }),
             );
             panel.position.set(openingCenter, panelHeight / 2, 0);
             panel.userData.wallOpening = true;
@@ -1332,7 +1422,7 @@ export class SpatialPreview extends LitElement {
             opacity: 0.46,
             side: THREE.DoubleSide,
           })
-          : new THREE.MeshStandardMaterial({ color: 0x8f887d, roughness: 0.78, side: THREE.DoubleSide }),
+          : new THREE.MeshStandardMaterial({ color: opening.color ?? DEFAULT_DOOR_COLOR, roughness: 0.78, side: THREE.DoubleSide }),
       );
       insert.castShadow = opening.kind === 'door';
       insert.receiveShadow = true;
@@ -1888,7 +1978,7 @@ export class SpatialPreview extends LitElement {
       } else {
         const door = new THREE.Mesh(
           new THREE.BoxGeometry(width * 0.92, insertHeight * 0.96, depth * 0.34),
-          new THREE.MeshStandardMaterial({ color: 0x8a8277, roughness: 0.76 }),
+          new THREE.MeshStandardMaterial({ color: opening.color ?? DEFAULT_DOOR_COLOR, roughness: 0.76 }),
         );
         door.position.set(center, bottom + insertHeight / 2, 0);
         result.add(door);
@@ -1936,7 +2026,7 @@ export class SpatialPreview extends LitElement {
         new THREE.BoxGeometry(width, insertHeight, depth * 0.3),
         opening.kind === 'window'
           ? new THREE.MeshPhysicalMaterial({ color: 0x9cc6cf, transparent: true, opacity: 0.34, roughness: 0.1 })
-          : new THREE.MeshStandardMaterial({ color: 0x8a8277, roughness: 0.76 }),
+          : new THREE.MeshStandardMaterial({ color: opening.color ?? DEFAULT_DOOR_COLOR, roughness: 0.76 }),
       );
       insert.position.set(center.x, opening.kind === 'door' ? insertHeight / 2 : height * 0.3 + insertHeight / 2, center.y);
       insert.rotation.y = -Math.atan2(after.y - before.y, after.x - before.x);
@@ -2212,6 +2302,125 @@ export class SpatialPreview extends LitElement {
     }));
   }
 
+  private _entityObjectIsVisible(object: THREE.Object3D): boolean {
+    let current: THREE.Object3D | null = object;
+    while (current) {
+      if (!current.visible) return false;
+      if (current === this._model) break;
+      current = current.parent;
+    }
+    return true;
+  }
+
+  private _syncEntityBeacons(): void {
+    if (!this._camera || !this._renderer) return;
+    const canvas = this._renderer.domElement;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (!width || !height) return;
+    const world = new THREE.Vector3();
+    const placements: Array<{ beacon: HTMLElement; x: number; y: number; width: number; height: number; side: 'start' | 'end' }> = [];
+    this.renderRoot.querySelectorAll<HTMLElement>('.entity-beacon').forEach((beacon) => {
+      const object = this._entityVisuals.get(beacon.dataset.entityId ?? '');
+      if (!object || !this._entityObjectIsVisible(object)) {
+        beacon.style.setProperty('--entity-visible', '0');
+        return;
+      }
+      object.getWorldPosition(world);
+      world.y += 0.28;
+      world.project(this._camera!);
+      const visible = world.z > -1 && world.z < 1 && Math.abs(world.x) < 1.08 && Math.abs(world.y) < 1.08;
+      const x = Math.min(width - 20, Math.max(20, (world.x * 0.5 + 0.5) * width));
+      const y = Math.min(height - 20, Math.max(20, (-world.y * 0.5 + 0.5) * height));
+      beacon.style.setProperty('--entity-visible', visible ? '1' : '0');
+      if (!visible) return;
+      const side = x > width * 0.55 ? 'end' : 'start';
+      const expandedWidth = Number.parseFloat(beacon.style.getPropertyValue('--entity-width')) || 154;
+      const markerSize = this.clientWidth <= 600 ? 40 : 36;
+      placements.push({
+        beacon,
+        x,
+        y,
+        width: beacon.classList.contains('expanded') ? expandedWidth : markerSize,
+        height: markerSize,
+        side,
+      });
+    });
+    const placed: Array<{ left: number; top: number; right: number; bottom: number }> = [];
+    placements.sort((left, right) => left.y - right.y).forEach((placement) => {
+      const halfIcon = (this.clientWidth <= 600 ? 40 : 36) / 2;
+      const left = placement.side === 'end'
+        ? placement.x - placement.width + halfIcon
+        : placement.x - halfIcon;
+      const candidates = [0, -46, 46, -92, 92];
+      const selectedY = candidates
+        .map((offset) => Math.min(height - placement.height / 2 - 6, Math.max(placement.height / 2 + 6, placement.y + offset)))
+        .find((candidateY) => {
+          const candidate = {
+            left: left - 6,
+            top: candidateY - placement.height / 2 - 6,
+            right: left + placement.width + 6,
+            bottom: candidateY + placement.height / 2 + 6,
+          };
+          return placed.every((item) => candidate.right <= item.left || candidate.left >= item.right || candidate.bottom <= item.top || candidate.top >= item.bottom);
+        }) ?? placement.y;
+      placement.beacon.style.setProperty('--entity-x', `${placement.x}px`);
+      placement.beacon.style.setProperty('--entity-y', `${selectedY}px`);
+      placement.beacon.dataset.side = placement.side;
+      placed.push({
+        left: left - 6,
+        top: selectedY - placement.height / 2 - 6,
+        right: left + placement.width + 6,
+        bottom: selectedY + placement.height / 2 + 6,
+      });
+    });
+  }
+
+  private _renderEntityBeacon(entity: EntityConfig) {
+    if (!(entity.spatial?.visible ?? true)) return '';
+    const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entity.entity);
+    const fallbackState = resolved.state ?? { entity_id: entity.entity, state: 'unavailable', attributes: {} };
+    const presentation = spatialEntityPresentation(
+      entity.entity,
+      resolved.state,
+      entity.name,
+      this.hass?.formatEntityState
+        ? (state) => this.hass?.formatEntityState?.(state) ?? state.state
+        : undefined,
+    );
+    const domain = entity.entity.split('.')[0] ?? '';
+    const deviceClass = String(fallbackState.attributes?.device_class ?? '');
+    let icon = iconForEntity(fallbackState, entity);
+    if (!entity.icon && resolved.activity === 'off') {
+      if (domain === 'light') icon = 'mdi:lightbulb-outline';
+      if (domain === 'fan') icon = 'mdi:fan-off';
+      if (domain === 'climate') icon = 'mdi:thermostat-off';
+      if (domain === 'media_player') icon = deviceClass === 'tv' ? 'mdi:television-off' : 'mdi:speaker-off';
+    } else if (!entity.icon && resolved.activity === 'active') {
+      if (domain === 'media_player') icon = deviceClass === 'tv' ? 'mdi:television-play' : 'mdi:speaker-play';
+      if (domain === 'vacuum') icon = 'mdi:robot-vacuum-variant';
+    } else if (!entity.icon && resolved.activity === 'attention' && domain === 'lock') {
+      icon = 'mdi:lock-open-variant';
+    }
+    const expanded = resolved.activity === 'attention'
+      || (resolved.activity === 'active' && ['media_player', 'fan', 'humidifier', 'climate', 'vacuum'].includes(domain))
+      || (this.focusedZoneId !== null && entity.zoneId === this.focusedZoneId);
+    const width = Math.min(260, Math.max(154, Math.max(presentation.name.length, presentation.status.length) * 7 + 54));
+    return html`<button
+      type="button"
+      class="entity-beacon ${expanded ? 'expanded' : ''}"
+      data-entity-id=${entity.entity}
+      data-activity=${resolved.activity}
+      style=${`--entity-width:${width}px`}
+      aria-label=${`${presentation.name}: ${presentation.status}`}
+      title=${`${presentation.name} · ${presentation.status}`}
+      @click=${() => this._selectEntity(entity.entity)}
+    >
+      <span class="entity-icon"><ha-icon icon=${icon}></ha-icon></span>
+      <span class="entity-copy"><strong>${presentation.name}</strong><span>${presentation.status}</span></span>
+    </button>`;
+  }
+
   private _onPointerDown = (event: PointerEvent): void => {
     this._pointerStart = new THREE.Vector2(event.clientX, event.clientY);
   };
@@ -2261,6 +2470,7 @@ export class SpatialPreview extends LitElement {
     }
     this._controls?.update();
     this._animateEntityEffects(performance.now());
+    this._syncEntityBeacons();
     if (this._grainPass) this._grainPass.uniforms.time.value = performance.now() * 0.001;
     if (this._composer) this._composer.render();
     else if (this._renderer && this._scene && this._camera) this._renderer.render(this._scene, this._camera);
@@ -2272,12 +2482,16 @@ export class SpatialPreview extends LitElement {
       if (!node.visible) continue;
       const index = Number(node.userData.effectIndex ?? 0);
       const phase = now * 0.0015 + index * 0.9;
+      const strength = Number(node.userData.effectStrength ?? 0.5);
+      const baseScale = 0.62 + strength * 0.9;
       const pulse = 1 + Math.sin(phase) * 0.045;
-      node.scale.setScalar(pulse);
-      if (node.userData.effectKind === 'air') node.rotation.z += 0.0025 + index * 0.0006;
+      node.scale.setScalar(baseScale * pulse);
+      if (node.userData.effectKind === 'air') node.rotation.z += 0.0012 + strength * 0.004 + index * 0.0004;
       const material = node.material;
       if (material instanceof THREE.MeshStandardMaterial) {
-        material.opacity = Number(node.userData.effectOpacity ?? 0.34) * (0.86 + Math.sin(phase) * 0.14);
+        material.opacity = Number(node.userData.effectOpacity ?? 0.34)
+          * (0.38 + strength * 0.62)
+          * (0.86 + Math.sin(phase) * 0.14);
       }
     }
   }
@@ -2294,6 +2508,9 @@ export class SpatialPreview extends LitElement {
     </nav>` : ''}
     <div class="viewport">
       <canvas aria-label="Generated interactive 3D apartment preview"></canvas>
+      <div class="entity-layer" role="group" aria-label="Devices">
+        ${this.entities.map((entity) => this._renderEntityBeacon(entity))}
+      </div>
       ${!this.zones.length ? html`<div class="empty">Name the enclosed rooms to unlock room navigation and Home Assistant devices.</div>` : ''}
       ${this._loadingModel ? html`<div class="empty">Loading spatial model…</div>` : ''}
       ${this._error ? html`<div class="error">${this._error}</div>` : ''}

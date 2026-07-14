@@ -20,6 +20,12 @@ export interface ResolvedSpatialState {
   effect: SpatialEffectKind;
 }
 
+export interface SpatialEntityPresentation {
+  name: string;
+  status: string;
+  strength: number;
+}
+
 export interface SpatialEnvironment {
   daylight: number;
   cloudFactor: number;
@@ -44,6 +50,98 @@ const ATTENTION_STATES = new Set(['on', 'open', 'opening', 'unlocked', 'jammed',
 
 function domainOf(entityId: string): string {
   return entityId.split('.')[0]?.toLowerCase() ?? '';
+}
+
+function numericAttribute(state: HassEntity | undefined, key: string): number | undefined {
+  const value = Number(state?.attributes?.[key]);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+/** Normalized live output for effects such as fans and air purifiers. */
+export function spatialEntityStrength(entityId: string, state?: HassEntity): number {
+  if (!state || activityFor(entityId, state) === 'off' || activityFor(entityId, state) === 'unavailable') return 0;
+  const domain = domainOf(entityId);
+  if (domain === 'fan') {
+    const percentage = numericAttribute(state, 'percentage');
+    if (percentage !== undefined) return clamp01(percentage / 100);
+    const speed = String(state.attributes?.speed ?? state.attributes?.preset_mode ?? '').toLowerCase();
+    if (/max|turbo|boost|high/.test(speed)) return 1;
+    if (/medium|mid/.test(speed)) return 0.62;
+    if (/low|quiet|sleep/.test(speed)) return 0.3;
+    return 0.5;
+  }
+  if (domain === 'humidifier') {
+    const humidity = numericAttribute(state, 'humidity');
+    return humidity === undefined ? 0.5 : clamp01(humidity / 100);
+  }
+  if (domain === 'climate') {
+    const fanMode = String(state.attributes?.fan_mode ?? '').toLowerCase();
+    if (/max|turbo|boost|high/.test(fanMode)) return 1;
+    if (/medium|mid/.test(fanMode)) return 0.62;
+    if (/low|quiet/.test(fanMode)) return 0.32;
+    return 0.5;
+  }
+  if (domain === 'light') {
+    const brightness = numericAttribute(state, 'brightness');
+    return brightness === undefined ? 1 : clamp01(brightness / 255);
+  }
+  return activityFor(entityId, state) === 'active' || activityFor(entityId, state) === 'attention' ? 1 : 0;
+}
+
+function sentenceCase(value: string): string {
+  const normalized = value.replaceAll('_', ' ').trim();
+  return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : '';
+}
+
+/** Concise copy for spatial beacons; no actions or state mutation. */
+export function spatialEntityPresentation(
+  entityId: string,
+  state?: HassEntity,
+  configuredName?: string,
+  formatState?: (state: HassEntity) => string,
+): SpatialEntityPresentation {
+  const explicitName = configuredName || String(state?.attributes?.friendly_name ?? '').trim();
+  const name = explicitName || String(entityId.split('.')[1] ?? entityId)
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  if (!state) return { name, status: 'Unavailable', strength: 0 };
+  const domain = domainOf(entityId);
+  const activity = activityFor(entityId, state);
+  if (activity === 'unavailable') return { name, status: 'Unavailable', strength: 0 };
+  if (domain === 'media_player') {
+    const title = String(state.attributes?.media_title ?? '').trim();
+    const artist = String(state.attributes?.media_artist ?? '').trim();
+    const source = String(state.attributes?.source ?? state.attributes?.app_name ?? '').trim();
+    const playing = [title, artist].filter(Boolean).join(' · ');
+    const detail = [playing, source].filter(Boolean).join(' · ');
+    return { name, status: detail || sentenceCase(state.state), strength: spatialEntityStrength(entityId, state) };
+  }
+  if (domain === 'fan') {
+    const percentage = numericAttribute(state, 'percentage');
+    const preset = String(state.attributes?.preset_mode ?? '').trim();
+    const status = activity === 'off' ? 'Off' : [percentage !== undefined ? `${Math.round(percentage)}%` : '', preset].filter(Boolean).join(' · ') || 'On';
+    return { name, status, strength: spatialEntityStrength(entityId, state) };
+  }
+  if (domain === 'light') {
+    const brightness = numericAttribute(state, 'brightness');
+    const status = activity === 'off' ? 'Off' : brightness === undefined ? 'On' : `On · ${Math.round(brightness / 255 * 100)}%`;
+    return { name, status, strength: spatialEntityStrength(entityId, state) };
+  }
+  if (domain === 'climate') {
+    const action = String(state.attributes?.hvac_action ?? state.state);
+    const current = numericAttribute(state, 'current_temperature');
+    const target = numericAttribute(state, 'temperature');
+    const temperatures = current !== undefined
+      ? `${current}°${target !== undefined ? ` → ${target}°` : ''}`
+      : '';
+    return { name, status: [sentenceCase(action), temperatures].filter(Boolean).join(' · '), strength: spatialEntityStrength(entityId, state) };
+  }
+  const formatted = formatState?.(state);
+  return {
+    name,
+    status: formatted || sentenceCase(state.state),
+    strength: spatialEntityStrength(entityId, state),
+  };
 }
 
 function effectFor(entityId: string, state?: HassEntity): SpatialEffectKind {

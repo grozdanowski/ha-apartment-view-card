@@ -307,6 +307,15 @@ export class ApartmentViewCardEditor extends LitElement {
     .opening-control label { color: var(--secondary-text-color); font-size: 0.88em; }
     .opening-control output { text-align: right; font-variant-numeric: tabular-nums; font-size: 0.88em; }
     .opening-control input[type='range'] { width: 100%; accent-color: var(--primary-color); }
+    .opening-control input[type='color'] {
+      width: 52px;
+      height: 34px;
+      padding: 3px;
+      border: 1px solid var(--divider-color);
+      border-radius: 5px;
+      background: transparent;
+      cursor: pointer;
+    }
     .north-setting { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 16px; align-items: center; margin-top: 12px; }
     .compass {
       position: relative;
@@ -1207,6 +1216,7 @@ export class ApartmentViewCardEditor extends LitElement {
         rotation: shellSegment.rotation,
         bottom: kind === 'door' ? 0 : 0.9,
         height: kind === 'door' ? 2.1 : 1.2,
+        ...(kind === 'door' ? { color: '#8f887d' } : {}),
       };
       this._selectedOpeningId = opening.id;
       this._commitSpatial({ ...this._spatial(), shell: { ...shell, openings: [...shell.openings, opening] } });
@@ -1236,6 +1246,7 @@ export class ApartmentViewCardEditor extends LitElement {
         hinge: 'left' as const,
         swing: 'in' as const,
       } : {}),
+      ...(kind === 'door' ? { color: '#8f887d' } : {}),
     };
     this._selectedOpeningId = opening.id;
     this._commitSpatial({ ...this._spatial(), openings: [...this._spatial().openings, opening] });
@@ -2112,7 +2123,12 @@ export class ApartmentViewCardEditor extends LitElement {
           <div class="opening-control">
             <label for="shell-opening-kind">Type</label>
             <select id="shell-opening-kind" .value=${surveySelected.kind}
-              @change=${(event: Event) => this._updateShellOpening(surveySelected.id, { kind: (event.target as HTMLSelectElement).value as OpeningKind })}>
+              @change=${(event: Event) => {
+                const kind = (event.target as HTMLSelectElement).value as OpeningKind;
+                this._updateShellOpening(surveySelected.id, kind === 'door'
+                  ? { kind, bottom: 0, color: surveySelected.color ?? '#8f887d' }
+                  : { kind, bottom: Math.max(0.9, surveySelected.bottom) });
+              }}>
               <option value="window">Window</option><option value="door">Door</option>
             </select>
           </div>
@@ -2140,7 +2156,12 @@ export class ApartmentViewCardEditor extends LitElement {
             <input id="shell-opening-bottom" type="number" min="0" max="4" step="0.01" .value=${String(surveySelected.bottom)}
               @change=${(event: Event) => this._updateShellOpening(surveySelected.id, { bottom: Number((event.target as HTMLInputElement).value) })} />
             <output>m</output>
-          </div>` : nothing}
+          </div>` : html`<div class="opening-control">
+            <label for="shell-opening-color">Color</label>
+            <input id="shell-opening-color" type="color" .value=${surveySelected.color ?? '#8f887d'}
+              @change=${(event: Event) => this._updateShellOpening(surveySelected.id, { color: (event.target as HTMLInputElement).value })} />
+            <output>${surveySelected.color ?? '#8f887d'}</output>
+          </div>`}
         </div>
         <div class="setup-actions"><ha-button @click=${() => this._removeShellOpening(surveySelected.id)}>Remove ${surveySelected.kind}</ha-button></div>
       </div>` : nothing}
@@ -2236,7 +2257,12 @@ export class ApartmentViewCardEditor extends LitElement {
               <input id="opening-bottom" type="number" min="0" max="3" step="0.05" .value=${String(selected.bottom ?? 0.9)}
                 @change=${(event: Event) => this._updateOpening(selected.id, { bottom: Number((event.target as HTMLInputElement).value) })} />
               <output>m</output>
-            </div>` : nothing}` : html`<div class="opening-control">
+            </div>` : html`<div class="opening-control">
+              <label for="opening-color">Color</label>
+              <input id="opening-color" type="color" .value=${selected.color ?? '#8f887d'}
+                @change=${(event: Event) => this._updateOpening(selected.id, { color: (event.target as HTMLInputElement).value })} />
+              <output>${selected.color ?? '#8f887d'}</output>
+            </div>`}` : html`<div class="opening-control">
               <label for="opening-size">Size</label>
               <input id="opening-size" type="range" min="8" max="70" step="1" .value=${String(Math.round(selected.width * 100))}
                 @pointerdown=${this._onPreviewEditStart} @pointerup=${this._onPreviewEditEnd}
