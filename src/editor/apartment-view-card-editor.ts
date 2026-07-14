@@ -104,6 +104,7 @@ export class ApartmentViewCardEditor extends LitElement {
   private _redoStack: ApartmentViewConfig[] = [];
   private _lastEmittedConfig: ApartmentViewConfig | null = null;
   private _dragStartConfig: ApartmentViewConfig | null = null;
+  private _dialogStyleRestores = new Map<HTMLElement, string | null>();
   /** Local quick-actions draft; normalize would drop half-filled rows. */
   @state() private _actionsDraft: QuickAction[] | null = null;
 
@@ -804,7 +805,61 @@ export class ApartmentViewCardEditor extends LitElement {
     this._mode = mode;
   }
 
+  private _rememberDialogStyle(element: HTMLElement): void {
+    if (!this._dialogStyleRestores.has(element)) this._dialogStyleRestores.set(element, element.getAttribute('style'));
+  }
+
+  private _styleEditorDialog(element: HTMLElement, surface = false): void {
+    this._rememberDialogStyle(element);
+    const width = 'calc(100vw - 32px)';
+    if (surface) {
+      element.style.setProperty('width', width, 'important');
+      element.style.setProperty('max-width', width, 'important');
+      return;
+    }
+    element.style.setProperty('--mdc-dialog-min-width', width);
+    element.style.setProperty('--mdc-dialog-max-width', width);
+    element.style.setProperty('--md-dialog-container-min-width', width);
+    element.style.setProperty('--md-dialog-container-max-width', width);
+  }
+
+  private _expandHostDialog(): void {
+    if (!window.matchMedia?.('(min-width: 900px)').matches) return;
+    const ancestors: HTMLElement[] = [];
+    let node: Node | null = this.parentNode
+      ?? ((this.getRootNode() instanceof ShadowRoot) ? (this.getRootNode() as ShadowRoot).host : null);
+    const visited = new Set<Node>();
+    while (node && !visited.has(node) && ancestors.length < 16) {
+      visited.add(node);
+      if (node instanceof HTMLElement) ancestors.push(node);
+      const parent: Node | null = node.parentNode
+        ?? (node instanceof ShadowRoot ? node.host : null)
+        ?? ((node.getRootNode() instanceof ShadowRoot) ? (node.getRootNode() as ShadowRoot).host : null);
+      node = parent;
+    }
+    const dialogs = new Set<HTMLElement>();
+    ancestors.forEach((ancestor) => {
+      if (ancestor.matches('ha-dialog, md-dialog, hui-dialog-edit-card, hui-dialog-edit-card-v2')) dialogs.add(ancestor);
+      ancestor.shadowRoot?.querySelectorAll<HTMLElement>('ha-dialog, md-dialog').forEach((dialog) => dialogs.add(dialog));
+    });
+    dialogs.forEach((dialog) => {
+      this._styleEditorDialog(dialog);
+      dialog.shadowRoot?.querySelectorAll<HTMLElement>('.mdc-dialog__surface, [part="container"], .dialog-surface')
+        .forEach((surface) => this._styleEditorDialog(surface, true));
+    });
+  }
+
+  public disconnectedCallback(): void {
+    this._dialogStyleRestores.forEach((style, element) => {
+      if (style === null) element.removeAttribute('style');
+      else element.setAttribute('style', style);
+    });
+    this._dialogStyleRestores.clear();
+    super.disconnectedCallback();
+  }
+
   protected updated(): void {
+    this._expandHostDialog();
     if (!['phone', 'tablet', 'desktop'].includes(this._previewMode)) return;
     const card = this.renderRoot.querySelector('.device-preview-card') as unknown as {
       hass?: HomeAssistant;

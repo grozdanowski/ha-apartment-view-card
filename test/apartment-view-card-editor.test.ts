@@ -52,6 +52,38 @@ describe('apartment-view-card-editor: images + options', () => {
     expect(el.config._legacy).toBe('keep');
   });
 
+  it('expands only its Home Assistant edit-card dialog on desktop and restores it on close', async () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = (() => ({ matches: true })) as unknown as typeof window.matchMedia;
+    try {
+      const wrapper = document.createElement('hui-dialog-edit-card');
+      const wrapperRoot = wrapper.attachShadow({ mode: 'open' });
+      const dialog = document.createElement('ha-dialog');
+      const dialogRoot = dialog.attachShadow({ mode: 'open' });
+      const surface = document.createElement('div');
+      surface.className = 'mdc-dialog__surface';
+      dialogRoot.append(surface);
+      wrapperRoot.append(dialog);
+
+      const el = document.createElement('apartment-view-card-editor') as any;
+      el.hass = { states: {}, localize: (key: string) => key };
+      el.setConfig(baseConfig());
+      wrapper.append(el);
+      document.body.append(wrapper);
+      await el.updateComplete;
+      el._expandHostDialog();
+
+      expect(dialog.style.getPropertyValue('--mdc-dialog-max-width')).toBe('calc(100vw - 32px)');
+      expect(surface.style.getPropertyValue('max-width')).toBe('calc(100vw - 32px)');
+
+      wrapper.remove();
+      expect(dialog.hasAttribute('style')).toBe(false);
+      expect(surface.hasAttribute('style')).toBe(false);
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
   it('renders a text input + file upload per image field, and a separate options form', async () => {
     const el = await mount();
     // image fields use plain inputs (always render), not a lazy HA component
