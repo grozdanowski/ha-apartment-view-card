@@ -415,7 +415,7 @@ export class SpatialPreview extends LitElement {
       this._renderer.toneMappingExposure = 1.04;
       this._renderer.localClippingEnabled = true;
       this._renderer.shadowMap.enabled = true;
-      this._renderer.shadowMap.type = THREE.PCFShadowMap;
+      this._renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
       this._scene = new THREE.Scene();
       this._scene.background = null;
@@ -455,7 +455,7 @@ export class SpatialPreview extends LitElement {
       this._scene.add(this._sun);
       this._fill = new THREE.DirectionalLight(0x9ebac4, 0);
       this._fill.position.set(7, 6, -9);
-      this._configureExteriorShadow(this._fill, Math.min(1024, shadowSize));
+      this._configureDiffuseExteriorFill(this._fill);
       this._scene.add(this._fill);
       this._warmBounce = new THREE.RectAreaLight(0xffd2a0, 0, 11, 9);
       this._warmBounce.position.set(-1.5, 5.5, 1.2);
@@ -1243,6 +1243,7 @@ export class SpatialPreview extends LitElement {
     this._model = group;
     this._scene.add(group);
     this._updateEntityStateVisuals();
+    this._updateSun();
     this._applyFocus();
     this._moveCameraTo(this.focusedZoneId);
   }
@@ -2192,6 +2193,11 @@ export class SpatialPreview extends LitElement {
     if (this._renderer) this._renderer.toneMappingExposure = environment.exposure;
   }
 
+  private _configureDiffuseExteriorFill(light: THREE.DirectionalLight): void {
+    light.castShadow = false;
+    light.shadow.autoUpdate = false;
+  }
+
   private _configureExteriorShadow(light: THREE.DirectionalLight, mapSize: number): void {
     light.castShadow = true;
     light.shadow.mapSize.set(mapSize, mapSize);
@@ -2201,7 +2207,7 @@ export class SpatialPreview extends LitElement {
     light.shadow.camera.bottom = -8;
     light.shadow.bias = -0.00035;
     light.shadow.normalBias = 0.018;
-    light.shadow.radius = 2.4;
+    light.shadow.radius = 3.2;
   }
 
   private _fitSunShadow(bounds: THREE.Box3): void {

@@ -146,16 +146,16 @@ describe('3D spatial runtime', () => {
     });
   });
 
-  it('makes every exterior directional light respect architectural shadows', () => {
+  it('keeps the sun as the only shadow-casting exterior direction', () => {
     const preview = document.createElement('spatial-preview') as any;
     const sun = new THREE.DirectionalLight();
     const fill = new THREE.DirectionalLight();
     preview._configureExteriorShadow(sun, 2048);
-    preview._configureExteriorShadow(fill, 1024);
+    preview._configureDiffuseExteriorFill(fill);
     expect(sun.castShadow).toBe(true);
-    expect(fill.castShadow).toBe(true);
+    expect(fill.castShadow).toBe(false);
+    expect(fill.shadow.autoUpdate).toBe(false);
     expect(sun.shadow.mapSize.width).toBe(2048);
-    expect(fill.shadow.mapSize.width).toBe(1024);
   });
 
   it('lets exterior directional light pass through architectural glazing', () => {
