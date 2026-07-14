@@ -74,6 +74,7 @@ describe('normalizeConfig', () => {
       },
       idleTimeout: 0,
       presentation: 'control-heavy',
+      spatialLightingMode: 'realistic',
     });
     expect(cfg.entities).toEqual([]);
     expect(cfg.zones).toEqual([]);

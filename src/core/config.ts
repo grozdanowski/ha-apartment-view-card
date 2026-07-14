@@ -6,6 +6,7 @@ export type SizeTier = 'tiny' | 'small' | 'medium' | 'large' | 'huge';
 export type TapAction = 'toggle' | 'more-info' | 'none';
 export type WheelMode = 'modifier' | 'plain';
 export type PresentationPreset = 'calm' | 'informative' | 'control-heavy';
+export type SpatialLightingMode = 'realistic' | 'balanced' | 'presentation';
 export type MarkerVisibility = 'auto' | 'always' | 'active' | 'attention' | 'hidden';
 export type WallSide = 'top' | 'right' | 'bottom' | 'left';
 export type OpeningKind = 'door' | 'window';
@@ -284,6 +285,10 @@ export interface CardOptions {
   aspectMobile: number;
   /** A weather.* entity to drive a subtle ambient tint over the floorplan. */
   weatherEntity?: string;
+  /** Optional outdoor illuminance sensor. Outdoor lx is auto-detected when possible. */
+  illuminanceEntity?: string;
+  /** How faithfully the 3D scene follows low real-world light levels. */
+  spatialLightingMode: SpatialLightingMode;
   /** Input-behavior toggles (spec v2.5 §7). */
   interaction: InteractionOptions;
   /** Seconds of inactivity before returning to overview; 0 = off (wall tablets). */
@@ -345,6 +350,7 @@ const VALID_VIEWS: readonly CardOptions['view'][] = [
 ];
 const VALID_WHEEL_MODES: readonly WheelMode[] = ['modifier', 'plain'];
 const VALID_PRESENTATIONS: readonly PresentationPreset[] = ['calm', 'informative', 'control-heavy'];
+const VALID_SPATIAL_LIGHTING_MODES: readonly SpatialLightingMode[] = ['realistic', 'balanced', 'presentation'];
 const VALID_MARKER_VISIBILITIES: readonly MarkerVisibility[] = [
   'auto',
   'always',
@@ -870,8 +876,14 @@ function normalizeOptions(raw: any): CardOptions {
     presentation: VALID_PRESENTATIONS.includes(o.presentation)
       ? o.presentation
       : 'control-heavy',
+    spatialLightingMode: VALID_SPATIAL_LIGHTING_MODES.includes(o.spatialLightingMode)
+      ? o.spatialLightingMode
+      : 'realistic',
     ...(typeof o.weatherEntity === 'string' && o.weatherEntity.length
       ? { weatherEntity: o.weatherEntity }
+      : {}),
+    ...(typeof o.illuminanceEntity === 'string' && o.illuminanceEntity.length
+      ? { illuminanceEntity: o.illuminanceEntity }
       : {}),
   };
 }

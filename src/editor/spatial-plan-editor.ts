@@ -4,6 +4,7 @@ import type { EntityConfig, OpeningConfig, SpatialObject, SpatialPlan, SpatialSh
 import { spatialBounds, wallLength } from '../core/spatial-geometry';
 import { addSpatialVertex, addSpatialWall, emptySpatialPlan, moveSpatialVertex, nearestSpatialVertex, snapSpatialPoint, updateSpatialObject } from '../core/spatial-plan';
 import { spatialAsset } from '../core/spatial-assets';
+import { assignShellOpenings, shellSegments } from '../core/spatial-shell';
 
 type PlanEditorMode = 'select' | 'wall';
 
@@ -16,6 +17,8 @@ export class SpatialPlanEditor extends LitElement {
   @property() selectedWallId = '';
   @property() selectedVertexId = '';
   @property() selectedObjectId = '';
+  @property() selectedOpeningId = '';
+  @property() selectedRoomId = '';
   @state() private _mode: PlanEditorMode = 'select';
   @state() private _draftStartId = '';
   @state() private _dragVertexId = '';
@@ -61,11 +64,17 @@ export class SpatialPlanEditor extends LitElement {
     .canvas { position: relative; min-height: 420px; aspect-ratio: 16 / 10; }
     svg { display: block; width: 100%; height: 100%; touch-action: none; cursor: default; }
     svg.drawing { cursor: crosshair; }
-    .room { fill: #5f6d6d; fill-opacity: 0.18; stroke: none; }
-    .survey-room { fill: #657474; fill-opacity: 0.2; stroke: none; }
+    .room { fill: #5f6d6d; fill-opacity: 0.18; stroke: transparent; stroke-width: 0.06; cursor: pointer; }
+    .room.selected { fill: #8db8c1; fill-opacity: 0.28; stroke: #b8e1e6; }
+    .survey-room { fill: #657474; fill-opacity: 0.2; stroke: transparent; stroke-width: 0.06; cursor: pointer; }
+    .survey-room.selected { fill: #8db8c1; fill-opacity: 0.28; stroke: #b8e1e6; }
     .survey-room.tile { fill: #6d7776; fill-opacity: 0.3; }
     .survey-wall { fill: none; stroke: #d8dfdf; stroke-linecap: square; stroke-linejoin: round; pointer-events: none; }
+    .survey-wall.selected { stroke: #9dcbd2; }
+    .survey-wall-hit { fill: none; stroke: transparent; stroke-width: 0.42; cursor: pointer; }
     .survey-opening { stroke: #0c1112; stroke-linecap: butt; pointer-events: none; }
+    .survey-opening.selected { stroke: #8ed4df; }
+    .survey-opening-hit { stroke: transparent; stroke-width: 0.42; cursor: pointer; }
     .wall { fill: none; stroke: #d8dfdf; stroke-linecap: square; stroke-linejoin: round; }
     .wall.selected { stroke: #9dcbd2; }
     .wall-hit { fill: none; stroke: transparent; stroke-width: 0.42; cursor: pointer; }
@@ -107,7 +116,7 @@ export class SpatialPlanEditor extends LitElement {
       .toolbar-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
       button { min-height: 44px; }
       .hint { padding: 0 4px 2px; }
-      .canvas { min-height: 430px; aspect-ratio: 4 / 5; }
+      .canvas { min-height: 340px; aspect-ratio: 1 / 1; }
     }
     @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
   `;
@@ -192,6 +201,39 @@ export class SpatialPlanEditor extends LitElement {
     this.selectedVertexId = '';
     this.selectedObjectId = '';
     this.dispatchEvent(new CustomEvent('spatial-wall-selected', { detail: { wallId }, bubbles: true, composed: true }));
+  }
+
+  private _selectShellWall(event: PointerEvent, wallId: string): void {
+    if (this._mode !== 'select') return;
+    event.stopPropagation();
+    this.selectedWallId = wallId;
+    this.selectedOpeningId = '';
+    this.selectedObjectId = '';
+    this.dispatchEvent(new CustomEvent('spatial-wall-selected', { detail: { wallId }, bubbles: true, composed: true }));
+  }
+
+  private _selectShellOpening(event: PointerEvent, openingId: string, wallId: string): void {
+    if (this._mode !== 'select') return;
+    event.stopPropagation();
+    this.selectedOpeningId = openingId;
+    this.selectedWallId = wallId;
+    this.selectedObjectId = '';
+    this.dispatchEvent(new CustomEvent('spatial-opening-selected', {
+      detail: { id: openingId, wallId }, bubbles: true, composed: true,
+    }));
+  }
+
+  private _selectRoom(event: PointerEvent, roomId: string): void {
+    if (this._mode !== 'select') return;
+    event.stopPropagation();
+    this.selectedRoomId = roomId;
+    this.selectedWallId = '';
+    this.selectedOpeningId = '';
+    this.selectedObjectId = '';
+    this.selectedVertexId = '';
+    this.dispatchEvent(new CustomEvent('spatial-room-selected', {
+      detail: { roomId }, bubbles: true, composed: true,
+    }));
   }
 
   private _startVertexDrag(event: PointerEvent, vertexId: string): void {
@@ -325,7 +367,7 @@ export class SpatialPlanEditor extends LitElement {
           ${this._mode === 'wall' && this._draftStartId ? html`<button class="finish" @click=${this._finishWalls}>Finish walls</button>` : ''}
         </div>
         <div class="hint">${this.shell
-          ? 'Surveyed architecture is locked. Furniture and devices remain editable.'
+          ? 'Select a wall to add an opening, or select any door or window to adjust it.'
           : this._mode === 'wall'
           ? this._draftStartId ? 'Tap the next corner. Existing points snap automatically.' : 'Tap where the first wall begins.'
           : 'Select a wall, or drag a corner to adjust the plan.'}</div>
@@ -354,23 +396,36 @@ export class SpatialPlanEditor extends LitElement {
           </defs>
           <rect x=${view.x} y=${view.z} width=${view.width} height=${view.depth} fill="url(#major-grid)" />
           ${this.shell?.rooms?.map((room) => svg`
-            <polygon class="survey-room ${room.finish === 'tile' ? 'tile' : ''}" points=${room.floor.map(([x, z]) => `${x},${z}`).join(' ')} />
-            ${room.floors?.map((floor) => svg`<polygon class="survey-room ${room.finish === 'tile' ? 'tile' : ''}" points=${floor.map(([x, z]) => `${x},${z}`).join(' ')} />`)}
+            <polygon class="survey-room ${room.finish === 'tile' ? 'tile' : ''} ${this.selectedRoomId === `survey:${room.zoneId}` ? 'selected' : ''}"
+              points=${room.floor.map(([x, z]) => `${x},${z}`).join(' ')} @pointerdown=${(event: PointerEvent) => this._selectRoom(event, `survey:${room.zoneId}`)} />
+            ${room.floors?.map((floor) => svg`<polygon class="survey-room ${room.finish === 'tile' ? 'tile' : ''} ${this.selectedRoomId === `survey:${room.zoneId}` ? 'selected' : ''}"
+              points=${floor.map(([x, z]) => `${x},${z}`).join(' ')} @pointerdown=${(event: PointerEvent) => this._selectRoom(event, `survey:${room.zoneId}`)} />`)}
           `)}
-          ${this.shell?.walls?.map((wall) => svg`<polyline class="survey-wall" points=${wall.points.map(([x, z]) => `${x},${z}`).join(' ')} stroke-width=${wall.thickness ?? 0.12} />`)}
-          ${this.shell?.openings.map((opening) => {
+          ${this.shell ? shellSegments(this.shell).map((segment) => svg`
+            <line class="survey-wall ${this.selectedWallId === segment.id ? 'selected' : ''}"
+              x1=${segment.start[0]} y1=${segment.start[1]} x2=${segment.end[0]} y2=${segment.end[1]} stroke-width=${segment.thickness} />
+            <line class="survey-wall-hit" x1=${segment.start[0]} y1=${segment.start[1]} x2=${segment.end[0]} y2=${segment.end[1]}
+              @pointerdown=${(event: PointerEvent) => this._selectShellWall(event, segment.id)} />
+          `) : ''}
+          ${this.shell ? assignShellOpenings(this.shell).map(({ opening, segment }) => {
             const angle = opening.rotation * Math.PI / 180;
             const halfX = Math.cos(angle) * opening.width / 2;
             const halfZ = Math.sin(angle) * opening.width / 2;
-            return svg`<line class="survey-opening" x1=${opening.x - halfX} y1=${opening.z - halfZ} x2=${opening.x + halfX} y2=${opening.z + halfZ} stroke-width=${Math.max(0.1, opening.depth * 1.15)} />`;
-          })}
+            return svg`
+              <line class="survey-opening ${this.selectedOpeningId === opening.id ? 'selected' : ''}"
+                x1=${opening.x - halfX} y1=${opening.z - halfZ} x2=${opening.x + halfX} y2=${opening.z + halfZ} stroke-width=${Math.max(0.1, opening.depth * 1.15)} />
+              <line class="survey-opening-hit" x1=${opening.x - halfX} y1=${opening.z - halfZ} x2=${opening.x + halfX} y2=${opening.z + halfZ}
+                @pointerdown=${(event: PointerEvent) => this._selectShellOpening(event, opening.id, segment.id)} />
+            `;
+          }) : ''}
           ${this.plan.rooms.map((room) => {
             const points = room.boundary.flatMap((edge) => {
               const wall = walls.get(edge.wallId);
               const vertex = wall ? vertices.get(edge.reversed ? wall.end : wall.start) : undefined;
               return vertex ? [`${vertex.x},${vertex.z}`] : [];
             });
-            return points.length >= 3 ? svg`<polygon class="room" points=${points.join(' ')} />` : '';
+            return points.length >= 3 ? svg`<polygon class="room ${this.selectedRoomId === room.id ? 'selected' : ''}"
+              points=${points.join(' ')} @pointerdown=${(event: PointerEvent) => this._selectRoom(event, room.id)} />` : '';
           })}
           ${this.plan.walls.map((wall) => {
             const path = this._wallPath(wall, vertices);

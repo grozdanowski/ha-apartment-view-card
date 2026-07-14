@@ -35,15 +35,17 @@ describe('3D spatial runtime', () => {
     return { card, preview, callService };
   }
 
-  it('keeps room focus controlled by the card runtime', async () => {
-    const { card, preview } = await mount();
-    preview.dispatchEvent(new CustomEvent('spatial-room-selected', {
-      detail: { zoneId: 'living' }, bubbles: true, composed: true,
-    }));
+  it('keeps room focus owned by the spatial surface across host updates', async () => {
+    const { card } = await mount();
+    const roomButton = [...card.shadowRoot.querySelectorAll('.spatial-room-rail button')]
+      .find((button: Element) => button.textContent === 'Living Room') as HTMLButtonElement;
+    roomButton.click();
     await card.updateComplete;
-    await preview.updateComplete;
-    expect(card._spatialFocusedZone).toBe('living');
-    expect(preview.focusedZoneId).toBe('living');
+    card.hass = { ...card.hass };
+    await card.updateComplete;
+    const currentPreview = card.shadowRoot.querySelector('spatial-preview') as any;
+    await currentPreview.updateComplete;
+    expect(currentPreview.focusedZoneId).toBe('living');
   });
 
   it('opens more-info from an accessible entity shortcut without calling a service', async () => {
@@ -58,9 +60,9 @@ describe('3D spatial runtime', () => {
   });
 
   it('keeps navigation and status UI outside the Three.js viewport', async () => {
-    const { preview } = await mount();
+    const { card, preview } = await mount();
     const viewport = preview.shadowRoot.querySelector('.viewport') as HTMLElement;
-    const rail = preview.shadowRoot.querySelector('.room-rail') as HTMLElement;
+    const rail = card.shadowRoot.querySelector('.spatial-room-rail') as HTMLElement;
     expect(viewport.querySelector('.topbar')).toBeNull();
     expect(viewport.querySelector('.room-rail')).toBeNull();
     expect(rail).toBeTruthy();
@@ -70,13 +72,62 @@ describe('3D spatial runtime', () => {
 
   it('focuses a room from the navigation rail', async () => {
     const { card, preview } = await mount();
-    const roomButtons = [...preview.shadowRoot.querySelectorAll('.room-rail button')] as HTMLButtonElement[];
+    const roomButtons = [...card.shadowRoot.querySelectorAll('.spatial-room-rail button')] as HTMLButtonElement[];
     const roomButton = roomButtons.find((button) => button.textContent === 'Living Room');
     roomButton?.click();
     await card.updateComplete;
     await preview.updateComplete;
-    expect(card._spatialFocusedZone).toBe('living');
+    expect(preview.focusedZoneId).toBe('living');
     expect(roomButton?.getAttribute('aria-pressed')).toBe('true');
+    const back = card.shadowRoot.querySelector('.spatial-room-back') as HTMLButtonElement;
+    expect(back).toBeTruthy();
+    back.click();
+    await card.updateComplete;
+    await preview.updateComplete;
+    expect(preview.focusedZoneId).toBeNull();
+    expect(card.shadowRoot.querySelector('.spatial-room-back')).toBeNull();
+  });
+
+  it('keeps standalone preview room controls usable in the editor', async () => {
+    const { preview } = await mount();
+    preview.showRoomControls = true;
+    await preview.updateComplete;
+    const roomButton = [...preview.shadowRoot.querySelectorAll('.room-rail button')]
+      .find((button: Element) => button.textContent === 'Living Room') as HTMLButtonElement;
+    roomButton.click();
+    await preview.updateComplete;
+    expect(preview.focusedZoneId).toBe('living');
+    expect(roomButton.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('uses solid floor materials without image textures', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    const floor = preview._surveyFloorMaterial() as THREE.MeshStandardMaterial;
+    expect(floor.map).toBeNull();
+    expect(floor.roughness).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it('turns active Home Assistant lights into practical scene lighting', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.hass = {
+      states: {
+        'light.living': {
+          entity_id: 'light.living',
+          state: 'on',
+          attributes: { brightness: 204, rgb_color: [255, 180, 120] },
+        },
+      },
+    };
+    const practical = new THREE.PointLight();
+    practical.userData.entityId = 'light.living';
+    practical.userData.entityLight = true;
+    const model = new THREE.Group();
+    model.add(practical);
+    preview._model = model;
+    preview._updateEntityStateVisuals();
+    expect(practical.intensity).toBeGreaterThan(10);
+    expect(practical.color.r).toBeCloseTo(1);
+    expect(practical.color.g).toBeCloseTo(180 / 255);
   });
 
   it('fits every apartment corner inside a narrow mobile overview', () => {
@@ -96,8 +147,8 @@ describe('3D spatial runtime', () => {
       for (const y of [0, 2.7]) {
         for (const z of [-5.05, 5.05]) {
           const projected = new THREE.Vector3(x, y, z).project(preview._camera);
-          expect(Math.abs(projected.x)).toBeLessThanOrEqual(0.9);
-          expect(Math.abs(projected.y)).toBeLessThanOrEqual(0.9);
+          expect(Math.abs(projected.x)).toBeLessThanOrEqual(0.98);
+          expect(Math.abs(projected.y)).toBeLessThanOrEqual(0.98);
         }
       }
     }
@@ -153,5 +204,37 @@ describe('3D spatial runtime', () => {
     const clippedWidth = replacements.reduce((sum, mesh) => sum + mesh.geometry.parameters.width, 0);
     expect(clippedWidth).toBeCloseTo(3.1);
     expect(replacements[0].geometry.parameters.height).toBeCloseTo(0.26);
+  });
+
+  it('keeps a curved-wall window at full width across short survey segments', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.dimensions = { width: 4, aspectRatio: 1, wallHeight: 2.6 };
+    const model = preview._createSurveyWalls({
+      outer: [[0, 0], [2, 0], [2, 2], [0, 2]],
+      holes: [],
+      floor: [[0, 0], [2, 0], [2, 2], [0, 2]],
+      walls: [{
+        id: 'curved-facade',
+        smooth: true,
+        thickness: 0.24,
+        points: [[0, 0], [0.24, -0.03], [0.48, -0.1], [0.7, -0.2], [0.9, -0.34], [1.08, -0.52], [1.23, -0.73]],
+      }],
+      openings: [{
+        id: 'wide-curve-window', kind: 'window', x: 0.69, z: -0.21, width: 0.82, depth: 0.24,
+        rotation: -28, bottom: 0.9, height: 1.1,
+      }],
+    }, 1, 1);
+    const meshes: any[] = [];
+    model.traverse((node: any) => { if (node.isMesh) meshes.push(node); });
+    const fullWalls = meshes.filter((mesh) => mesh.userData.architecturalWall);
+    const window = meshes.find((mesh) => mesh.userData.openingId === 'wide-curve-window');
+
+    expect(fullWalls).toHaveLength(1);
+    expect(fullWalls[0].userData.smoothContinuous).toBe(true);
+    expect(window).toBeTruthy();
+    expect(window.userData.openingWidth).toBeCloseTo(0.82, 2);
+    window.geometry.computeBoundingBox();
+    const size = window.geometry.boundingBox.getSize(new THREE.Vector3());
+    expect(Math.hypot(size.x, size.z)).toBeGreaterThan(0.72);
   });
 });

@@ -26,6 +26,7 @@ function makeConfig(): ApartmentViewConfig {
       aspectMobile: 1,
       interaction: { wheel: 'modifier', doubleTapZoom: true, roomSwipe: true, inertia: true },
       idleTimeout: 0,
+      spatialLightingMode: 'realistic',
     },
     quickActions: [],
   };

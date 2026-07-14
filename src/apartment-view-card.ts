@@ -130,7 +130,7 @@ export class ApartmentViewCard extends LitElement {
    */
   @state() private _isGesturing = false;
   @state() private _focusedZone: ZoneConfig | null = null;
-  @state() private _spatialFocusedZone: string | null = null;
+  @state() private _spatialFocusedZoneId: string | null = null;
   /** Entities currently driven by the control surface (empty = closed). */
   @state() private _controlled: string[] = [];
   /** "Lights control" multi-select mode. */
@@ -221,6 +221,66 @@ export class ApartmentViewCard extends LitElement {
       border: none;
       box-shadow: none;
       overflow: visible;
+    }
+    .spatial-room-navigation {
+      display: flex;
+      align-items: stretch;
+      gap: 14px;
+      width: 100%;
+      min-width: 0;
+      margin-bottom: 4px;
+    }
+    .spatial-room-rail {
+      display: flex;
+      flex: 1 1 auto;
+      min-width: 0;
+      gap: 24px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      scroll-snap-type: x proximity;
+    }
+    .spatial-room-rail::-webkit-scrollbar { display: none; }
+    .spatial-room-navigation button {
+      appearance: none;
+      flex: 0 0 auto;
+      min-height: 48px;
+      padding: 2px 0 9px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      background: transparent;
+      color: var(--secondary-text-color, #9aa6a8);
+      font: inherit;
+      font-size: 17px;
+      font-weight: 470;
+      line-height: 1;
+      white-space: nowrap;
+      cursor: pointer;
+      scroll-snap-align: start;
+    }
+    .spatial-room-navigation button[aria-pressed='true'] {
+      color: var(--primary-text-color, #f8fbfb);
+      border-bottom-color: #a9d2d8;
+    }
+    .spatial-room-navigation button:focus-visible {
+      outline: 2px solid #d8e5e7;
+      outline-offset: 2px;
+    }
+    .spatial-room-back {
+      display: grid;
+      flex-basis: 48px !important;
+      width: 48px;
+      height: 48px;
+      place-items: center;
+      padding: 0 !important;
+      border-bottom-color: transparent !important;
+      color: var(--primary-text-color, #f8fbfb) !important;
+    }
+    .spatial-room-back ha-icon { --mdc-icon-size: 24px; }
+    @media (max-width: 600px) {
+      .spatial-room-navigation { gap: 8px; }
+      .spatial-room-rail { gap: 28px; }
+      .spatial-room-navigation button { min-height: 52px; padding: 2px 0 10px; font-size: 19px; }
     }
     /* HUD row above the canvas (attention + lights control live here, never
        overlaying the floorplan). */
@@ -947,10 +1007,10 @@ export class ApartmentViewCard extends LitElement {
     fireEvent(this, 'hass-more-info', { entityId: event.detail.entityId });
   }
 
-  private _onSpatialRoomSelected(event: CustomEvent<{ zoneId: string | null }>): void {
-    event.stopPropagation();
-    this._spatialFocusedZone = event.detail.zoneId;
-  }
+  private _setSpatialRoomFocus = (zoneId: string | null): void => {
+    if (this._spatialFocusedZoneId === zoneId) return;
+    this._spatialFocusedZoneId = zoneId;
+  };
 
   static getConfigElement(): HTMLElement {
     return document.createElement('apartment-view-card-editor');
@@ -1114,10 +1174,27 @@ export class ApartmentViewCard extends LitElement {
   private _relevantStateChanged(prev?: HassLike, next?: HassLike): boolean {
     if (!prev || !next) return true;
     const weather = this.config?.options?.weatherEntity;
+    const illuminance = this.config?.options?.illuminanceEntity;
+    const configuredIds = this.config ? this._floorData.entities.map((entity) => entity.entity) : [];
+    const configured = new Set(configuredIds);
+    const inferredEnvironmentIds = this.config?.spatial ? Object.values(next.states)
+      .filter((state) => state.entity_id.startsWith('weather.') || (
+        state.entity_id.startsWith('sensor.')
+        && (String(state.attributes?.device_class ?? '').toLowerCase() === 'illuminance'
+          || String(state.attributes?.unit_of_measurement ?? '').toLowerCase() === 'lx')
+      ))
+      .map((state) => state.entity_id) : [];
+    const fallbackGroupIds = Object.values(next.states)
+      .filter((state) => Array.isArray(state.attributes?.entity_id)
+        && state.attributes.entity_id.some((member: string) => configured.has(member)))
+      .map((state) => state.entity_id);
     const ids = [
       'sun.sun',
       ...(weather ? [weather] : []),
-      ...(this.config ? this._floorData.entities.map((e) => e.entity) : []),
+      ...(illuminance ? [illuminance] : []),
+      ...configuredIds,
+      ...inferredEnvironmentIds,
+      ...fallbackGroupIds,
     ];
     return ids.some((id) => prev.states?.[id] !== next.states?.[id]);
   }
@@ -2218,7 +2295,21 @@ export class ApartmentViewCard extends LitElement {
   protected render(): TemplateResult {
     const spatial = this.config?.spatial;
     if (spatial?.plan || spatial?.shell) {
-      return html`<ha-card><spatial-preview
+      return html`<ha-card>
+        ${this.config.zones.length ? html`<nav class="spatial-room-navigation" aria-label="Rooms">
+          ${this._spatialFocusedZoneId !== null ? html`<button type="button" class="spatial-room-back"
+            aria-label="Back to apartment overview" title="Overview"
+            @click=${() => this._setSpatialRoomFocus(null)}>
+            <ha-icon icon="mdi:arrow-left"></ha-icon>
+          </button>` : nothing}
+          <div class="spatial-room-rail">
+            ${this._spatialFocusedZoneId === null ? html`<button type="button" aria-pressed="true">Overview</button>` : nothing}
+            ${this.config.zones.map((zone) => html`<button type="button"
+              aria-pressed=${this._spatialFocusedZoneId === zone.id}
+              @click=${() => this._setSpatialRoomFocus(zone.id ?? null)}>${zone.name}</button>`)}
+          </div>
+        </nav>` : nothing}
+        <spatial-preview
         .zones=${this.config.zones}
         .entities=${this.config.entities}
         .openings=${spatial.openings}
@@ -2229,11 +2320,14 @@ export class ApartmentViewCard extends LitElement {
         .shell=${spatial.shell ?? null}
         .hass=${this.hass}
         .hideWalls=${this.config.options.hideWalls}
-        .focusedZoneId=${this._spatialFocusedZone}
         .latitude=${spatial.site.latitude ?? this.hass?.config?.latitude ?? 0}
         .longitude=${spatial.site.longitude ?? this.hass?.config?.longitude ?? 0}
+        .weatherEntity=${this.config.options.weatherEntity ?? ''}
+        .illuminanceEntity=${this.config.options.illuminanceEntity ?? ''}
+        .spatialLightingMode=${this.config.options.spatialLightingMode}
+        .focusedZoneId=${this._spatialFocusedZoneId}
+        .showRoomControls=${false}
         @spatial-entity-selected=${this._onSpatialEntitySelected}
-        @spatial-room-selected=${this._onSpatialRoomSelected}
       ></spatial-preview></ha-card>`;
     }
     if (!this.config?.images?.base) {

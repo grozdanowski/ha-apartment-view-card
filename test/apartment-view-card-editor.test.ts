@@ -23,6 +23,7 @@ function baseConfig(): ApartmentViewConfig {
       aspectMobile: 1,
       interaction: { wheel: 'modifier', doubleTapZoom: true, roomSwipe: true, inertia: true },
       idleTimeout: 0,
+      spatialLightingMode: 'realistic',
     },
     quickActions: [],
   };
@@ -649,7 +650,18 @@ describe('apartment-view-card-editor: setup studio', () => {
     expect(el.shadowRoot.querySelector('spatial-preview')).toBeTruthy();
   });
 
-  it('presents imported survey geometry without pretending the graph is empty', async () => {
+  it('keeps room selection state inside the setup 3D preview', async () => {
+    const el = await mountStudio();
+    (el.shadowRoot.querySelectorAll('.preview-switch button')[1] as HTMLElement).click();
+    await el.updateComplete;
+    const preview = el.shadowRoot.querySelector('spatial-preview') as any;
+    preview._focusZone('living');
+    await el.updateComplete;
+    await preview.updateComplete;
+    expect(preview.focusedZoneId).toBe('living');
+  });
+
+  it('presents imported geometry as editable architecture', async () => {
     const el = await mountStudio({
       ...baseConfig(),
       type: 'custom:apartment-view-card',
@@ -668,12 +680,58 @@ describe('apartment-view-card-editor: setup studio', () => {
     expect(el.shadowRoot.textContent).toContain('2 wall segments, 1 room, and 0 placed objects');
     const planEditor = el.shadowRoot.querySelector('spatial-plan-editor') as any;
     await planEditor.updateComplete;
-    expect(planEditor.shadowRoot.querySelectorAll('.survey-wall')).toHaveLength(1);
-    expect(planEditor.shadowRoot.textContent).toContain('Surveyed architecture is locked');
+    expect(planEditor.shadowRoot.querySelectorAll('.survey-wall')).toHaveLength(2);
+    expect(planEditor.shadowRoot.textContent).toContain('Select a wall to add an opening');
     el._setupStep = 'architecture';
     await el.updateComplete;
-    expect(el.shadowRoot.textContent).toContain('1 measured opening');
+    expect(el.shadowRoot.textContent).toContain('1 opening in the imported plan');
     expect(el.shadowRoot.textContent).toContain('0.90 × 2.10 m');
+    const opening = el.shadowRoot.querySelector('.opening-row') as HTMLButtonElement;
+    opening.click();
+    await el.updateComplete;
+    expect(el.shadowRoot.querySelector('#shell-opening-position')).toBeTruthy();
+    expect(el.shadowRoot.querySelector('#shell-opening-width')).toBeTruthy();
+  });
+
+  it('edits and selects imported rooms instead of rendering them read-only', async () => {
+    const el = await mountStudio({
+      ...baseConfig(),
+      zones: [{ id: 'living', name: 'Living Room', x: 0, y: 0, width: 100, height: 100 }],
+      spatial: {
+        openings: [], walls: [], site: { north: 0 }, dimensions: { width: 6, aspectRatio: 1.5, wallHeight: 2.6 },
+        shell: {
+          outer: [[0, 0], [6, 0], [6, 4], [0, 4]], holes: [], floor: [[0, 0], [6, 0], [6, 4], [0, 4]],
+          rooms: [{ zoneId: 'living', floor: [[0, 0], [6, 0], [6, 4], [0, 4]] }],
+          openings: [],
+        },
+      },
+    });
+    el.hass = {
+      states: {}, localize: (key: string) => key,
+      areas: { lounge: { area_id: 'lounge', name: 'Lounge Area' } }, entities: {}, devices: {},
+    };
+    el._setupStep = 'rooms';
+    await el.updateComplete;
+    expect(el._selectedRoomId).toBe('survey:living');
+    expect(el.shadowRoot.querySelector('.room-mapping.selected')).toBeTruthy();
+    const name = el.shadowRoot.querySelector('.room-fields input') as HTMLInputElement;
+    name.value = 'Lounge';
+    name.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(el.config.zones[0].name).toBe('Lounge');
+    const area = el.shadowRoot.querySelector('.room-fields select') as HTMLSelectElement;
+    area.value = 'lounge';
+    area.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(el.config.zones[0].areaId).toBe('lounge');
+
+    el._setupStep = 'floorplan';
+    await el.updateComplete;
+    const planEditor = el.shadowRoot.querySelector('spatial-plan-editor') as HTMLElement;
+    planEditor.dispatchEvent(new CustomEvent('spatial-room-selected', {
+      detail: { roomId: 'survey:living' }, bubbles: true, composed: true,
+    }));
+    await el.updateComplete;
+    expect(el._setupStep).toBe('rooms');
+    expect(el._selectedRoomId).toBe('survey:living');
   });
 
   it('undoes and redoes editor changes', async () => {

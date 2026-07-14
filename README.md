@@ -37,7 +37,7 @@ Minimum Home Assistant: **2024.3.0**.
 
 The visual editor is the recommended configuration surface.
 
-1. **Structure**: start with a measured rectangle or draw walls from scratch. Drag shared corners to adjust the plan.
+1. **Structure**: start with a dimensioned rectangle or draw walls from scratch. Drag shared corners to adjust the plan.
 2. **Rooms**: every enclosed wall face becomes a room. Give it a name or connect it to a Home Assistant Area.
 3. **Openings**: select a wall, then add and size doors or windows. Set the apartment's north direction.
 4. **Furniture**: add built-in objects, drag them into place, then adjust X/Y/Z, rotation, and scale.
@@ -163,9 +163,9 @@ Set `modelUrl` on a spatial object to use a custom `.glb` or `.gltf` asset:
 
 The loader normalizes the model's longest axis to one metre before applying object scale. Use models you are licensed to redistribute and host them locally when possible.
 
-### Surveyed Architecture
+### Imported Architecture
 
-For imported or professionally measured homes, `spatial.shell` stores the finished floor polygons, centerline wall runs, wall thickness, room polygons, and measured doors and windows directly. The runtime and editor use this exact shell instead of trying to infer architecture from rendered mesh faces. Surveyed walls are intentionally locked in the visual editor; furniture and devices remain fully editable.
+For imported or professionally dimensioned homes, `spatial.shell` stores finished floor polygons, centerline wall runs, wall thickness, room polygons, doors, and windows directly. The runtime and editor use this exact shell instead of trying to infer architecture from rendered mesh faces. Doors and windows can be selected, repositioned, resized, added, or removed in the visual editor while the imported floor and room geometry remains exact.
 
 The shell is portable and contains no dependency on the original SketchUp or GLB file.
 

@@ -3,10 +3,17 @@ import { customElement, property, state } from 'lit/decorators.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import * as SunCalc from 'suncalc';
 import { wallIdFor, type EntityConfig, type OpeningConfig, type SiteConfig, type SpatialDimensions, type SpatialFloorFinish, type SpatialPlan, type SpatialShellConfig, type SpatialShellOpening, type SpatialShellWall, type WallConfig, type ZoneConfig } from '../core/config';
 import type { HassLike } from '../core/ha-types';
 import { spatialAsset, spatialAssetFinish } from '../core/spatial-assets';
+import { assignShellOpenings, shellSegments } from '../core/spatial-shell';
+import { resolveSpatialEntityState, resolveSpatialEnvironment, type SpatialEffectKind, type SpatialEnvironment, type SpatialLightingMode } from '../core/spatial-state';
 
 export interface SpatialPoint {
   x: number;
@@ -59,9 +66,73 @@ interface CameraTween {
   toTarget: THREE.Vector3;
 }
 
+interface SmoothWallPathSegment {
+  start: THREE.Vector2;
+  end: THREE.Vector2;
+  tangent: THREE.Vector2;
+  length: number;
+  startDistance: number;
+  endDistance: number;
+  thickness: number;
+}
+
+interface SmoothWallPath {
+  wall: SpatialShellWall;
+  segments: SmoothWallPathSegment[];
+  knots: number[];
+  totalLength: number;
+}
+
+interface SmoothWallOpening {
+  opening: SpatialShellOpening;
+  center: number;
+  from: number;
+  to: number;
+}
+
+interface SmoothWallSample {
+  point: THREE.Vector2;
+  tangent: THREE.Vector2;
+  normal: THREE.Vector2;
+  thickness: number;
+}
+
 const WALL_DEPTH = 0.09;
 const FLOOR_HEIGHT = 0.06;
 const OVERVIEW_ZOOM_OUT_MARGIN = 1.16;
+const ARCHITECTURAL_WALL = 0xd4dad8;
+const WINDOW_GLASS = 0x9ebfc4;
+const GRAIN_SHADER = {
+  uniforms: {
+    tDiffuse: { value: null },
+    time: { value: 0 },
+    amount: { value: 0.011 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float time;
+    uniform float amount;
+    varying vec2 vUv;
+    float noise(vec2 point) {
+      return fract(sin(dot(point, vec2(12.9898, 78.233)) + time * 0.71) * 43758.5453);
+    }
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+      float luminance = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+      float grain = noise(gl_FragCoord.xy) - 0.5;
+      float strength = amount * mix(1.15, 0.55, luminance);
+      color.rgb += grain * strength;
+      gl_FragColor = color;
+    }
+  `,
+};
 
 /** Shared generated 3D home surface used by both the editor and runtime. */
 @customElement('spatial-preview')
@@ -82,10 +153,15 @@ export class SpatialPreview extends LitElement {
   @property({ type: Boolean }) hideWalls = false;
   @property({ type: Number }) latitude = 0;
   @property({ type: Number }) longitude = 0;
+  @property() weatherEntity = '';
+  @property() illuminanceEntity = '';
+  @property() spatialLightingMode: SpatialLightingMode = 'realistic';
   @state() private _error = '';
   @state() private _loadingModel = false;
 
   private _renderer?: THREE.WebGLRenderer;
+  private _composer?: EffectComposer;
+  private _grainPass?: ShaderPass;
   private _scene?: THREE.Scene;
   private _camera?: THREE.PerspectiveCamera;
   private _controls?: OrbitControls;
@@ -95,23 +171,40 @@ export class SpatialPreview extends LitElement {
   private _objectLoadGeneration = 0;
   private _cameraTween?: CameraTween;
   private _sun?: THREE.DirectionalLight;
+  private _sky?: THREE.HemisphereLight;
+  private _fill?: THREE.DirectionalLight;
+  private _warmBounce?: THREE.RectAreaLight;
   private _importedModel?: THREE.Group;
   private _activeShell: SpatialShellConfig | null = null;
   private _overviewBounds?: THREE.Box3;
   private _overviewResetTimer?: number;
   private _modelRadius = 7;
   private _pointerStart?: THREE.Vector2;
+  private _environment?: SpatialEnvironment;
+  private _effectMeshes: THREE.Mesh[] = [];
+  private _prefersReducedMotion = false;
   private readonly _raycaster = new THREE.Raycaster();
   private readonly _pointer = new THREE.Vector2();
 
+  /** Latest resolved scene environment, exposed for editor diagnostics and tests. */
+  public get environment(): SpatialEnvironment | undefined {
+    return this._environment;
+  }
+
   static styles = css`
-    :host { display: block; color: #eef2f3; container-type: inline-size; }
+    :host {
+      display: block;
+      color: #f1f4f4;
+      container-type: inline-size;
+      --spatial-accent: #a9d2d8;
+      --spatial-muted: rgba(241, 244, 244, 0.55);
+    }
     .viewport {
       position: relative;
       box-sizing: border-box;
       width: 100%;
       min-height: 360px;
-      aspect-ratio: 16 / 10;
+      aspect-ratio: var(--spatial-aspect, 16 / 10);
       overflow: hidden;
       border: 0;
       background: transparent;
@@ -119,49 +212,70 @@ export class SpatialPreview extends LitElement {
     canvas { display: block; width: 100%; height: 100%; touch-action: none; }
     button {
       appearance: none;
-      border: 1px solid rgba(255, 255, 255, 0.11);
-      color: #eef2f3;
-      background: rgba(12, 17, 19, 0.76);
+      border: 0;
+      color: inherit;
+      background: transparent;
       font: inherit;
       cursor: pointer;
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
-      transition: color 160ms ease-out, background-color 160ms ease-out, border-color 160ms ease-out, transform 160ms ease-out;
+      transition: color 180ms cubic-bezier(0.22, 1, 0.36, 1), transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
     }
-    button:hover { border-color: rgba(255, 255, 255, 0.22); }
-    button:active { transform: scale(0.97); }
+    button:hover { color: #fff; }
+    button:active { transform: translateY(1px); }
     button:focus-visible {
       outline: 2px solid #d8e5e7;
       outline-offset: 2px;
     }
+    .room-navigation {
+      display: flex;
+      align-items: stretch;
+      gap: 14px;
+      width: 100%;
+      min-width: 0;
+      margin-bottom: 4px;
+    }
+    .room-back {
+      display: grid;
+      flex: 0 0 48px;
+      width: 48px;
+      height: 48px;
+      place-items: center;
+      padding: 0;
+      color: #f8fbfb;
+    }
+    .room-back ha-icon { --mdc-icon-size: 24px; }
     .room-rail {
       display: flex;
       box-sizing: border-box;
-      width: 100%;
-      gap: 5px;
-      margin-bottom: 8px;
+      flex: 1 1 auto;
+      min-width: 0;
+      gap: 24px;
+      margin-bottom: 4px;
       padding: 0;
       overflow-x: auto;
       border: 0;
       background: transparent;
       scrollbar-width: none;
+      scroll-snap-type: x proximity;
     }
     .room-rail::-webkit-scrollbar { display: none; }
     .room-rail button {
       flex: 0 0 auto;
-      min-height: 38px;
-      padding: 0 14px;
+      min-height: 48px;
+      padding: 2px 0 9px;
       border: 0;
-      border-radius: 6px;
-      color: rgba(238, 242, 243, 0.65);
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      color: var(--spatial-muted);
       background: transparent;
-      font-size: 13px;
-      font-weight: 610;
+      font-size: 17px;
+      font-weight: 470;
+      line-height: 1;
       white-space: nowrap;
+      scroll-snap-align: start;
     }
     .room-rail button[aria-pressed='true'] {
-      color: #101617;
-      background: #c7d4d7;
+      color: #f8fbfb;
+      border-bottom-color: var(--spatial-accent);
     }
     .entity-shortcuts { position: relative; height: 0; overflow: visible; }
     .entity-shortcuts button {
@@ -187,13 +301,20 @@ export class SpatialPreview extends LitElement {
       display: grid;
       place-items: center;
       padding: 24px;
-      color: #c7d0d4;
-      text-align: center;
+      justify-items: start;
+      align-content: end;
+      color: #d4dcde;
+      text-align: left;
       line-height: 1.45;
+      background: #0c1112;
+      font-size: 16px;
     }
+    .error { color: #fff; background: #9d2c38; }
     @container (max-width: 600px) {
-      .viewport { min-height: 0; aspect-ratio: 4 / 5; }
-      .room-rail button { min-height: 44px; padding: 0 13px; font-size: 14px; }
+      .viewport { min-height: 0; aspect-ratio: var(--spatial-aspect-mobile, 4 / 5); }
+      .room-navigation { gap: 8px; }
+      .room-rail { gap: 28px; }
+      .room-rail button { min-height: 52px; padding: 2px 0 10px; font-size: 19px; }
     }
     @media (prefers-reduced-motion: reduce) {
       button { transition: none; }
@@ -204,6 +325,7 @@ export class SpatialPreview extends LitElement {
     const canvas = this.renderRoot.querySelector('canvas');
     if (!(canvas instanceof HTMLCanvasElement)) return;
     try {
+      this._prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
       this._renderer = new THREE.WebGLRenderer({
         canvas,
         antialias: true,
@@ -215,7 +337,7 @@ export class SpatialPreview extends LitElement {
       this._renderer.setClearColor(0x000000, 0);
       this._renderer.outputColorSpace = THREE.SRGBColorSpace;
       this._renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      this._renderer.toneMappingExposure = 0.98;
+      this._renderer.toneMappingExposure = 1.04;
       this._renderer.localClippingEnabled = true;
       this._renderer.shadowMap.enabled = true;
       this._renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -240,11 +362,19 @@ export class SpatialPreview extends LitElement {
       });
       this._controls.addEventListener('end', this._scheduleOverviewReset);
 
+      this._composer = new EffectComposer(this._renderer);
+      this._composer.addPass(new RenderPass(this._scene, this._camera));
+      this._grainPass = new ShaderPass(GRAIN_SHADER);
+      this._composer.addPass(this._grainPass);
+      this._composer.addPass(new OutputPass());
+
       canvas.addEventListener('pointerdown', this._onPointerDown);
       canvas.addEventListener('pointerup', this._onPointerUp);
 
-      this._scene.add(new THREE.HemisphereLight(0xe7eff1, 0x232b2e, 2.15));
-      this._sun = new THREE.DirectionalLight(0xfff3d8, 2.6);
+      RectAreaLightUniformsLib.init();
+      this._sky = new THREE.HemisphereLight(0xc7d8df, 0x0b0e10, 0);
+      this._scene.add(this._sky);
+      this._sun = new THREE.DirectionalLight(0xffedcf, 0);
       this._sun.castShadow = true;
       const shadowSize = this.clientWidth < 600 ? 1024 : 2048;
       this._sun.shadow.mapSize.set(shadowSize, shadowSize);
@@ -253,11 +383,17 @@ export class SpatialPreview extends LitElement {
       this._sun.shadow.camera.top = 8;
       this._sun.shadow.camera.bottom = -8;
       this._sun.shadow.bias = -0.00035;
+      this._sun.shadow.normalBias = 0.018;
+      this._sun.shadow.radius = 2.4;
       this._scene.add(this._sun);
+      this._fill = new THREE.DirectionalLight(0x9ebac4, 0);
+      this._fill.position.set(7, 6, -9);
+      this._scene.add(this._fill);
+      this._warmBounce = new THREE.RectAreaLight(0xffd2a0, 0, 11, 9);
+      this._warmBounce.position.set(-1.5, 5.5, 1.2);
+      this._warmBounce.lookAt(0, 0, 0);
+      this._scene.add(this._warmBounce);
       this._updateSun();
-      const fill = new THREE.DirectionalLight(0x86bbc5, 0.72);
-      fill.position.set(8, 4, -6);
-      this._scene.add(fill);
 
       this._observer = new ResizeObserver(() => this._resize());
       this._observer.observe(this);
@@ -276,32 +412,135 @@ export class SpatialPreview extends LitElement {
       this._buildModel();
     }
     if (changed.has('modelUrl') && this._scene) void this._loadModel();
-    if (changed.has('site') || changed.has('latitude') || changed.has('longitude')) this._updateSun();
+    if (changed.has('site') || changed.has('latitude') || changed.has('longitude') || changed.has('weatherEntity') || changed.has('illuminanceEntity') || changed.has('spatialLightingMode')) this._updateSun();
     if (changed.has('focusedZoneId') && this._scene) {
       this._applyFocus();
       this._moveCameraTo(this.focusedZoneId);
     }
     if (changed.has('hideWalls') && this._scene) this._applyWallCutaway();
-    if (changed.has('hass')) this._updateEntityStateVisuals();
+    if (changed.has('hass')) {
+      this._updateEntityStateVisuals();
+      this._updateSun();
+    }
   }
 
   private _entityIsActive(entityId: string): boolean {
-    const value = this.hass?.states?.[entityId]?.state;
-    return Boolean(value && !['off', 'closed', 'unavailable', 'unknown', 'idle', 'standby', 'not_home'].includes(value));
+    const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entityId);
+    return resolved.activity === 'active' || resolved.activity === 'attention';
+  }
+
+  private _entityLightColor(entityId: string): THREE.Color {
+    const attributes = resolveSpatialEntityState(this.hass?.states ?? {}, entityId).state?.attributes ?? {};
+    const rgb = attributes.rgb_color;
+    if (Array.isArray(rgb) && rgb.length >= 3) return new THREE.Color(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
+    const temperature = Number(attributes.color_temp_kelvin);
+    if (Number.isFinite(temperature) && temperature >= 4000) return new THREE.Color(0xcfe8ff);
+    return new THREE.Color(0xffd7a0);
+  }
+
+  private _entityLightIntensity(entityId: string): number {
+    if (!this._entityIsActive(entityId)) return 0;
+    const brightness = Number(resolveSpatialEntityState(this.hass?.states ?? {}, entityId).state?.attributes?.brightness);
+    const level = Number.isFinite(brightness) ? Math.max(0.2, brightness / 255) : 0.72;
+    return 18 * level;
+  }
+
+  private _isConfiguredGroupWithPlacedChildren(entityId: string): boolean {
+    const state = this.hass?.states?.[entityId];
+    const members = state?.attributes?.entity_id;
+    if (!Array.isArray(members)) return false;
+    const configured = new Set(this.entities.map((entity) => entity.entity));
+    return members.some((member: string) => configured.has(member));
   }
 
   private _updateEntityStateVisuals(): void {
     this._model?.traverse((node) => {
-      if (!(node instanceof THREE.Mesh) || !node.userData.entityId) return;
-      const active = this._entityIsActive(node.userData.entityId as string);
+      if (!node.userData.entityId) return;
+      const entityId = node.userData.entityId as string;
+      const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entityId);
+      const active = resolved.activity === 'active' || resolved.activity === 'attention';
+      if (node instanceof THREE.PointLight && node.userData.entityLight) {
+        node.color.copy(this._entityLightColor(entityId));
+        node.intensity = this._entityLightIntensity(entityId);
+        return;
+      }
+      if (!(node instanceof THREE.Mesh)) return;
       const materials = Array.isArray(node.material) ? node.material : [node.material];
       materials.forEach((material) => {
         if (!(material instanceof THREE.MeshStandardMaterial)) return;
-        material.emissiveIntensity = active ? 1.15 : 0.18;
-        material.opacity = active ? 1 : 0.72;
-        material.transparent = !active;
+        if (node.userData.entityEffect) {
+          node.visible = active;
+          material.opacity = active ? Number(node.userData.effectOpacity ?? 0.42) : 0;
+          material.emissiveIntensity = active ? 1.4 : 0;
+          return;
+        }
+        if (node.userData.stateSurface) {
+          const powered = resolved.activity !== 'off' && resolved.activity !== 'unavailable';
+          material.color.setHex(powered ? 0x385b64 : 0x090c0d);
+          material.emissive.setHex(powered ? 0x1d6476 : 0x000000);
+          material.emissiveIntensity = powered ? 1.65 : 0;
+          return;
+        }
+        if (node.userData.entityMarker) {
+          const unavailable = resolved.activity === 'unavailable';
+          material.color.setHex(unavailable ? 0x596164 : active ? 0xb8e2e8 : 0x789095);
+          material.emissive.setHex(active ? 0x315f68 : 0x081113);
+          material.emissiveIntensity = active ? 1.35 : 0.2;
+          material.opacity = unavailable ? 0.18 : active ? 1 : 0.42;
+          material.transparent = material.opacity < 1;
+        }
       });
     });
+    this._updateSun();
+  }
+
+  private _effectColor(kind: SpatialEffectKind): number {
+    if (kind === 'light') return 0xffd69a;
+    if (kind === 'media') return 0x76d7e4;
+    if (kind === 'air') return 0x91c9e8;
+    if (kind === 'vacuum') return 0xb8dfc1;
+    if (kind === 'security') return 0xe3a29d;
+    if (kind === 'presence') return 0xd9c28f;
+    return 0x8db8c1;
+  }
+
+  private _createEntityVisual(entityId: string, position: THREE.Vector3, zoneId?: string, visible = true): THREE.Group {
+    const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entityId);
+    const color = this._effectColor(resolved.effect);
+    const root = new THREE.Group();
+    root.position.copy(position);
+    root.userData.entityId = entityId;
+    root.userData.zoneId = zoneId;
+    root.visible = visible;
+    const marker = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.055, 0.07, 0.075, 20),
+      new THREE.MeshStandardMaterial({ color, roughness: 0.32, emissive: color, emissiveIntensity: 0.2, transparent: true, opacity: 0.42 }),
+    );
+    marker.userData.entityId = entityId;
+    marker.userData.entityMarker = true;
+    marker.userData.zoneId = zoneId;
+    marker.castShadow = true;
+    root.add(marker);
+    if (resolved.effect !== 'none') {
+      const ringCount = resolved.effect === 'media' || resolved.effect === 'air' ? 3 : 2;
+      for (let index = 0; index < ringCount; index += 1) {
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(0.11 + index * 0.055, 0.008, 8, 40, resolved.effect === 'air' ? Math.PI * 1.45 : Math.PI * 2),
+          new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.4, transparent: true, opacity: 0.34, depthWrite: false }),
+        );
+        ring.rotation.x = Math.PI / 2;
+        if (resolved.effect === 'air') ring.rotation.z = index * 0.7;
+        ring.userData.entityId = entityId;
+        ring.userData.entityEffect = true;
+        ring.userData.effectKind = resolved.effect;
+        ring.userData.effectIndex = index;
+        ring.userData.effectOpacity = 0.34 - index * 0.055;
+        ring.userData.zoneId = zoneId;
+        root.add(ring);
+        this._effectMeshes.push(ring);
+      }
+    }
+    return root;
   }
 
   disconnectedCallback(): void {
@@ -314,10 +553,12 @@ export class SpatialPreview extends LitElement {
     this._clearOverviewReset();
     this._controls?.dispose();
     this._disposeModel();
+    this._composer?.dispose();
     this._renderer?.dispose();
   }
 
   private _disposeModel(): void {
+    this._effectMeshes = [];
     if (!this._model) return;
     this._model.traverse((node) => {
       if (!(node instanceof THREE.Mesh)) return;
@@ -516,6 +757,7 @@ export class SpatialPreview extends LitElement {
         const longest = Math.max(size.x, size.y, size.z, 0.001);
         model.position.set(-center.x, -box.min.y, -center.z);
         model.scale.setScalar(1 / longest);
+        this._solidifyObject(model);
         model.traverse((node) => {
           if (!(node instanceof THREE.Mesh)) return;
           node.castShadow = true;
@@ -538,7 +780,7 @@ export class SpatialPreview extends LitElement {
     if (this._importedModel) group.add(this._importedModel);
     if (activeShell && !usesImportedModel) group.add(this._createSurveyShell(activeShell));
     const wallMaterial = new THREE.MeshStandardMaterial({
-      color: 0xd6dcdd,
+      color: ARCHITECTURAL_WALL,
       roughness: 0.87,
       metalness: 0,
       clippingPlanes: [new THREE.Plane(new THREE.Vector3(0, -1, 0), 1.32)],
@@ -642,6 +884,7 @@ export class SpatialPreview extends LitElement {
       group.add(object);
     });
 
+    const objectBoundEntities = new Set(this.plan?.objects.flatMap((item) => item.entityId ? [item.entityId] : []) ?? []);
     if (this.plan) {
       const center = this._spatialCenter();
       this.plan.objects.forEach((item) => {
@@ -661,30 +904,52 @@ export class SpatialPreview extends LitElement {
           node.userData.entityId = item.entityId;
         });
         group.add(object);
+        if (item.entityId) {
+          const visual = this._createEntityVisual(
+            item.entityId,
+            new THREE.Vector3(object.position.x, Math.max(0.12, item.position.y + 0.12), object.position.z),
+            item.zoneId,
+          );
+          group.add(visual);
+        }
+        if (item.entityId?.startsWith('light.')) {
+          const light = new THREE.PointLight(0xffd7a0, 0, 4.2, 1.65);
+          light.position.set(object.position.x, Math.max(1.55, item.position.y + 0.48), object.position.z);
+          light.userData.entityId = item.entityId;
+          light.userData.entityLight = true;
+          light.userData.zoneId = item.zoneId;
+          group.add(light);
+        }
       });
     }
 
     this.entities.forEach((entity) => {
-      const marker = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.055, 0.07, 0.075, 20),
-        new THREE.MeshStandardMaterial({ color: entity.entity.startsWith('light.') ? 0xe6c982 : 0x8db8c1, roughness: 0.3, emissive: entity.entity.startsWith('light.') ? 0x4b3914 : 0x183237 }),
-      );
       const center = this._spatialCenter();
-      marker.position.set(
+      const position = new THREE.Vector3(
         entity.spatial ? entity.spatial.position.x - center.x : (entity.x - 50) * this.dimensions.width / 100,
         entity.spatial ? entity.spatial.position.y : 0.16,
         entity.spatial ? entity.spatial.position.z - center.y : (entity.y - 50) * this.dimensions.width / this.dimensions.aspectRatio / 100,
       );
-      marker.rotation.set(
-        THREE.MathUtils.degToRad(entity.spatial?.rotation.x ?? 0),
-        THREE.MathUtils.degToRad(entity.spatial?.rotation.y ?? 0),
-        THREE.MathUtils.degToRad(entity.spatial?.rotation.z ?? 0),
-      );
-      marker.visible = entity.spatial?.visible ?? true;
-      marker.userData.zoneId = entity.zoneId;
-      marker.userData.entityId = entity.entity;
-      marker.castShadow = true;
-      group.add(marker);
+      if (!objectBoundEntities.has(entity.entity)) {
+        const visual = this._createEntityVisual(entity.entity, position, entity.zoneId, entity.spatial?.visible ?? true);
+        visual.rotation.set(
+          THREE.MathUtils.degToRad(entity.spatial?.rotation.x ?? 0),
+          THREE.MathUtils.degToRad(entity.spatial?.rotation.y ?? 0),
+          THREE.MathUtils.degToRad(entity.spatial?.rotation.z ?? 0),
+        );
+        group.add(visual);
+      }
+      if ((entity.entity.startsWith('light.') || entity.light)
+        && !objectBoundEntities.has(entity.entity)
+        && !this._isConfiguredGroupWithPlacedChildren(entity.entity)) {
+        const light = new THREE.PointLight(0xffd7a0, 0, 4, 1.65);
+        light.position.copy(position);
+        light.position.y = Math.max(1.55, light.position.y);
+        light.userData.zoneId = entity.zoneId;
+        light.userData.entityId = entity.entity;
+        light.userData.entityLight = true;
+        group.add(light);
+      }
     });
 
     group.updateMatrixWorld(true);
@@ -693,6 +958,7 @@ export class SpatialPreview extends LitElement {
       this._overviewBounds = contentBounds.clone();
       const contentSize = contentBounds.getSize(new THREE.Vector3());
       this._modelRadius = Math.max(1, Math.hypot(contentSize.x, contentSize.z) / 2);
+      this._fitSunShadow(contentBounds);
     }
 
     this._model = group;
@@ -746,7 +1012,7 @@ export class SpatialPreview extends LitElement {
       const walls = new THREE.Mesh(
         wallGeometry,
         new THREE.MeshStandardMaterial({
-          color: 0xd7dcdb,
+          color: ARCHITECTURAL_WALL,
           roughness: 0.9,
           clippingPlanes: [cutawayPlane],
           clipShadows: true,
@@ -758,7 +1024,6 @@ export class SpatialPreview extends LitElement {
     }
 
     const baseFloors = [shell.floor, ...(shell.floors ?? [])].filter((floorPoints) => floorPoints.length >= 3);
-    const hasBaseFloor = baseFloors.length > 0;
     baseFloors.forEach((floorPoints) => {
       const floorShape = new THREE.Shape();
       const floorStart = project(floorPoints[0]);
@@ -799,10 +1064,8 @@ export class SpatialPreview extends LitElement {
         geometry.rotateX(Math.PI / 2);
         const zone = this.zones.find((candidate) => candidate.id === room.zoneId);
         const material = this._roomFloorMaterial(room.finish, room.color, zone?.floorColor);
-        material.transparent = hasBaseFloor;
-        material.opacity = hasBaseFloor ? 0.001 : 1;
-        material.depthWrite = !hasBaseFloor;
         const floor = new THREE.Mesh(geometry, material);
+        floor.position.y = 0.008;
         floor.receiveShadow = true;
         floor.userData.zoneId = room.zoneId;
         floor.userData.roomFloor = true;
@@ -818,7 +1081,7 @@ export class SpatialPreview extends LitElement {
       const top = opening.bottom + opening.height;
       if (opening.kind === 'door' && top < this.dimensions.wallHeight) {
         const lintelHeight = this.dimensions.wallHeight - top;
-        const lintel = this._box(opening.width, lintelHeight, opening.depth, 0xd7dcdb, top + lintelHeight / 2);
+        const lintel = this._box(opening.width, lintelHeight, opening.depth, ARCHITECTURAL_WALL, top + lintelHeight / 2);
         lintel.position.x = x;
         lintel.position.z = z;
         lintel.rotation.y = -angle;
@@ -829,14 +1092,15 @@ export class SpatialPreview extends LitElement {
       }
       if (opening.kind === 'window') {
         const visibleHeight = Math.max(0.2, Math.min(opening.height, 1.28 - opening.bottom));
-        const glass = this._box(opening.width * 0.92, visibleHeight, 0.025, 0x8db9c3, opening.bottom + visibleHeight / 2);
+        const glass = this._box(opening.width * 0.92, visibleHeight, 0.025, WINDOW_GLASS, opening.bottom + visibleHeight / 2);
         glass.position.x = x;
         glass.position.z = z;
         glass.rotation.y = -angle;
         const glassMaterial = glass.material as THREE.MeshStandardMaterial;
         glassMaterial.transparent = true;
-        glassMaterial.opacity = 0.62;
-        glassMaterial.emissive.setHex(0x17343a);
+        glassMaterial.opacity = 0.46;
+        glassMaterial.emissive.setHex(0x24383b);
+        glassMaterial.emissiveIntensity = 0.5;
         glassMaterial.clippingPlanes = [cutawayPlane];
         glassMaterial.clipShadows = true;
         result.add(glass);
@@ -859,103 +1123,30 @@ export class SpatialPreview extends LitElement {
     const result = new THREE.Group();
     const sectionHeight = this.dimensions.wallHeight;
     const wallMaterial = () => new THREE.MeshStandardMaterial({
-      color: 0xd7dcdb,
-      roughness: 0.9,
+      color: ARCHITECTURAL_WALL,
+      roughness: 0.88,
     });
-    const angleDistance = (left: number, right: number): number => {
-      const delta = Math.abs(((left - right + 90) % 180 + 180) % 180 - 90);
-      return Math.min(delta, 180 - delta);
-    };
-
-    shell.walls?.forEach((wall) => {
-      const defaultThickness = wall.thickness ?? 0.3;
-      if (wall.smooth) {
-        const ribbon = this._createSurveyWallRibbon(wall.points, defaultThickness, sectionHeight, centerX, centerZ);
-        const anchor = wall.points.reduce((total, [x, z]) => total.add(new THREE.Vector2(x - centerX, z - centerZ)), new THREE.Vector2()).divideScalar(wall.points.length);
-        ribbon.traverse((node) => {
-          if (node instanceof THREE.Mesh) node.userData.architecturalWall = true;
-        });
-        this._setObjectZoneIds(ribbon, wall.zoneIds ?? [], anchor);
-        result.add(ribbon);
-        const cutawayRibbon = this._createSurveyWallRibbon(
-          wall.points,
-          defaultThickness,
-          sectionHeight * 0.1,
-          centerX,
-          centerZ,
-        );
-        cutawayRibbon.visible = false;
-        cutawayRibbon.traverse((node) => {
-          if (!(node instanceof THREE.Mesh)) return;
-          node.userData.cutawayReplacement = true;
-          node.visible = false;
-        });
-        this._setObjectZoneIds(cutawayRibbon, wall.zoneIds ?? [], anchor);
-        result.add(cutawayRibbon);
-        shell.openings.filter((opening) => opening.kind === 'window').forEach((opening) => {
-          const angle = THREE.MathUtils.degToRad(opening.rotation);
-          const matchingSegment = wall.points.slice(0, -1).some(([startX, startZ], index) => {
-            const [endX, endZ] = wall.points[index + 1];
-            const dx = endX - startX;
-            const dz = endZ - startZ;
-            const length = Math.hypot(dx, dz);
-            const ux = dx / length;
-            const uz = dz / length;
-            const relativeX = opening.x - startX;
-            const relativeZ = opening.z - startZ;
-            const along = relativeX * ux + relativeZ * uz;
-            const distance = Math.abs(relativeX * -uz + relativeZ * ux);
-            const segmentAngle = THREE.MathUtils.radToDeg(Math.atan2(dz, dx));
-            return along >= -0.06 && along <= length + 0.06 && distance <= defaultThickness && angleDistance(segmentAngle, opening.rotation) <= 18;
-          });
-          if (!matchingSegment) return;
-          const visibleTop = Math.min(opening.bottom + opening.height, sectionHeight - 0.01);
-          const visibleHeight = Math.max(0.02, visibleTop - opening.bottom);
-          const recess = this._box(opening.width, visibleHeight, defaultThickness * 1.08, 0x20292b, opening.bottom + visibleHeight / 2);
-          recess.position.x = opening.x - centerX;
-          recess.position.z = opening.z - centerZ;
-          recess.rotation.y = -angle;
-          recess.userData.wallOpening = true;
-          this._setObjectZoneIds(recess, wall.zoneIds ?? [], anchor);
-          result.add(recess);
-          const glass = this._box(opening.width * 0.88, visibleHeight * 0.94, 0.025, 0x658f99, opening.bottom + visibleHeight / 2);
-          glass.position.x = opening.x - centerX;
-          glass.position.z = opening.z - centerZ;
-          glass.rotation.y = -angle;
-          const material = glass.material as THREE.MeshStandardMaterial;
-          material.emissive.setHex(0x112b30);
-          material.roughness = 0.2;
-          material.transparent = true;
-          material.opacity = 0.7;
-          glass.userData.wallOpening = true;
-          this._setObjectZoneIds(glass, wall.zoneIds ?? [], anchor);
-          result.add(glass);
-        });
-        return;
-      }
-      for (let index = 0; index < wall.points.length - 1; index += 1) {
-        const thickness = wall.segmentThicknesses?.[index] ?? defaultThickness;
-        const [startX, startZ] = wall.points[index];
-        const [endX, endZ] = wall.points[index + 1];
+    const assigned = assignShellOpenings(shell);
+    const segments = shellSegments(shell);
+    shell.walls?.filter((wall) => wall.smooth).forEach((wall) => {
+      result.add(this._createSmoothSurveyWall(
+        wall,
+        segments.filter((segment) => segment.wall.id === wall.id),
+        assigned.filter((item) => item.segment.wall.id === wall.id),
+        centerX,
+        centerZ,
+        sectionHeight,
+      ));
+    });
+    segments.filter((segment) => !segment.wall.smooth).forEach((segment) => {
+        const { wall, segmentIndex: index, thickness, length } = segment;
+        const [startX, startZ] = segment.start;
+        const [endX, endZ] = segment.end;
         const dx = endX - startX;
         const dz = endZ - startZ;
-        const length = Math.hypot(dx, dz);
-        if (length < 0.01) continue;
-        const ux = dx / length;
-        const uz = dz / length;
-        const segmentAngle = THREE.MathUtils.radToDeg(Math.atan2(dz, dx));
-        const openings = shell.openings.map((opening) => {
-          const relativeX = opening.x - startX;
-          const relativeZ = opening.z - startZ;
-          const along = relativeX * ux + relativeZ * uz;
-          const distance = Math.abs(relativeX * -uz + relativeZ * ux);
-          return { opening, along, distance };
-        }).filter(({ opening, along, distance }) => (
-          along >= -0.06
-          && along <= length + 0.06
-          && distance <= Math.max(thickness * 0.85, opening.depth * 0.65)
-          && angleDistance(segmentAngle, opening.rotation) <= 18
-        )).sort((left, right) => left.along - right.along);
+        const openings = assigned
+          .filter((item) => item.segment.id === segment.id)
+          .sort((left, right) => left.along - right.along);
 
         const segmentGroup = new THREE.Group();
         const addWallBox = (from: number, to: number, bottom = 0, height = sectionHeight): void => {
@@ -983,23 +1174,33 @@ export class SpatialPreview extends LitElement {
             const glass = new THREE.Mesh(
               new THREE.BoxGeometry(Math.max(0.04, to - from - 0.06), visibleHeight, 0.025),
               new THREE.MeshStandardMaterial({
-                color: 0x79a8b2,
-                emissive: 0x142f34,
+                color: WINDOW_GLASS,
+                emissive: 0x24383b,
+                emissiveIntensity: 0.5,
                 roughness: 0.18,
                 metalness: 0.08,
                 transparent: true,
-                opacity: 0.58,
+                opacity: 0.46,
               }),
             );
             glass.position.set(openingCenter, opening.bottom + visibleHeight / 2, 0);
             glass.userData.wallOpening = true;
             segmentGroup.add(glass);
+            const floorGlazing = opening.bottom <= 0.08;
             [-1, 1].forEach((side) => {
               const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.035, visibleHeight, thickness * 1.04), wallMaterial());
               jamb.position.set(openingCenter + side * (to - from - 0.035) / 2, opening.bottom + visibleHeight / 2, 0);
               jamb.userData.wallOpening = true;
               segmentGroup.add(jamb);
             });
+            if (floorGlazing) {
+              [opening.bottom + 0.025, opening.bottom + visibleHeight - 0.025].forEach((height) => {
+                const rail = new THREE.Mesh(new THREE.BoxGeometry(Math.max(0.04, to - from), 0.05, thickness * 1.04), wallMaterial());
+                rail.position.set(openingCenter, height, 0);
+                rail.userData.wallOpening = true;
+                segmentGroup.add(rail);
+              });
+            }
           } else {
             const panelHeight = Math.min(opening.height, sectionHeight - 0.01);
             const panel = new THREE.Mesh(
@@ -1061,49 +1262,326 @@ export class SpatialPreview extends LitElement {
           new THREE.Vector2(cutaway.position.x, cutaway.position.z),
         );
         result.add(cutaway);
-      }
     });
     return result;
   }
 
-  private _createSurveyWallRibbon(
-    points: [number, number][],
-    thickness: number,
+  private _createSmoothSurveyWall(
+    wall: SpatialShellWall,
+    wallSegments: ReturnType<typeof shellSegments>,
+    assigned: ReturnType<typeof assignShellOpenings>,
+    centerX: number,
+    centerZ: number,
+    sectionHeight: number,
+  ): THREE.Group {
+    const result = new THREE.Group();
+    const path = this._smoothWallPath(wall, wallSegments);
+    if (!path.segments.length || path.totalLength <= 0.01) return result;
+    const openings: SmoothWallOpening[] = assigned.map(({ opening, segment, along }) => {
+      const center = THREE.MathUtils.clamp(
+        (path.knots[segment.segmentIndex] ?? 0) + THREE.MathUtils.clamp(along, 0, segment.length),
+        0,
+        path.totalLength,
+      );
+      return {
+        opening,
+        center,
+        from: Math.max(0, center - opening.width / 2),
+        to: Math.min(path.totalLength, center + opening.width / 2),
+      };
+    }).filter(({ to, from }) => to - from > 0.02);
+
+    const wallGeometry = this._smoothWallGeometry(path, openings, sectionHeight, centerX, centerZ);
+    const fullWall = new THREE.Mesh(wallGeometry, new THREE.MeshStandardMaterial({
+      color: ARCHITECTURAL_WALL,
+      roughness: 0.88,
+      side: THREE.DoubleSide,
+    }));
+    fullWall.castShadow = true;
+    fullWall.receiveShadow = true;
+    fullWall.userData.architecturalWall = true;
+    fullWall.userData.smoothContinuous = true;
+    fullWall.userData.wallId = wall.id;
+    result.add(fullWall);
+
+    openings.forEach((candidate) => {
+      const { opening, from, to } = candidate;
+      const bottom = Math.max(0, opening.bottom);
+      const top = Math.min(sectionHeight - 0.01, opening.bottom + opening.height);
+      if (top - bottom <= 0.02) return;
+      const insertGeometry = this._smoothRibbonGeometry(
+        path,
+        from + 0.025,
+        to - 0.025,
+        bottom + 0.025,
+        top - 0.025,
+        opening.kind === 'window' ? 0.025 : 0.045,
+        centerX,
+        centerZ,
+      );
+      const insert = new THREE.Mesh(
+        insertGeometry,
+        opening.kind === 'window'
+          ? new THREE.MeshStandardMaterial({
+            color: WINDOW_GLASS,
+            emissive: 0x24383b,
+            emissiveIntensity: 0.5,
+            roughness: 0.18,
+            metalness: 0.08,
+            transparent: true,
+            opacity: 0.46,
+            side: THREE.DoubleSide,
+          })
+          : new THREE.MeshStandardMaterial({ color: 0x8f887d, roughness: 0.78, side: THREE.DoubleSide }),
+      );
+      insert.castShadow = opening.kind === 'door';
+      insert.receiveShadow = true;
+      insert.userData.wallOpening = true;
+      insert.userData.openingId = opening.id;
+      insert.userData.openingWidth = to - from;
+      insert.userData.smoothContinuous = true;
+      result.add(insert);
+    });
+
+    const cutawayHeight = sectionHeight * 0.1;
+    const cutawayOpenings = openings
+      .filter(({ opening }) => opening.kind === 'door')
+      .map((candidate) => ({
+        ...candidate,
+        opening: { ...candidate.opening, bottom: 0, height: cutawayHeight },
+      }));
+    const cutaway = new THREE.Mesh(
+      this._smoothWallGeometry(path, cutawayOpenings, cutawayHeight, centerX, centerZ),
+      new THREE.MeshStandardMaterial({ color: ARCHITECTURAL_WALL, roughness: 0.88, side: THREE.DoubleSide }),
+    );
+    cutaway.castShadow = true;
+    cutaway.receiveShadow = true;
+    cutaway.visible = false;
+    cutaway.userData.cutawayReplacement = true;
+    cutaway.userData.smoothContinuous = true;
+    cutaway.userData.wallId = `${wall.id}:cutaway`;
+    result.add(cutaway);
+
+    const zoneIds = [...new Set([...(wall.zoneIds ?? []), ...(wall.segmentZoneIds ?? []).flat()])];
+    const midpoint = this._smoothWallSample(path, path.totalLength / 2);
+    this._setObjectZoneIds(result, zoneIds, new THREE.Vector2(midpoint.point.x - centerX, midpoint.point.y - centerZ));
+    return result;
+  }
+
+  private _smoothWallPath(
+    wall: SpatialShellWall,
+    wallSegments: ReturnType<typeof shellSegments>,
+  ): SmoothWallPath {
+    let distance = 0;
+    const segments = wallSegments
+      .sort((left, right) => left.segmentIndex - right.segmentIndex)
+      .map((segment) => {
+        const start = new THREE.Vector2(segment.start[0], segment.start[1]);
+        const end = new THREE.Vector2(segment.end[0], segment.end[1]);
+        const tangent = end.clone().sub(start).normalize();
+        const pathSegment: SmoothWallPathSegment = {
+          start,
+          end,
+          tangent,
+          length: segment.length,
+          startDistance: distance,
+          endDistance: distance + segment.length,
+          thickness: segment.thickness,
+        };
+        distance += segment.length;
+        return pathSegment;
+      });
+    return {
+      wall,
+      segments,
+      knots: [0, ...segments.map((segment) => segment.endDistance)],
+      totalLength: distance,
+    };
+  }
+
+  private _smoothWallSample(path: SmoothWallPath, distance: number): SmoothWallSample {
+    const clamped = THREE.MathUtils.clamp(distance, 0, path.totalLength);
+    const index = Math.max(0, path.segments.findIndex((segment) => clamped <= segment.endDistance + 1e-6));
+    const segment = path.segments[index] ?? path.segments[path.segments.length - 1];
+    const local = segment.length > 0 ? (clamped - segment.startDistance) / segment.length : 0;
+    const point = segment.start.clone().lerp(segment.end, THREE.MathUtils.clamp(local, 0, 1));
+    const tangent = segment.tangent.clone();
+    const atStart = Math.abs(clamped - segment.startDistance) < 1e-5;
+    const atEnd = Math.abs(clamped - segment.endDistance) < 1e-5;
+    if (atStart && index > 0) tangent.add(path.segments[index - 1].tangent).normalize();
+    else if (atEnd && index < path.segments.length - 1) tangent.add(path.segments[index + 1].tangent).normalize();
+    return {
+      point,
+      tangent,
+      normal: new THREE.Vector2(-tangent.y, tangent.x),
+      thickness: segment.thickness,
+    };
+  }
+
+  private _smoothWallGeometry(
+    path: SmoothWallPath,
+    openings: SmoothWallOpening[],
     height: number,
     centerX: number,
     centerZ: number,
-  ): THREE.Mesh {
-    const half = thickness / 2;
-    const offsets = points.map(([x, z], index) => {
-      const previous = points[Math.max(0, index - 1)];
-      const next = points[Math.min(points.length - 1, index + 1)];
-      const previousDirection = new THREE.Vector2(x - previous[0], z - previous[1]).normalize();
-      const nextDirection = new THREE.Vector2(next[0] - x, next[1] - z).normalize();
-      if (index === 0) previousDirection.copy(nextDirection);
-      if (index === points.length - 1) nextDirection.copy(previousDirection);
-      const previousNormal = new THREE.Vector2(-previousDirection.y, previousDirection.x);
-      const nextNormal = new THREE.Vector2(-nextDirection.y, nextDirection.x);
-      const miter = previousNormal.clone().add(nextNormal).normalize();
-      const denominator = Math.max(0.3, Math.abs(miter.dot(nextNormal)));
-      return miter.multiplyScalar(Math.min(half / denominator, thickness));
+  ): THREE.BufferGeometry {
+    const breakpoints = this._uniqueDistances([
+      ...path.knots,
+      ...openings.flatMap(({ from, to }) => [from, to]),
+    ], path.totalLength);
+    const rangesAt = (distance: number): [number, number][] => {
+      const blocked = openings
+        .filter(({ from, to }) => distance > from + 1e-6 && distance < to - 1e-6)
+        .map(({ opening }) => [
+          THREE.MathUtils.clamp(opening.bottom, 0, height),
+          THREE.MathUtils.clamp(opening.bottom + opening.height, 0, height),
+        ] as [number, number])
+        .filter(([bottom, top]) => top - bottom > 0.001)
+        .sort((left, right) => left[0] - right[0]);
+      const merged: [number, number][] = [];
+      blocked.forEach(([bottom, top]) => {
+        const previous = merged[merged.length - 1];
+        if (previous && bottom <= previous[1] + 1e-6) previous[1] = Math.max(previous[1], top);
+        else merged.push([bottom, top]);
+      });
+      const solid: [number, number][] = [];
+      let cursor = 0;
+      merged.forEach(([bottom, top]) => {
+        if (bottom - cursor > 0.001) solid.push([cursor, bottom]);
+        cursor = Math.max(cursor, top);
+      });
+      if (height - cursor > 0.001) solid.push([cursor, height]);
+      return solid;
+    };
+    return this._buildSmoothPathGeometry(path, breakpoints, rangesAt, centerX, centerZ);
+  }
+
+  private _smoothRibbonGeometry(
+    path: SmoothWallPath,
+    from: number,
+    to: number,
+    bottom: number,
+    top: number,
+    depth: number,
+    centerX: number,
+    centerZ: number,
+  ): THREE.BufferGeometry {
+    const start = Math.min(from, to);
+    const end = Math.max(from, to);
+    const breakpoints = this._uniqueDistances([
+      start,
+      ...path.knots.filter((distance) => distance > start && distance < end),
+      end,
+    ], path.totalLength);
+    return this._buildSmoothPathGeometry(
+      path,
+      breakpoints,
+      () => top - bottom > 0.001 ? [[bottom, top]] : [],
+      centerX,
+      centerZ,
+      depth,
+    );
+  }
+
+  private _buildSmoothPathGeometry(
+    path: SmoothWallPath,
+    breakpoints: number[],
+    rangesAt: (distance: number) => [number, number][],
+    centerX: number,
+    centerZ: number,
+    depthOverride?: number,
+  ): THREE.BufferGeometry {
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const vertex = (sample: SmoothWallSample, y: number, side: number): THREE.Vector3 => {
+      const halfDepth = (depthOverride ?? sample.thickness) / 2;
+      return new THREE.Vector3(
+        sample.point.x - centerX + sample.normal.x * halfDepth * side,
+        y,
+        sample.point.y - centerZ + sample.normal.y * halfDepth * side,
+      );
+    };
+    const pushTriangle = (
+      a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3,
+      na: THREE.Vector3, nb: THREE.Vector3, nc: THREE.Vector3,
+    ): void => {
+      [a, b, c].forEach((point) => positions.push(point.x, point.y, point.z));
+      [na, nb, nc].forEach((normal) => normals.push(normal.x, normal.y, normal.z));
+    };
+    const quad = (
+      a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.Vector3,
+      na: THREE.Vector3, nb = na, nc = na, nd = na,
+    ): void => {
+      pushTriangle(a, b, c, na, nb, nc);
+      pushTriangle(a, c, d, na, nc, nd);
+    };
+    const solidAt = (ranges: [number, number][], y: number): boolean => ranges.some(([bottom, top]) => y > bottom + 1e-6 && y < top - 1e-6);
+    const intervalRanges: [number, number][][] = [];
+    for (let index = 0; index < breakpoints.length - 1; index += 1) {
+      const from = breakpoints[index];
+      const to = breakpoints[index + 1];
+      const ranges = rangesAt((from + to) / 2);
+      intervalRanges.push(ranges);
+      const start = this._smoothWallSample(path, from);
+      const end = this._smoothWallSample(path, to);
+      ranges.forEach(([bottom, top]) => {
+        const frontNormalStart = new THREE.Vector3(start.normal.x, 0, start.normal.y);
+        const frontNormalEnd = new THREE.Vector3(end.normal.x, 0, end.normal.y);
+        const backNormalStart = frontNormalStart.clone().negate();
+        const backNormalEnd = frontNormalEnd.clone().negate();
+        const sf0 = vertex(start, bottom, 1);
+        const sf1 = vertex(start, top, 1);
+        const ef0 = vertex(end, bottom, 1);
+        const ef1 = vertex(end, top, 1);
+        const sb0 = vertex(start, bottom, -1);
+        const sb1 = vertex(start, top, -1);
+        const eb0 = vertex(end, bottom, -1);
+        const eb1 = vertex(end, top, -1);
+        quad(sf0, ef0, ef1, sf1, frontNormalStart, frontNormalEnd, frontNormalEnd, frontNormalStart);
+        quad(eb0, sb0, sb1, eb1, backNormalEnd, backNormalStart, backNormalStart, backNormalEnd);
+        quad(sf1, ef1, eb1, sb1, new THREE.Vector3(0, 1, 0));
+        quad(sb0, eb0, ef0, sf0, new THREE.Vector3(0, -1, 0));
+      });
+    }
+
+    breakpoints.forEach((distance, index) => {
+      const left = index > 0 ? intervalRanges[index - 1] : [];
+      const right = index < intervalRanges.length ? intervalRanges[index] : [];
+      const verticalBreaks = [...new Set([
+        ...left.flat(),
+        ...right.flat(),
+      ])].sort((a, b) => a - b);
+      const sample = this._smoothWallSample(path, distance);
+      const front = (y: number) => vertex(sample, y, 1);
+      const back = (y: number) => vertex(sample, y, -1);
+      for (let yIndex = 0; yIndex < verticalBreaks.length - 1; yIndex += 1) {
+        const bottom = verticalBreaks[yIndex];
+        const top = verticalBreaks[yIndex + 1];
+        if (top - bottom <= 0.001) continue;
+        const mid = (bottom + top) / 2;
+        const leftSolid = solidAt(left, mid);
+        const rightSolid = solidAt(right, mid);
+        if (leftSolid === rightSolid) continue;
+        const capNormal = new THREE.Vector3(sample.tangent.x, 0, sample.tangent.y)
+          .multiplyScalar(leftSolid ? 1 : -1);
+        if (leftSolid) quad(front(bottom), front(top), back(top), back(bottom), capNormal);
+        else quad(back(bottom), back(top), front(top), front(bottom), capNormal);
+      }
     });
-    const outer = points.map(([x, z], index) => [x + offsets[index].x - centerX, z + offsets[index].y - centerZ] as [number, number]);
-    const inner = points.map(([x, z], index) => [x - offsets[index].x - centerX, z - offsets[index].y - centerZ] as [number, number]).reverse();
-    const contour = [...outer, ...inner];
-    const shape = new THREE.Shape();
-    shape.moveTo(contour[0][0], contour[0][1]);
-    contour.slice(1).forEach(([x, z]) => shape.lineTo(x, z));
-    shape.closePath();
-    const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
-    geometry.rotateX(Math.PI / 2);
-    geometry.translate(0, height, 0);
-    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
-      color: 0xd7dcdb,
-      roughness: 0.9,
-    }));
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    return mesh;
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    return geometry;
+  }
+
+  private _uniqueDistances(values: number[], totalLength: number): number[] {
+    return values
+      .map((value) => THREE.MathUtils.clamp(value, 0, totalLength))
+      .sort((left, right) => left - right)
+      .filter((value, index, sorted) => index === 0 || value - sorted[index - 1] > 1e-5);
   }
 
   private async _loadModel(): Promise<void> {
@@ -1117,6 +1595,7 @@ export class SpatialPreview extends LitElement {
     try {
       const gltf = await new GLTFLoader().loadAsync(this.modelUrl);
       const imported = gltf.scene;
+      this._solidifyObject(imported);
       imported.updateMatrixWorld(true);
       const initialBounds = new THREE.Box3().setFromObject(imported);
       const center = initialBounds.getCenter(new THREE.Vector3());
@@ -1157,65 +1636,42 @@ export class SpatialPreview extends LitElement {
     return new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.02 });
   }
 
+  private _solidifyObject(root: THREE.Object3D): void {
+    const replacements = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+    const solid = (source: THREE.Material): THREE.MeshStandardMaterial => {
+      const cached = replacements.get(source);
+      if (cached) return cached;
+      const standard = source instanceof THREE.MeshStandardMaterial ? source : undefined;
+      const colored = source as THREE.Material & { color?: THREE.Color };
+      const replacement = new THREE.MeshStandardMaterial({
+        color: colored.color?.clone() ?? new THREE.Color(0xaeb4b3),
+        emissive: standard?.emissive.clone() ?? new THREE.Color(0x000000),
+        emissiveIntensity: standard?.emissiveIntensity ?? 1,
+        opacity: source.opacity,
+        transparent: source.transparent,
+        side: source.side,
+        roughness: Math.max(0.68, standard?.roughness ?? 0.82),
+        metalness: Math.min(0.14, standard?.metalness ?? 0),
+        depthWrite: source.depthWrite,
+      });
+      replacement.name = source.name;
+      replacements.set(source, replacement);
+      return replacement;
+    };
+    root.traverse((node) => {
+      if (!(node instanceof THREE.Mesh)) return;
+      node.material = Array.isArray(node.material)
+        ? node.material.map(solid)
+        : solid(node.material);
+    });
+  }
+
   private _surveyFloorMaterial(): THREE.MeshStandardMaterial {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 512;
-    const context = canvas.getContext('2d');
-    if (context) {
-      context.fillStyle = '#8c795f';
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      const plankHeight = 32;
-      for (let row = 0; row < canvas.height / plankHeight; row += 1) {
-        const offset = row % 2 ? -96 : 0;
-        for (let x = offset; x < canvas.width; x += 128) {
-          const variation = ((row * 17 + x * 7) % 19) - 9;
-          context.fillStyle = `rgba(${variation > 0 ? 255 : 30}, ${variation > 0 ? 244 : 24}, ${variation > 0 ? 224 : 18}, ${Math.abs(variation) / 210})`;
-          context.fillRect(x + 1, row * plankHeight + 1, 126, plankHeight - 2);
-        }
-      }
-      context.strokeStyle = 'rgba(24, 20, 16, 0.16)';
-      context.lineWidth = 1;
-      for (let y = plankHeight; y < canvas.height; y += plankHeight) {
-        context.beginPath();
-        context.moveTo(0, y);
-        context.lineTo(canvas.width, y);
-        context.stroke();
-      }
-    }
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(2.4, 2.4);
-    return new THREE.MeshStandardMaterial({ map: texture, color: 0xc6b79f, roughness: 0.88, metalness: 0 });
+    return new THREE.MeshStandardMaterial({ color: 0x827568, roughness: 0.86, metalness: 0 });
   }
 
   private _tileFloorMaterial(color: number): THREE.MeshStandardMaterial {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 512;
-    const context = canvas.getContext('2d');
-    if (context) {
-      context.fillStyle = '#c7cdcb';
-      context.fillRect(0, 0, 512, 512);
-      context.strokeStyle = 'rgba(43, 54, 55, 0.18)';
-      context.lineWidth = 3;
-      for (let offset = 0; offset <= 512; offset += 128) {
-        context.beginPath();
-        context.moveTo(offset, 0);
-        context.lineTo(offset, 512);
-        context.moveTo(0, offset);
-        context.lineTo(512, offset);
-        context.stroke();
-      }
-    }
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(2.2, 2.2);
-    return new THREE.MeshStandardMaterial({ map: texture, color, roughness: 0.94, metalness: 0 });
+    return new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0 });
   }
 
   private _roomFloorMaterial(
@@ -1306,6 +1762,7 @@ export class SpatialPreview extends LitElement {
         new THREE.MeshStandardMaterial({ color: 0x16272b, emissive: 0x071417, emissiveIntensity: 0.5, roughness: 0.22 }),
       );
       display.position.set(0, screen.position.y, 0.019);
+      display.userData.stateSurface = true;
       group.add(screen, display);
     } else if (item.kind === 'bathtub') {
       const rimHeight = Math.max(0.46, height);
@@ -1493,15 +1950,42 @@ export class SpatialPreview extends LitElement {
     const latitude = this.site.latitude ?? this.latitude;
     const longitude = this.site.longitude ?? this.longitude;
     const solar = SunCalc.getPosition(new Date(), latitude, longitude);
-    const altitude = Math.max(0.04, solar.altitude);
-    const bearing = solar.azimuth + Math.PI + THREE.MathUtils.degToRad(this.site.north);
+    const environment = resolveSpatialEnvironment({
+      states: this.hass?.states ?? {},
+      entityIds: this.entities.map((entity) => entity.entity),
+      fallbackElevationRadians: solar.altitude,
+      fallbackAzimuthRadians: solar.azimuth,
+      weatherEntity: this.weatherEntity || undefined,
+      illuminanceEntity: this.illuminanceEntity || undefined,
+      mode: this.spatialLightingMode,
+    });
+    this._environment = environment;
+    const altitude = THREE.MathUtils.degToRad(Math.max(-6, environment.elevationDegrees));
+    const bearing = THREE.MathUtils.degToRad(environment.azimuthDegrees + this.site.north);
     const horizontal = Math.cos(altitude) * 13;
     this._sun.position.set(
       Math.sin(bearing) * horizontal,
       Math.max(0.7, Math.sin(altitude) * 13),
       -Math.cos(bearing) * horizontal,
     );
-    this._sun.intensity = solar.altitude > 0 ? 2.55 : 0.28;
+    this._sun.intensity = environment.sunIntensity;
+    if (this._sky) this._sky.intensity = environment.skyIntensity;
+    if (this._fill) this._fill.intensity = environment.fillIntensity;
+    if (this._warmBounce) this._warmBounce.intensity = environment.bounceIntensity;
+    if (this._renderer) this._renderer.toneMappingExposure = environment.exposure;
+  }
+
+  private _fitSunShadow(bounds: THREE.Box3): void {
+    if (!this._sun) return;
+    const size = bounds.getSize(new THREE.Vector3());
+    const radius = Math.max(4, Math.max(size.x, size.z) * 0.62);
+    this._sun.shadow.camera.left = -radius;
+    this._sun.shadow.camera.right = radius;
+    this._sun.shadow.camera.top = radius;
+    this._sun.shadow.camera.bottom = -radius;
+    this._sun.shadow.camera.near = 0.1;
+    this._sun.shadow.camera.far = 36;
+    this._sun.shadow.camera.updateProjectionMatrix();
   }
 
   private _surveyRoomMetrics(zoneId: string): { center: THREE.Vector3; radius: number } | undefined {
@@ -1591,7 +2075,7 @@ export class SpatialPreview extends LitElement {
     this._camera.updateProjectionMatrix();
     this._cameraTween = {
       started: performance.now(),
-      duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 520,
+      duration: this._prefersReducedMotion ? 1 : 520,
       fromPosition: this._camera.position.clone(),
       toPosition: position,
       fromTarget: this._controls.target.clone(),
@@ -1627,7 +2111,7 @@ export class SpatialPreview extends LitElement {
         relative.dot(direction) + Math.abs(relative.dot(right)) / horizontalTangent,
         relative.dot(direction) + Math.abs(relative.dot(up)) / verticalTangent,
       );
-    }, this._camera!.near * 2) * 1.12;
+    }, this._camera!.near * 2) * (mobile ? 1.03 : 1.08);
     let distance = fitDistance();
     const projectedY = corners.map((corner) => {
       const relative = corner.clone().sub(target);
@@ -1717,8 +2201,9 @@ export class SpatialPreview extends LitElement {
     this.dispatchEvent(new CustomEvent('spatial-room-selected', { detail: { zoneId }, bubbles: true, composed: true }));
   }
 
-  private _stopControlEvent(event: Event): void {
+  private _focusZoneFromPointer(event: PointerEvent, zoneId: string | null): void {
     event.stopPropagation();
+    this._focusZone(zoneId);
   }
 
   private _selectEntity(entityId: string): void {
@@ -1754,6 +2239,7 @@ export class SpatialPreview extends LitElement {
     const height = Math.max(1, this.clientHeight);
     const previousAspect = this._camera.aspect;
     this._renderer.setSize(width, height, false);
+    this._composer?.setSize(width, height);
     this._camera.aspect = width / height;
     this._camera.updateProjectionMatrix();
     if (
@@ -1774,13 +2260,37 @@ export class SpatialPreview extends LitElement {
       if (progress >= 1) this._cameraTween = undefined;
     }
     this._controls?.update();
-    if (this._renderer && this._scene && this._camera) this._renderer.render(this._scene, this._camera);
+    this._animateEntityEffects(performance.now());
+    if (this._grainPass) this._grainPass.uniforms.time.value = performance.now() * 0.001;
+    if (this._composer) this._composer.render();
+    else if (this._renderer && this._scene && this._camera) this._renderer.render(this._scene, this._camera);
   };
 
+  private _animateEntityEffects(now: number): void {
+    if (!this._model || this._prefersReducedMotion) return;
+    for (const node of this._effectMeshes) {
+      if (!node.visible) continue;
+      const index = Number(node.userData.effectIndex ?? 0);
+      const phase = now * 0.0015 + index * 0.9;
+      const pulse = 1 + Math.sin(phase) * 0.045;
+      node.scale.setScalar(pulse);
+      if (node.userData.effectKind === 'air') node.rotation.z += 0.0025 + index * 0.0006;
+      const material = node.material;
+      if (material instanceof THREE.MeshStandardMaterial) {
+        material.opacity = Number(node.userData.effectOpacity ?? 0.34) * (0.86 + Math.sin(phase) * 0.14);
+      }
+    }
+  }
+
   protected render() {
-    return html`${this.showRoomControls && this.zones.length ? html`<nav class="room-rail" aria-label="Rooms" @pointerdown=${this._stopControlEvent} @pointerup=${this._stopControlEvent} @click=${this._stopControlEvent}>
-      <button aria-pressed=${this.focusedZoneId === null} @click=${() => this._focusZone(null)}>Overview</button>
-      ${this.zones.map((zone) => html`<button aria-pressed=${this.focusedZoneId === zone.id} @click=${() => this._focusZone(zone.id ?? null)}>${zone.name}</button>`)}
+    return html`${this.showRoomControls && this.zones.length ? html`<nav class="room-navigation" aria-label="Rooms">
+      ${this.focusedZoneId !== null ? html`<button class="room-back" aria-label="Back to apartment overview" title="Overview"
+        @pointerup=${(event: PointerEvent) => this._focusZoneFromPointer(event, null)}
+        @click=${() => this._focusZone(null)}><ha-icon icon="mdi:arrow-left"></ha-icon></button>` : ''}
+      <div class="room-rail">
+        ${this.focusedZoneId === null ? html`<button aria-pressed="true">Overview</button>` : ''}
+        ${this.zones.map((zone) => html`<button aria-pressed=${this.focusedZoneId === zone.id} @pointerup=${(event: PointerEvent) => this._focusZoneFromPointer(event, zone.id ?? null)} @click=${() => this._focusZone(zone.id ?? null)}>${zone.name}</button>`)}
+      </div>
     </nav>` : ''}
     <div class="viewport">
       <canvas aria-label="Generated interactive 3D apartment preview"></canvas>

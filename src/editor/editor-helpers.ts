@@ -80,6 +80,12 @@ const PRESENTATION_OPTIONS = [
   { value: 'control-heavy', label: 'Control-heavy — show every device' },
 ];
 
+const SPATIAL_LIGHTING_OPTIONS = [
+  { value: 'realistic', label: 'Realistic — matches the home' },
+  { value: 'balanced', label: 'Balanced — lifts dark rooms slightly' },
+  { value: 'presentation', label: 'Presentation — always easy to inspect' },
+];
+
 const MARKER_VISIBILITY_OPTIONS: { value: MarkerVisibility; label: string }[] = [
   { value: 'auto', label: 'Automatic for this device type' },
   { value: 'always', label: 'Always' },
@@ -162,6 +168,12 @@ export function optionsSchema(): HaFormSchema[] {
       name: 'lightStyle',
       selector: { select: { mode: 'dropdown', options: LIGHT_STYLE_OPTIONS } },
     },
+    {
+      name: 'spatialLightingMode',
+      selector: { select: { mode: 'dropdown', options: SPATIAL_LIGHTING_OPTIONS } },
+    },
+    { name: 'weatherEntity', selector: { entity: { domain: 'weather' } } },
+    { name: 'illuminanceEntity', selector: { entity: { domain: 'sensor' } } },
     { name: 'hideWalls', selector: { boolean: {} } },
     { name: 'freePanZoom', selector: { boolean: {} } },
     {
@@ -199,7 +211,7 @@ export function stageOptionsSchema(): HaFormSchema[] {
 }
 /** Lighting-tab options: just the global light style. */
 export function lightingOptionsSchema(): HaFormSchema[] {
-  return optionsSchema().filter((s) => s.name === 'lightStyle');
+  return optionsSchema().filter((s) => ['lightStyle', 'spatialLightingMode', 'weatherEntity', 'illuminanceEntity'].includes(s.name));
 }
 
 export function entitySchema(directional: boolean, labelSource = 'inherit'): HaFormSchema[] {
