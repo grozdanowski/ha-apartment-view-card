@@ -2297,16 +2297,105 @@ export class SpatialPreview extends LitElement {
     return Math.max(1.4, Math.hypot(maxX - minX, maxZ - minZ) / 2);
   }
 
+  private _roomBounds(zone: SpatialZoneConfig): THREE.Box3 | undefined {
+    const bounds = new THREE.Box3();
+    const shellRoom = zone.id
+      ? this._activeShell?.rooms?.find((candidate) => candidate.zoneId === zone.id)
+      : undefined;
+    const center = this._spatialCenter();
+    if (shellRoom) {
+      [shellRoom.floor, ...(shellRoom.floors ?? [])].flat().forEach(([x, z]) => {
+        bounds.expandByPoint(new THREE.Vector3(x - center.x, 0, z - center.y));
+      });
+    } else {
+      this._zonePoints(zone).map((point) => this._worldPoint(point)).forEach((point) => {
+        bounds.expandByPoint(new THREE.Vector3(point.x, 0, point.y));
+      });
+    }
+    if (bounds.isEmpty()) return undefined;
+
+    const floorMin = bounds.min.clone();
+    const floorMax = bounds.max.clone();
+    bounds.expandByPoint(new THREE.Vector3(floorMin.x, Math.max(FLOOR_HEIGHT, this.dimensions.wallHeight * 0.1), floorMin.z));
+    bounds.expandByPoint(new THREE.Vector3(floorMax.x, Math.max(FLOOR_HEIGHT, this.dimensions.wallHeight * 0.1), floorMax.z));
+
+    this.entities.filter((entity) => entity.zoneId === zone.id).forEach((entity) => {
+      const visual = this._entityVisuals.get(entity.entity);
+      const position = new THREE.Vector3();
+      if (visual) visual.getWorldPosition(position);
+      else if (entity.spatial) position.set(
+        entity.spatial.position.x - center.x,
+        entity.spatial.position.y,
+        entity.spatial.position.z - center.y,
+      );
+      else position.set(
+        (entity.x - 50) * this.dimensions.width / 100,
+        0.16,
+        (entity.y - 50) * this.dimensions.width / this.dimensions.aspectRatio / 100,
+      );
+      bounds.expandByPoint(position);
+      bounds.expandByPoint(position.clone().add(new THREE.Vector3(0, 0.28, 0)));
+    });
+
+    this.plan?.elements.filter((element) => element.zoneId === zone.id).forEach((element) => {
+      const object = this._model?.children.find((child) => child.userData.spatialElementId === element.id);
+      if (object) bounds.expandByObject(object);
+      else bounds.expandByPoint(new THREE.Vector3(
+        element.position.x - center.x,
+        element.position.y,
+        element.position.z - center.y,
+      ));
+    });
+
+    const size = bounds.getSize(new THREE.Vector3());
+    bounds.expandByVector(new THREE.Vector3(
+      Math.max(0.12, size.x * 0.035),
+      0.06,
+      Math.max(0.12, size.z * 0.035),
+    ));
+    return bounds;
+  }
+
+  private _roomPose(zone: SpatialZoneConfig): { target: THREE.Vector3; position: THREE.Vector3 } | undefined {
+    if (!this._camera) return undefined;
+    const bounds = this._roomBounds(zone);
+    if (!bounds || bounds.isEmpty()) return undefined;
+    const target = bounds.getCenter(new THREE.Vector3());
+    const direction = new THREE.Vector3(0.55, 0.9, 0.82).normalize();
+    const forward = direction.clone().negate();
+    const right = new THREE.Vector3().crossVectors(forward, this._camera.up).normalize();
+    const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+    const verticalTangent = Math.tan(THREE.MathUtils.degToRad(this._camera.fov) / 2);
+    const horizontalTangent = verticalTangent * Math.max(this._camera.aspect, 0.2);
+    const width = Math.max(1, this.clientWidth);
+    const height = Math.max(1, this.clientHeight);
+    const safeX = THREE.MathUtils.clamp(1 - 72 / width, 0.68, 0.9);
+    const safeY = THREE.MathUtils.clamp(1 - 80 / height, 0.66, 0.86);
+    const corners = [bounds.min.x, bounds.max.x].flatMap((x) =>
+      [bounds.min.y, bounds.max.y].flatMap((y) =>
+        [bounds.min.z, bounds.max.z].map((z) => new THREE.Vector3(x, y, z))));
+    const distance = corners.reduce((fit, corner) => {
+      const relative = corner.clone().sub(target);
+      return Math.max(
+        fit,
+        relative.dot(direction) + Math.abs(relative.dot(right)) / (horizontalTangent * safeX),
+        relative.dot(direction) + Math.abs(relative.dot(up)) / (verticalTangent * safeY),
+      );
+    }, this._camera.near * 2) * 1.03;
+    return { target, position: target.clone().addScaledVector(direction, distance) };
+  }
+
   private _moveCameraTo(zoneId: string | null): void {
     if (!this._camera || !this._controls) return;
     this._clearOverviewReset();
     const zone = this.zones.find((candidate) => candidate.id === zoneId);
+    const roomPose = zone ? this._roomPose(zone) : undefined;
     const overviewPose = zone ? undefined : this._overviewPose();
-    const target = zone ? this._zoneCenter(zone) : overviewPose?.target ?? new THREE.Vector3(0, 0, 0);
+    const target = roomPose?.target ?? (zone ? this._zoneCenter(zone) : overviewPose?.target ?? new THREE.Vector3(0, 0, 0));
     const mobile = this.clientWidth < 600;
     const focusDistance = zone ? this._zoneRadius(zone) * (mobile ? 3.15 : 2.35) : 0;
     const position = zone
-      ? target.clone().add(new THREE.Vector3(focusDistance * 0.55, focusDistance * 0.9, focusDistance * 0.82))
+      ? roomPose?.position ?? target.clone().add(new THREE.Vector3(focusDistance * 0.55, focusDistance * 0.9, focusDistance * 0.82))
       : overviewPose?.position ?? new THREE.Vector3(
           this._modelRadius * (mobile ? 0.72 : 0.78),
           this._modelRadius * (mobile ? 2.15 : 1.54),
@@ -2528,6 +2617,7 @@ export class SpatialPreview extends LitElement {
     if (roomFocused && entity.zoneId !== this.focusedZoneId) return false;
     const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entity.entity);
     const configured = roomFocused ? entity.roomVisibility : entity.overviewVisibility;
+    if (this._isConfiguredGroupWithPlacedChildren(entity.entity) && (!configured || configured === 'auto')) return false;
     const visibility = !configured || configured === 'auto'
       ? roomFocused ? suggestedRoomVisibility(entity.entity) : suggestedOverviewVisibility(entity.entity)
       : configured;
@@ -2664,11 +2754,9 @@ export class SpatialPreview extends LitElement {
     this._composer?.setSize(width, height);
     this._camera.aspect = width / height;
     this._camera.updateProjectionMatrix();
-    if (
-      this.focusedZoneId === null
-      && this._overviewBounds
-      && Math.abs(previousAspect - this._camera.aspect) > 0.01
-    ) this._moveCameraTo(null);
+    if (this._overviewBounds && Math.abs(previousAspect - this._camera.aspect) > 0.01) {
+      this._moveCameraTo(this.focusedZoneId);
+    }
   }
 
   private _animate = () => {

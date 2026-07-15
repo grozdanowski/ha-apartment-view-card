@@ -543,6 +543,74 @@ describe('3D spatial runtime', () => {
     }
   });
 
+  it('fits the complete room and ceiling markers inside the focused viewport', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    Object.defineProperties(preview, {
+      clientWidth: { value: 390 },
+      clientHeight: { value: 500 },
+    });
+    preview.dimensions = { width: 8, aspectRatio: 4 / 3, wallHeight: 2.7 };
+    preview.zones = [{ id: 'office', name: 'Office', x: 50, y: 0, width: 50, height: 50 }];
+    preview._activeShell = {
+      outer: [[0, 0], [8, 0], [8, 6], [0, 6]],
+      holes: [], floor: [[0, 0], [8, 0], [8, 6], [0, 6]], openings: [],
+      rooms: [{ zoneId: 'office', floor: [[4, 0], [8, 0], [8, 3], [4, 3]] }],
+    };
+    preview.entities = [
+      {
+        entity: 'light.office_ceiling', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'office',
+        spatial: { position: { x: 7.7, y: 2.58, z: 0.2 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'ceiling', visible: true },
+      },
+      {
+        entity: 'media_player.office', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'office',
+        spatial: { position: { x: 4.2, y: 0.45, z: 2.8 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'surface', visible: true },
+      },
+    ];
+    preview._camera = new THREE.PerspectiveCamera(34, 390 / 500, 0.1, 50);
+
+    const zone = preview.zones[0];
+    const bounds = preview._roomBounds(zone) as THREE.Box3;
+    const pose = preview._roomPose(zone);
+    preview._camera.position.copy(pose.position);
+    preview._camera.lookAt(pose.target);
+    preview._camera.updateMatrixWorld(true);
+    preview._camera.updateProjectionMatrix();
+
+    for (const x of [bounds.min.x, bounds.max.x]) {
+      for (const y of [bounds.min.y, bounds.max.y]) {
+        for (const z of [bounds.min.z, bounds.max.z]) {
+          const projected = new THREE.Vector3(x, y, z).project(preview._camera);
+          expect(Math.abs(projected.x)).toBeLessThanOrEqual(0.9);
+          expect(Math.abs(projected.y)).toBeLessThanOrEqual(0.86);
+        }
+      }
+    }
+  });
+
+  it('suppresses an automatic group marker when its placed child fixtures exist', async () => {
+    const { preview } = await mount();
+    preview.focusedZoneId = 'living';
+    preview.entities = [
+      {
+        entity: 'light.office', name: 'Office Lights', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'living',
+        spatial: { position: { x: 4, y: 2.4, z: 3 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'ceiling', visible: true },
+      },
+      {
+        entity: 'light.office_ceiling', name: 'Office Ceiling Light', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'living',
+        spatial: { position: { x: 4, y: 2.4, z: 3 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'ceiling', visible: true },
+      },
+    ];
+    preview.hass = { states: {
+      'light.office': { entity_id: 'light.office', state: 'off', attributes: { entity_id: ['light.office_ceiling'] } },
+      'light.office_ceiling': { entity_id: 'light.office_ceiling', state: 'off', attributes: {} },
+    } };
+    await preview.updateComplete;
+
+    const ids = [...preview.shadowRoot.querySelectorAll('.entity-beacon')]
+      .map((node) => (node as HTMLElement).dataset.entityId);
+    expect(ids).toEqual(['light.office_ceiling']);
+  });
+
   it('restores the overview ten seconds after manual camera interaction', () => {
     vi.useFakeTimers();
     try {
