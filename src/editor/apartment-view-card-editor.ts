@@ -26,6 +26,7 @@ import {
   type SpatialGlbSurface,
   type SpatialConditionalValue,
   type SpatialElementType,
+  type MarkerVisibility,
 } from '../core/config';
 import {
   defaultEntity,
@@ -515,6 +516,12 @@ export class ApartmentViewCardEditor extends LitElement {
     }
     .visibility-toggle { display: flex; align-items: center; gap: 9px; margin-top: 14px; color: var(--secondary-text-color); font-size: 0.86em; }
     .visibility-toggle input { width: 18px; height: 18px; accent-color: var(--primary-color); }
+    .marker-policy { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--studio-line); }
+    .marker-policy h4 { margin: 0 0 5px; color: var(--primary-text-color); font-size: 14px; font-weight: 650; }
+    .marker-policy p { margin: 0; color: var(--secondary-text-color); font-size: 12px; line-height: 1.45; }
+    .marker-policy-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }
+    .marker-policy-grid label { display: grid; gap: 5px; color: var(--secondary-text-color); font-size: 12px; }
+    .marker-policy-grid select { width: 100%; min-width: 0; min-height: 44px; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--divider-color); border-radius: 2px; background: var(--card-background-color); color: var(--primary-text-color); font: inherit; font-size: 14px; }
     .unplaced-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
     .unplaced-device {
       border: 1px solid var(--divider-color);
@@ -789,6 +796,7 @@ export class ApartmentViewCardEditor extends LitElement {
       .surface-scope-header { align-items: stretch; flex-direction: column; }
       .surface-apply { width: 100%; }
       .transform-grid { grid-template-columns: 1fr; }
+      .marker-policy-grid { grid-template-columns: 1fr; }
       .primitive-header { align-items: center; }
       .base-value { grid-template-columns: 64px minmax(0, 1fr) 44px; }
       .condition-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 42px; padding: 14px 0; }
@@ -1799,6 +1807,26 @@ export class ApartmentViewCardEditor extends LitElement {
       : entity));
   }
 
+  private _renderMarkerVisibilitySelect(
+    label: string,
+    value: MarkerVisibility,
+    key: 'overviewVisibility' | 'roomVisibility',
+  ) {
+    const options: Array<{ value: MarkerVisibility; label: string }> = [
+      { value: 'auto', label: 'Automatic (recommended)' },
+      { value: 'always', label: 'Always show' },
+      { value: 'active', label: 'Only while active' },
+      { value: 'attention', label: 'Only when attention is needed' },
+      { value: 'hidden', label: 'Never show' },
+    ];
+    return html`<label><span>${label}</span><select .value=${value}
+      @change=${(event: Event) => this._updateSelectedEntity({
+        [key]: (event.target as HTMLSelectElement).value as MarkerVisibility,
+      })}>
+      ${options.map((option) => html`<option value=${option.value}>${option.label}</option>`)}
+    </select></label>`;
+  }
+
   private _commitZones(zones: ZoneConfig[]): void {
     if (this._spatial().plan) {
       this._applyConfig({ ...this._config, zones });
@@ -2727,12 +2755,15 @@ export class ApartmentViewCardEditor extends LitElement {
             @change=${(event: Event) => this._updateSelectedEntitySpatial({ rotation: { ...(selectedSpatial?.rotation ?? { x: 0, y: 0, z: 0 }), y: Number((event.target as HTMLInputElement).value) } })} /></label>
         </div>
         <label class="visibility-toggle"><input type="checkbox" .checked=${selectedSpatial?.visible ?? true}
-          @change=${(event: Event) => this._updateSelectedEntitySpatial({ visible: (event.target as HTMLInputElement).checked })} /><span>Show a marker in the 3D home</span></label>
-        <label class="visibility-toggle"><input type="checkbox" .checked=${selected.overviewVisibility !== 'hidden'}
-          @change=${(event: Event) => this._updateSelectedEntity({
-            overviewVisibility: (event.target as HTMLInputElement).checked ? 'always' : 'hidden',
-            roomVisibility: 'always',
-          })} /><span>Visible in apartment overview</span></label>
+          @change=${(event: Event) => this._updateSelectedEntitySpatial({ visible: (event.target as HTMLInputElement).checked })} /><span>Show this device as a marker</span></label>
+        ${(selectedSpatial?.visible ?? true) ? html`<div class="marker-policy">
+          <h4>Marker visibility</h4>
+          <p>Automatic keeps the overview quiet: lights affect the model without adding icons, while active equipment and anything needing attention can surface.</p>
+          <div class="marker-policy-grid">
+            ${this._renderMarkerVisibilitySelect('Apartment overview', selected.overviewVisibility ?? 'auto', 'overviewVisibility')}
+            ${this._renderMarkerVisibilitySelect('Inside its room', selected.roomVisibility ?? 'auto', 'roomVisibility')}
+          </div>
+        </div>` : nothing}
         <div class="setup-actions"><ha-button @click=${() => { this._previewMode = '3d'; }}>Inspect in 3D</ha-button></div>
       </div>` : nothing}
       <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'actions'; }}>Continue to Actions</ha-button><ha-button @click=${() => { this._setupStep = 'review'; }}>Review setup</ha-button></div>

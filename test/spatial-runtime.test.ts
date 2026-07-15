@@ -24,7 +24,7 @@ describe('3D spatial runtime', () => {
       type: 'custom:apartment-view-card',
       zones: [{ id: 'living', name: 'Living Room', x: 0, y: 0, width: 100, height: 100 }],
       entities: [{
-        entity: 'light.living', name: 'Living light', x: 50, y: 50, size: 'medium', tap: 'toggle', orientation: null, zoneId: 'living',
+        entity: 'light.living', name: 'Living light', x: 50, y: 50, size: 'medium', tap: 'toggle', orientation: null, zoneId: 'living', overviewVisibility: 'always',
         spatial: { position: { x: 4, y: 2.4, z: 3 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'ceiling', visible: true },
       }],
       spatial: { plan },
@@ -304,6 +304,7 @@ describe('3D spatial runtime', () => {
         },
       },
     };
+    preview.focusedZoneId = 'living';
     document.body.append(preview);
     await preview.updateComplete;
     const beacon = preview.shadowRoot.querySelector('.entity-beacon') as HTMLElement;
@@ -391,8 +392,46 @@ describe('3D spatial runtime', () => {
     await preview.updateComplete;
     beacon = preview.shadowRoot.querySelector('.entity-beacon') as HTMLElement;
     expect(beacon.dataset.context).toBe('room');
+    expect(beacon.classList.contains('expanded')).toBe(false);
+    let selectedEntity = '';
+    preview.addEventListener('spatial-entity-selected', (event: Event) => {
+      selectedEntity = (event as CustomEvent).detail.entityId;
+    });
+    beacon.click();
+    await preview.updateComplete;
+    beacon = preview.shadowRoot.querySelector('.entity-beacon') as HTMLElement;
     expect(beacon.classList.contains('expanded')).toBe(true);
-    expect(beacon.title).toContain('All The Stars');
+    expect(beacon.getAttribute('aria-expanded')).toBe('true');
+    expect(selectedEntity).toBe('');
+    expect(beacon.title).toBe('');
+    beacon.click();
+    expect(selectedEntity).toBe('media_player.naim');
+  });
+
+  it('keeps automatic overview markers calm while preserving explicit pins', async () => {
+    const { preview } = await mount();
+    preview.entities = [
+      {
+        entity: 'light.sofa', name: 'Sofa light', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'living',
+        spatial: { position: { x: 3, y: 1.2, z: 3 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'wall', visible: true },
+      },
+      {
+        entity: 'media_player.naim', name: 'Naim', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'living',
+        spatial: { position: { x: 4, y: 0.5, z: 3 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'surface', visible: true },
+      },
+      {
+        entity: 'light.pinned', name: 'Pinned light', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'living', overviewVisibility: 'always',
+        spatial: { position: { x: 5, y: 1.2, z: 3 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'wall', visible: true },
+      },
+    ];
+    preview.hass = { states: {
+      'light.sofa': { entity_id: 'light.sofa', state: 'on', attributes: {} },
+      'media_player.naim': { entity_id: 'media_player.naim', state: 'playing', attributes: {} },
+      'light.pinned': { entity_id: 'light.pinned', state: 'off', attributes: {} },
+    } };
+    await preview.updateComplete;
+    const ids = [...preview.shadowRoot.querySelectorAll('.entity-beacon')].map((node) => (node as HTMLElement).dataset.entityId);
+    expect(ids).toEqual(['media_player.naim', 'light.pinned']);
   });
 
   it('hides a beacon from overview without suppressing it in its room', async () => {

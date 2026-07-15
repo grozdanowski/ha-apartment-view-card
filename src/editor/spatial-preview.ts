@@ -1,4 +1,4 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -15,6 +15,7 @@ import { wallIdFor, type EntityConfig, type OpeningConfig, type SiteConfig, type
 import type { HassLike } from '../core/ha-types';
 import { iconForEntity } from '../core/entity-state';
 import { resolveLightColor } from '../core/light-color';
+import { suggestedOverviewVisibility, suggestedRoomVisibility } from '../core/entity-policy';
 import { elementPrimitivesForType, resolveSpatialValue } from '../core/spatial-elements';
 import { objectAtGlbNodePath } from '../core/spatial-glb';
 import { assignShellOpenings, shellSegments } from '../core/spatial-shell';
@@ -132,6 +133,7 @@ export class SpatialPreview extends LitElement {
   @property() spatialLightingMode: SpatialLightingMode = 'realistic';
   @state() private _error = '';
   @state() private _loadingModel = false;
+  @state() private _expandedEntityId: string | null = null;
 
   private _renderer?: THREE.WebGLRenderer;
   private _composer?: EffectComposer;
@@ -475,15 +477,21 @@ export class SpatialPreview extends LitElement {
     }
   }
 
+  protected willUpdate(changed: Map<PropertyKey, unknown>): void {
+    if (changed.has('focusedZoneId')) this._expandedEntityId = null;
+  }
+
   protected updated(changed: Map<PropertyKey, unknown>): void {
     if (this._scene && (changed.has('zones') || changed.has('entities') || changed.has('openings') || changed.has('walls') || changed.has('dimensions') || changed.has('shell') || changed.has('plan'))) {
       this._buildModel();
     }
     if (changed.has('modelUrl') && this._scene) void this._loadModel();
     if (changed.has('site') || changed.has('latitude') || changed.has('longitude') || changed.has('weatherEntity') || changed.has('illuminanceEntity') || changed.has('spatialLightingMode')) this._updateSun();
-    if (changed.has('focusedZoneId') && this._scene) {
-      this._applyFocus();
-      this._moveCameraTo(this.focusedZoneId);
+    if (changed.has('focusedZoneId')) {
+      if (this._scene) {
+        this._applyFocus();
+        this._moveCameraTo(this.focusedZoneId);
+      }
     }
     if (changed.has('hideWalls') && this._scene) this._applyWallCutaway();
     if (changed.has('hass')) {
@@ -2459,6 +2467,22 @@ export class SpatialPreview extends LitElement {
     }));
   }
 
+  private _activateEntityBeacon(event: Event, entityId: string, roomFocused: boolean): void {
+    event.stopPropagation();
+    if (roomFocused && this._expandedEntityId !== entityId) {
+      this._expandedEntityId = entityId;
+      return;
+    }
+    this._selectEntity(entityId);
+  }
+
+  private _collapseEntityBeacon(event: KeyboardEvent): void {
+    if (event.key !== 'Escape' || this._expandedEntityId === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this._expandedEntityId = null;
+  }
+
   private _entityObjectIsVisible(object: THREE.Object3D): boolean {
     let current: THREE.Object3D | null = object;
     while (current) {
@@ -2534,16 +2558,26 @@ export class SpatialPreview extends LitElement {
     });
   }
 
+  private _entityMarkerIsVisible(entity: EntityConfig): boolean {
+    if (!(entity.spatial?.visible ?? true)) return false;
+    const roomFocused = this.focusedZoneId !== null;
+    if (roomFocused && entity.zoneId !== this.focusedZoneId) return false;
+    const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entity.entity);
+    const configured = roomFocused ? entity.roomVisibility : entity.overviewVisibility;
+    const visibility = !configured || configured === 'auto'
+      ? roomFocused ? suggestedRoomVisibility(entity.entity) : suggestedOverviewVisibility(entity.entity)
+      : configured;
+    if (visibility === 'hidden') return false;
+    if (visibility === 'always') return true;
+    if (visibility === 'attention') return resolved.activity === 'attention';
+    return ['active', 'attention'].includes(resolved.activity);
+  }
+
   private _renderEntityBeacon(entity: EntityConfig) {
     const element = this.plan?.elements.find((candidate) => candidate.entityId === entity.entity);
-    if (!(entity.spatial?.visible ?? true)) return '';
+    if (!this._entityMarkerIsVisible(entity)) return '';
     const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entity.entity);
     const roomFocused = this.focusedZoneId !== null;
-    if (roomFocused && entity.zoneId !== this.focusedZoneId) return '';
-    const visibility = roomFocused ? entity.roomVisibility ?? 'always' : entity.overviewVisibility ?? 'auto';
-    if (visibility === 'hidden'
-      || (visibility === 'active' && !['active', 'attention'].includes(resolved.activity))
-      || (visibility === 'attention' && resolved.activity !== 'attention')) return '';
     const fallbackState = resolved.state ?? { entity_id: entity.entity, state: 'unavailable', attributes: {} };
     const presentation = spatialEntityPresentation(
       entity.entity,
@@ -2569,7 +2603,7 @@ export class SpatialPreview extends LitElement {
     } else if (!entity.icon && resolved.activity === 'attention' && domain === 'lock') {
       icon = 'mdi:lock-open-variant';
     }
-    const expanded = roomFocused;
+    const expanded = roomFocused && this._expandedEntityId === entity.entity;
     const width = Math.min(188, Math.max(118, Math.max(presentation.name.length, presentation.status.length) * 5.4 + 42));
     const lightColor = domain === 'light' && resolved.activity === 'active' ? resolveLightColor(fallbackState) : null;
     const accent = lightColor ? `rgb(${lightColor.r} ${lightColor.g} ${lightColor.b})` : '#91a0a3';
@@ -2582,8 +2616,9 @@ export class SpatialPreview extends LitElement {
       data-context=${roomFocused ? 'room' : 'overview'}
       style=${`--entity-width:${width}px;--entity-accent:${accent}`}
       aria-label=${`${presentation.name}: ${presentation.status}`}
-      title=${roomFocused ? `${presentation.name} · ${presentation.status}` : ''}
-      @click=${() => this._selectEntity(entity.entity)}
+      aria-expanded=${roomFocused ? String(expanded) : nothing}
+      @click=${(event: Event) => this._activateEntityBeacon(event, entity.entity, roomFocused)}
+      @keydown=${this._collapseEntityBeacon}
     >
       <span class="entity-icon"><ha-icon icon=${icon}></ha-icon></span>
       <span class="entity-copy"><strong>${presentation.name}</strong><span>${presentation.status}</span></span>
@@ -2651,6 +2686,7 @@ export class SpatialPreview extends LitElement {
       this._selectEntity(entity.object.userData.entityId as string);
       return;
     }
+    this._expandedEntityId = null;
     const floor = hits.find((hit) => hit.object.userData.roomFloor);
     if (floor) this._focusZone(floor.object.userData.zoneId as string);
   };
@@ -2728,7 +2764,7 @@ export class SpatialPreview extends LitElement {
       ${this._error ? html`<div class="error">${this._error}</div>` : ''}
     </div>
     <div class="entity-shortcuts" role="group" aria-label="Devices">
-      ${this._beaconEntities().filter((entity) => entity.spatial?.visible ?? true).map((entity) => html`<button @click=${() => this._selectEntity(entity.entity)}>${entity.name ?? entity.entity}</button>`)}
+      ${this._beaconEntities().filter((entity) => this._entityMarkerIsVisible(entity)).map((entity) => html`<button @click=${() => this._selectEntity(entity.entity)}>${entity.name ?? entity.entity}</button>`)}
     </div>`;
   }
 }

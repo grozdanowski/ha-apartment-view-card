@@ -250,20 +250,23 @@ describe('apartment-view-card-editor', () => {
     expect((element.shadowRoot.querySelector('.condition-row input') as HTMLInputElement).placeholder).toBe('Use element entity');
   });
 
-  it('lets each device opt out of overview markers without hiding it from room views', async () => {
+  it('lets each device set independent overview and room marker visibility', async () => {
     const element = await mount();
     element._setupStep = 'devices';
     element._selectedEntity = 0;
     await element.updateComplete;
-    const toggles = Array.from(element.shadowRoot.querySelectorAll('.visibility-toggle')) as HTMLLabelElement[];
-    const overviewToggle = toggles.find((toggle) => toggle.textContent?.includes('Visible in apartment overview'))
-      ?.querySelector('input') as HTMLInputElement;
-    expect(overviewToggle.checked).toBe(true);
+    const selects = Array.from(element.shadowRoot.querySelectorAll('.marker-policy-grid select')) as HTMLSelectElement[];
+    expect(selects).toHaveLength(2);
+    expect(selects[0].value).toBe('auto');
+    expect(selects[1].value).toBe('auto');
 
-    overviewToggle.checked = false;
-    overviewToggle.dispatchEvent(new Event('change', { bubbles: true }));
+    selects[0].value = 'hidden';
+    selects[0].dispatchEvent(new Event('change', { bubbles: true }));
     expect(element.config.entities[0].overviewVisibility).toBe('hidden');
-    expect(element.config.entities[0].roomVisibility).toBe('always');
+
+    selects[1].value = 'active';
+    selects[1].dispatchEvent(new Event('change', { bubbles: true }));
+    expect(element.config.entities[0].roomVisibility).toBe('active');
   });
 
   it('replaces old Advanced controls with JSON/YAML backup and restore', async () => {
