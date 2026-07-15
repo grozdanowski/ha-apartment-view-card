@@ -139,6 +139,10 @@ describe('entitySchema', () => {
       'more-info',
       'none',
     ]);
+    for (const name of ['tooltipContentInOverview', 'tooltipContentInRoom']) {
+      const tooltip = schema.find((s) => s.name === name)!;
+      expect(tooltip.selector.select.options.map((o: any) => o.value)).toEqual(['none', 'state']);
+    }
   });
 
   it('always includes the directional boolean toggle', () => {
@@ -200,6 +204,18 @@ describe('entityToForm', () => {
     const form = entityToForm(e);
     expect(form.directional).toBe(true);
     expect(form.orientation).toBe(90);
+  });
+
+  it('round-trips per-context tooltip content', () => {
+    const e: EntityConfig = {
+      entity: 'media_player.kef', x: 0, y: 0, size: 'small', tap: 'more-info', orientation: null,
+      tooltipContentInOverview: 'none', tooltipContentInRoom: 'state',
+    };
+    const form = entityToForm(e);
+    expect(form).toMatchObject({ tooltipContentInOverview: 'none', tooltipContentInRoom: 'state' });
+    expect(formToEntity(e, { tooltipContentInOverview: 'state' })).toMatchObject({
+      tooltipContentInOverview: 'state', tooltipContentInRoom: 'state',
+    });
   });
 });
 

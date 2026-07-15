@@ -27,6 +27,7 @@ import {
   type SpatialConditionalValue,
   type SpatialElementType,
   type MarkerVisibility,
+  type TooltipContent,
 } from '../core/config';
 import {
   defaultEntity,
@@ -1827,6 +1828,23 @@ export class ApartmentViewCardEditor extends LitElement {
     </select></label>`;
   }
 
+  private _renderTooltipContentSelect(
+    label: string,
+    value: TooltipContent,
+    key: 'tooltipContentInOverview' | 'tooltipContentInRoom',
+  ) {
+    const options: Array<{ value: TooltipContent; label: string }> = [
+      { value: 'none', label: 'None' },
+      { value: 'state', label: 'Name and live state' },
+    ];
+    return html`<label><span>${label}</span><select .value=${value}
+      @change=${(event: Event) => this._updateSelectedEntity({
+        [key]: (event.target as HTMLSelectElement).value as TooltipContent,
+      })}>
+      ${options.map((option) => html`<option value=${option.value}>${option.label}</option>`)}
+    </select></label>`;
+  }
+
   private _commitZones(zones: ZoneConfig[]): void {
     if (this._spatial().plan) {
       this._applyConfig({ ...this._config, zones });
@@ -2762,6 +2780,13 @@ export class ApartmentViewCardEditor extends LitElement {
           <div class="marker-policy-grid">
             ${this._renderMarkerVisibilitySelect('Apartment overview', selected.overviewVisibility ?? 'auto', 'overviewVisibility')}
             ${this._renderMarkerVisibilitySelect('Inside its room', selected.roomVisibility ?? 'auto', 'roomVisibility')}
+          </div>
+        </div><div class="marker-policy tooltip-policy">
+          <h4>Tooltip content</h4>
+          <p>Keep markers icon-only, or show the entity name and live state persistently in each context. Media detail appears only while the player is active.</p>
+          <div class="marker-policy-grid">
+            ${this._renderTooltipContentSelect('Apartment overview', selected.tooltipContentInOverview ?? 'none', 'tooltipContentInOverview')}
+            ${this._renderTooltipContentSelect('Inside its room', selected.tooltipContentInRoom ?? 'none', 'tooltipContentInRoom')}
           </div>
         </div>` : nothing}
         <div class="setup-actions"><ha-button @click=${() => { this._previewMode = '3d'; }}>Inspect in 3D</ha-button></div>

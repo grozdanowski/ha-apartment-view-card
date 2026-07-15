@@ -24,6 +24,29 @@ describe('normalizeConfig', () => {
     expect(cfg.spatial?.plan?.rooms).toHaveLength(1);
   });
 
+  it('normalizes per-context tooltip content and defaults it to none', () => {
+    const cfg = normalizeConfig({
+      type: 'custom:apartment-view-card',
+      spatial: { plan: rectangularSpatialPlan(8, 6) },
+      entities: [{
+        entity: 'media_player.naim', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null,
+        tooltipContentInOverview: 'state', tooltipContentInRoom: 'state',
+      }],
+    });
+    expect(cfg.entities[0]).toMatchObject({
+      tooltipContentInOverview: 'state',
+      tooltipContentInRoom: 'state',
+    });
+
+    const defaults = normalizeConfig({
+      type: 'custom:apartment-view-card',
+      spatial: { plan: rectangularSpatialPlan(8, 6) },
+      entities: [{ entity: 'media_player.kef', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null }],
+    });
+    expect(defaults.entities[0].tooltipContentInOverview ?? 'none').toBe('none');
+    expect(defaults.entities[0].tooltipContentInRoom ?? 'none').toBe('none');
+  });
+
   it('preserves exact survey geometry without requiring a floorplan image', () => {
     const cfg = normalizeConfig({
       type: 'custom:apartment-view-card',

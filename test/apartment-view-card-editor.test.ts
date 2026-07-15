@@ -256,7 +256,7 @@ describe('apartment-view-card-editor', () => {
     element._selectedEntity = 0;
     await element.updateComplete;
     const selects = Array.from(element.shadowRoot.querySelectorAll('.marker-policy-grid select')) as HTMLSelectElement[];
-    expect(selects).toHaveLength(2);
+    expect(selects).toHaveLength(4);
     expect(selects[0].value).toBe('auto');
     expect(selects[1].value).toBe('auto');
 
@@ -267,6 +267,12 @@ describe('apartment-view-card-editor', () => {
     selects[1].value = 'active';
     selects[1].dispatchEvent(new Event('change', { bubbles: true }));
     expect(element.config.entities[0].roomVisibility).toBe('active');
+
+    expect(selects[2].value).toBe('none');
+    expect(selects[3].value).toBe('none');
+    selects[3].value = 'state';
+    selects[3].dispatchEvent(new Event('change', { bubbles: true }));
+    expect(element.config.entities[0].tooltipContentInRoom).toBe('state');
   });
 
   it('replaces old Advanced controls with JSON/YAML backup and restore', async () => {

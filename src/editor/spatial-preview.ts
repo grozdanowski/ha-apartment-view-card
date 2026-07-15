@@ -336,7 +336,7 @@ export class SpatialPreview extends LitElement {
     }
     .entity-beacon[data-context='room']:hover,
     .entity-beacon[data-context='room']:focus-visible,
-    .entity-beacon[data-context='room'].expanded {
+    .entity-beacon.expanded {
       width: min(var(--entity-width, 188px), calc(100% - 20px));
       z-index: 2;
     }
@@ -360,7 +360,7 @@ export class SpatialPreview extends LitElement {
     .entity-beacon[data-side='end'] .entity-copy { padding: 0 2px 0 12px; }
     .entity-beacon[data-context='room']:hover .entity-copy,
     .entity-beacon[data-context='room']:focus-visible .entity-copy,
-    .entity-beacon[data-context='room'].expanded .entity-copy { opacity: 1; }
+    .entity-beacon.expanded .entity-copy { opacity: 1; }
     .entity-copy strong,
     .entity-copy span {
       overflow: hidden;
@@ -2556,9 +2556,9 @@ export class SpatialPreview extends LitElement {
     }));
   }
 
-  private _activateEntityBeacon(event: Event, entityId: string, roomFocused: boolean): void {
+  private _activateEntityBeacon(event: Event, entityId: string, roomFocused: boolean, contentVisible: boolean): void {
     event.stopPropagation();
-    if (roomFocused && this._expandedEntityId !== entityId) {
+    if (roomFocused && !contentVisible && this._expandedEntityId !== entityId) {
       this._expandedEntityId = entityId;
       return;
     }
@@ -2657,7 +2657,12 @@ export class SpatialPreview extends LitElement {
     } else if (!entity.icon && resolved.activity === 'attention' && domain === 'lock') {
       icon = 'mdi:lock-open-variant';
     }
-    const expanded = roomFocused && this._expandedEntityId === entity.entity;
+    const tooltipContent = roomFocused
+      ? entity.tooltipContentInRoom ?? 'none'
+      : entity.tooltipContentInOverview ?? 'none';
+    const persistentContent = tooltipContent === 'state'
+      && (domain !== 'media_player' || resolved.activity === 'active');
+    const expanded = persistentContent || (roomFocused && this._expandedEntityId === entity.entity);
     const width = Math.min(188, Math.max(118, Math.max(presentation.name.length, presentation.status.length) * 5.4 + 42));
     const lightColor = domain === 'light' && resolved.activity === 'active' ? resolveLightColor(fallbackState) : null;
     const accent = lightColor ? `rgb(${lightColor.r} ${lightColor.g} ${lightColor.b})` : '#91a0a3';
@@ -2671,7 +2676,7 @@ export class SpatialPreview extends LitElement {
       style=${`--entity-width:${width}px;--entity-accent:${accent}`}
       aria-label=${`${presentation.name}: ${presentation.status}`}
       aria-expanded=${roomFocused ? String(expanded) : nothing}
-      @click=${(event: Event) => this._activateEntityBeacon(event, entity.entity, roomFocused)}
+      @click=${(event: Event) => this._activateEntityBeacon(event, entity.entity, roomFocused, expanded)}
       @keydown=${this._collapseEntityBeacon}
     >
       <span class="entity-icon"><ha-icon icon=${icon}></ha-icon></span>

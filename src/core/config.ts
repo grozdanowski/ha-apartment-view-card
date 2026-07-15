@@ -8,6 +8,7 @@ export type WheelMode = 'modifier' | 'plain';
 export type PresentationPreset = 'calm' | 'informative' | 'control-heavy';
 export type SpatialLightingMode = 'realistic' | 'balanced' | 'presentation';
 export type MarkerVisibility = 'auto' | 'always' | 'active' | 'attention' | 'hidden';
+export type TooltipContent = 'none' | 'state';
 export type WallSide = 'top' | 'right' | 'bottom' | 'left';
 export type OpeningKind = 'door' | 'window';
 export type SpatialMount = 'floor' | 'wall' | 'ceiling' | 'surface' | 'free';
@@ -237,6 +238,10 @@ export interface EntityConfig {
   /** Optional per-context marker visibility overrides. */
   overviewVisibility?: MarkerVisibility;
   roomVisibility?: MarkerVisibility;
+  /** Optional persistent marker detail in the apartment overview. Defaults to none. */
+  tooltipContentInOverview?: TooltipContent;
+  /** Optional persistent marker detail while its room is focused. Defaults to none. */
+  tooltipContentInRoom?: TooltipContent;
   /** Optional physical placement used by the 3D renderer. */
   spatial?: SpatialPlacement;
 }
@@ -422,6 +427,7 @@ const VALID_MARKER_VISIBILITIES: readonly MarkerVisibility[] = [
   'attention',
   'hidden',
 ];
+const VALID_TOOLTIP_CONTENT: readonly TooltipContent[] = ['none', 'state'];
 const VALID_WALL_SIDES: readonly WallSide[] = ['top', 'right', 'bottom', 'left'];
 const VALID_OPENING_KINDS: readonly OpeningKind[] = ['door', 'window'];
 const VALID_SPATIAL_MOUNTS: readonly SpatialMount[] = ['floor', 'wall', 'ceiling', 'surface', 'free'];
@@ -932,6 +938,12 @@ function normalizeEntity(raw: any): EntityConfig {
   }
   if (VALID_MARKER_VISIBILITIES.includes(raw?.roomVisibility)) {
     entity.roomVisibility = raw.roomVisibility;
+  }
+  if (VALID_TOOLTIP_CONTENT.includes(raw?.tooltipContentInOverview)) {
+    entity.tooltipContentInOverview = raw.tooltipContentInOverview;
+  }
+  if (VALID_TOOLTIP_CONTENT.includes(raw?.tooltipContentInRoom)) {
+    entity.tooltipContentInRoom = raw.tooltipContentInRoom;
   }
   const spatial = normalizeSpatialPlacement(raw?.spatial);
   if (spatial) entity.spatial = spatial;

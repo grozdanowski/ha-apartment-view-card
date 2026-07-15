@@ -408,6 +408,40 @@ describe('3D spatial runtime', () => {
     expect(selectedEntity).toBe('media_player.naim');
   });
 
+  it('shows configured media tooltip content only while the player is active', async () => {
+    const { preview } = await mount();
+    preview.entities = [{
+      entity: 'media_player.kef', name: 'KEF LSX', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'living',
+      roomVisibility: 'always', tooltipContentInOverview: 'none', tooltipContentInRoom: 'state',
+      spatial: { position: { x: 4, y: 0.6, z: 3 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'surface', visible: true },
+    }];
+    preview.hass = { states: {
+      'media_player.kef': {
+        entity_id: 'media_player.kef', state: 'playing',
+        attributes: { media_title: 'All The Stars', media_artist: 'Kendrick Lamar & SZA', source: 'Spotify' },
+      },
+    } };
+    preview.focusedZoneId = 'living';
+    await preview.updateComplete;
+
+    let beacon = preview.shadowRoot.querySelector('.entity-beacon') as HTMLElement;
+    expect(beacon.classList.contains('expanded')).toBe(true);
+    expect(beacon.querySelector('.entity-copy')?.textContent).toContain('All The Stars · Kendrick Lamar & SZA · Spotify');
+    let selectedEntity = '';
+    preview.addEventListener('spatial-entity-selected', (event: Event) => {
+      selectedEntity = (event as CustomEvent).detail.entityId;
+    });
+    beacon.click();
+    expect(selectedEntity).toBe('media_player.kef');
+
+    preview.hass = { states: {
+      'media_player.kef': { entity_id: 'media_player.kef', state: 'paused', attributes: { media_title: 'All The Stars' } },
+    } };
+    await preview.updateComplete;
+    beacon = preview.shadowRoot.querySelector('.entity-beacon') as HTMLElement;
+    expect(beacon.classList.contains('expanded')).toBe(false);
+  });
+
   it('keeps automatic overview markers calm while preserving explicit pins', async () => {
     const { preview } = await mount();
     preview.entities = [

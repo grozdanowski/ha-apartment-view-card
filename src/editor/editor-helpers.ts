@@ -5,6 +5,7 @@ import type {
   SizeTier,
   TapAction,
   MarkerVisibility,
+  TooltipContent,
   ZoneConfig,
 } from '../core/config';
 
@@ -92,6 +93,11 @@ const MARKER_VISIBILITY_OPTIONS: { value: MarkerVisibility; label: string }[] = 
   { value: 'active', label: 'When active' },
   { value: 'attention', label: 'Only when it needs attention' },
   { value: 'hidden', label: 'Hidden' },
+];
+
+const TOOLTIP_CONTENT_OPTIONS: { value: TooltipContent; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'state', label: 'Name and live state' },
 ];
 
 /** Per-entity label source. 'inherit' = no per-entity label (use the global default). */
@@ -254,6 +260,14 @@ export function entitySchema(directional: boolean, labelSource = 'inherit'): HaF
       selector: { select: { mode: 'dropdown', options: MARKER_VISIBILITY_OPTIONS } },
     },
     {
+      name: 'tooltipContentInOverview',
+      selector: { select: { mode: 'dropdown', options: TOOLTIP_CONTENT_OPTIONS } },
+    },
+    {
+      name: 'tooltipContentInRoom',
+      selector: { select: { mode: 'dropdown', options: TOOLTIP_CONTENT_OPTIONS } },
+    },
+    {
       name: 'lightStyle',
       selector: { select: { mode: 'dropdown', options: LIGHT_STYLE_OPTIONS } },
     },
@@ -321,6 +335,8 @@ export interface EntityFormData {
   tap: TapAction;
   overviewVisibility?: MarkerVisibility;
   roomVisibility?: MarkerVisibility;
+  tooltipContentInOverview?: TooltipContent;
+  tooltipContentInRoom?: TooltipContent;
   lightStyle?: LightStyle;
   x: number;
   y: number;
@@ -343,6 +359,8 @@ export function entityToForm(e: EntityConfig): EntityFormData {
     tap: e.tap,
     overviewVisibility: e.overviewVisibility,
     roomVisibility: e.roomVisibility,
+    tooltipContentInOverview: e.tooltipContentInOverview,
+    tooltipContentInRoom: e.tooltipContentInRoom,
     lightStyle: e.lightStyle,
     x: e.x,
     y: e.y,
