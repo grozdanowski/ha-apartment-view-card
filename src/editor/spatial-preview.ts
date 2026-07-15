@@ -2500,7 +2500,6 @@ export class SpatialPreview extends LitElement {
     const height = canvas.clientHeight;
     if (!width || !height) return;
     const world = new THREE.Vector3();
-    const placements: Array<{ beacon: HTMLElement; x: number; y: number; width: number; height: number; side: 'start' | 'end' }> = [];
     this.renderRoot.querySelectorAll<HTMLElement>('.entity-beacon').forEach((beacon) => {
       const object = this._entityVisuals.get(beacon.dataset.entityId ?? '');
       if (!object || !this._entityObjectIsVisible(object)) {
@@ -2515,46 +2514,11 @@ export class SpatialPreview extends LitElement {
       const y = Math.min(height - 20, Math.max(20, (-world.y * 0.5 + 0.5) * height));
       beacon.style.setProperty('--entity-visible', visible ? '1' : '0');
       if (!visible) return;
-      const side = x > width * 0.55 ? 'end' : 'start';
       const expandedWidth = Number.parseFloat(beacon.style.getPropertyValue('--entity-width')) || 154;
-      const roomFocused = beacon.dataset.context === 'room';
-      const markerSize = (this.clientWidth <= 600 ? 40 : 36) * (roomFocused ? 1 : 0.8);
-      placements.push({
-        beacon,
-        x,
-        y,
-        width: beacon.classList.contains('expanded') ? expandedWidth : markerSize,
-        height: markerSize,
-        side,
-      });
-    });
-    const placed: Array<{ left: number; top: number; right: number; bottom: number }> = [];
-    placements.sort((left, right) => left.y - right.y).forEach((placement) => {
-      const halfIcon = placement.height / 2;
-      const left = placement.side === 'end'
-        ? placement.x - placement.width + halfIcon
-        : placement.x - halfIcon;
-      const candidates = [0, -46, 46, -92, 92];
-      const selectedY = candidates
-        .map((offset) => Math.min(height - placement.height / 2 - 6, Math.max(placement.height / 2 + 6, placement.y + offset)))
-        .find((candidateY) => {
-          const candidate = {
-            left: left - 6,
-            top: candidateY - placement.height / 2 - 6,
-            right: left + placement.width + 6,
-            bottom: candidateY + placement.height / 2 + 6,
-          };
-          return placed.every((item) => candidate.right <= item.left || candidate.left >= item.right || candidate.bottom <= item.top || candidate.top >= item.bottom);
-        }) ?? placement.y;
-      placement.beacon.style.setProperty('--entity-x', `${placement.x}px`);
-      placement.beacon.style.setProperty('--entity-y', `${selectedY}px`);
-      placement.beacon.dataset.side = placement.side;
-      placed.push({
-        left: left - 6,
-        top: selectedY - placement.height / 2 - 6,
-        right: left + placement.width + 6,
-        bottom: selectedY + placement.height / 2 + 6,
-      });
+      const side = x + expandedWidth > width - 10 ? 'end' : 'start';
+      beacon.style.setProperty('--entity-x', `${x}px`);
+      beacon.style.setProperty('--entity-y', `${y}px`);
+      beacon.dataset.side = side;
     });
   }
 

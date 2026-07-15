@@ -434,6 +434,48 @@ describe('3D spatial runtime', () => {
     expect(ids).toEqual(['media_player.naim', 'light.pinned']);
   });
 
+  it('keeps nearby markers rigidly anchored instead of collision-shifting them', async () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.focusedZoneId = 'living';
+    preview.entities = [
+      {
+        entity: 'light.bar_1', name: 'Bar Pendant 1', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'living',
+        spatial: { position: { x: 2, y: 2.5, z: 2 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'ceiling', visible: true },
+      },
+      {
+        entity: 'light.bar_2', name: 'Bar Pendant 2', x: 50, y: 50, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'living',
+        spatial: { position: { x: 2, y: 2.5, z: 2 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'ceiling', visible: true },
+      },
+    ];
+    preview.hass = { states: {
+      'light.bar_1': { entity_id: 'light.bar_1', state: 'off', attributes: {} },
+      'light.bar_2': { entity_id: 'light.bar_2', state: 'off', attributes: {} },
+    } };
+    document.body.append(preview);
+    await preview.updateComplete;
+
+    const canvas = preview.shadowRoot.querySelector('canvas') as HTMLCanvasElement;
+    Object.defineProperties(canvas, {
+      clientWidth: { value: 400 },
+      clientHeight: { value: 300 },
+    });
+    preview._renderer = { domElement: canvas, dispose: vi.fn() };
+    preview._camera = new THREE.PerspectiveCamera(50, 4 / 3, 0.1, 100);
+    preview._camera.position.set(0, 0, 10);
+    preview._camera.lookAt(0, 0, 0);
+    preview._camera.updateMatrixWorld(true);
+    const first = new THREE.Group();
+    const second = new THREE.Group();
+    preview._entityVisuals.set('light.bar_1', first);
+    preview._entityVisuals.set('light.bar_2', second);
+
+    preview._syncEntityBeacons();
+    const beacons = [...preview.shadowRoot.querySelectorAll('.entity-beacon')] as HTMLElement[];
+    expect(beacons).toHaveLength(2);
+    expect(beacons[0].style.getPropertyValue('--entity-x')).toBe(beacons[1].style.getPropertyValue('--entity-x'));
+    expect(beacons[0].style.getPropertyValue('--entity-y')).toBe(beacons[1].style.getPropertyValue('--entity-y'));
+  });
+
   it('hides a beacon from overview without suppressing it in its room', async () => {
     const { preview } = await mount();
     preview.entities = [{
