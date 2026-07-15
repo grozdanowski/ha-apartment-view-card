@@ -1048,7 +1048,7 @@ function normalizeOptions(raw: any): CardOptions {
       Number.isFinite(o.idleTimeout) &&
       o.idleTimeout >= 0
         ? o.idleTimeout
-        : 0,
+        : 10,
     presentation: VALID_PRESENTATIONS.includes(o.presentation)
       ? o.presentation
       : 'control-heavy',

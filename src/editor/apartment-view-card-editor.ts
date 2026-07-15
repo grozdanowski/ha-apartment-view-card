@@ -28,9 +28,12 @@ import {
   type SpatialElementType,
   type MarkerVisibility,
   type TooltipContent,
+  type FloorConfig,
+  type SpatialFloorFinish,
 } from '../core/config';
 import {
   defaultEntity,
+  spatialOptionsSchema,
   quickActionSchema,
   defaultZone,
 } from './editor-helpers';
@@ -40,13 +43,14 @@ import {
   duplicateSpatialElement,
   emptySpatialPlan,
   rectangularSpatialPlan,
+  removeSpatialWall,
   removeSpatialElement,
   updateSpatialElement,
   updateSpatialWall,
   withDerivedSpatialRooms,
 } from '../core/spatial-plan';
 import { roomPolygon, spatialBounds, validateSpatialPlan, wallLength } from '../core/spatial-geometry';
-import { assignShellOpenings, shellSegmentById } from '../core/spatial-shell';
+import { assignShellOpenings, removeShellWallSegment, shellSegmentById, validateSpatialShell } from '../core/spatial-shell';
 import { resolveSpatialEntityState } from '../core/spatial-state';
 import { createSpatialPrimitive, elementPrimitivesForType } from '../core/spatial-elements';
 import { discoverGlbSurfaces } from '../core/spatial-glb';
@@ -89,6 +93,8 @@ export class ApartmentViewCardEditor extends LitElement {
   @state() private _glbStatus: { kind: 'loading' | 'ready' | 'error'; message: string } | null = null;
   @state() private _previewMode: PreviewMode = 'edit';
   @state() private _previewCollapsed = false;
+  @state() private _activeFloorIndex = 0;
+  @state() private _floorDeleteArmed: number | null = null;
   @state() private _undoCount = 0;
   @state() private _redoCount = 0;
   @state() private _backupStatus: { kind: 'ready' | 'error' | 'restored'; message: string } | null = null;
@@ -99,6 +105,7 @@ export class ApartmentViewCardEditor extends LitElement {
   private _lastEmittedConfig: ApartmentViewConfig | null = null;
   private _dragStartConfig: ApartmentViewConfig | null = null;
   private _dialogStyleRestores = new Map<HTMLElement, string | null>();
+  private _dialogLargeRestores = new Map<HTMLElement & { large?: boolean }, boolean | undefined>();
   /** Local quick-actions draft; normalize would drop half-filled rows. */
   @state() private _actionsDraft: QuickAction[] | null = null;
 
@@ -140,6 +147,11 @@ export class ApartmentViewCardEditor extends LitElement {
     }
     .editor-heading { display: flex; align-items: center; gap: 4px; min-width: 0; }
     .history-button[disabled] { opacity: 0.35; pointer-events: none; }
+    .active-floor-select {
+      min-height: 40px; max-width: 220px; margin-left: 8px; padding: 0 34px 0 12px;
+      border: 1px solid var(--studio-line); border-radius: 6px;
+      background: var(--card-background-color); color: var(--primary-text-color); font: inherit;
+    }
     .preview-toolbar {
       display: flex;
       align-items: center;
@@ -308,7 +320,61 @@ export class ApartmentViewCardEditor extends LitElement {
     .opening-control { display: grid; grid-template-columns: 86px minmax(0, 1fr) 48px; align-items: center; gap: 10px; }
     .opening-control label { color: var(--secondary-text-color); font-size: 0.88em; }
     .opening-control output { text-align: right; font-variant-numeric: tabular-nums; font-size: 0.88em; }
-    .opening-control input[type='range'] { width: 100%; accent-color: var(--primary-color); }
+    .opening-control input[type='range'] {
+      appearance: none;
+      -webkit-appearance: none;
+      display: block;
+      width: 100%;
+      min-width: 0;
+      height: 32px;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      contain: paint;
+      border: 0;
+      border-radius: 16px;
+      background: transparent;
+      cursor: pointer;
+    }
+    .opening-control input[type='range']::-webkit-slider-runnable-track {
+      height: 4px;
+      border-radius: 2px;
+      background: color-mix(in srgb, var(--primary-text-color) 20%, transparent);
+    }
+    .opening-control input[type='range']::-webkit-slider-thumb {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 18px;
+      height: 18px;
+      margin-top: -7px;
+      border: 2px solid #101617;
+      border-radius: 50%;
+      background: var(--studio-accent);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.32);
+    }
+    .opening-control input[type='range']::-moz-range-track {
+      height: 4px;
+      border: 0;
+      border-radius: 2px;
+      background: color-mix(in srgb, var(--primary-text-color) 20%, transparent);
+    }
+    .opening-control input[type='range']::-moz-range-progress {
+      height: 4px;
+      border-radius: 2px;
+      background: var(--studio-accent);
+    }
+    .opening-control input[type='range']::-moz-range-thumb {
+      width: 18px;
+      height: 18px;
+      border: 2px solid #101617;
+      border-radius: 50%;
+      background: var(--studio-accent);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.32);
+    }
+    .opening-control input[type='range']:focus-visible {
+      outline: 2px solid var(--studio-accent);
+      outline-offset: 2px;
+    }
     .opening-control input[type='color'] {
       width: 52px;
       height: 34px;
@@ -364,9 +430,9 @@ export class ApartmentViewCardEditor extends LitElement {
       font-weight: 700;
       font-variant-numeric: tabular-nums;
     }
-    .room-fields { display: grid; gap: 9px; min-width: 0; }
+    .room-fields { display: grid; grid-column: 2; gap: 9px; min-width: 0; }
     .room-summary-name {
-      display: none;
+      display: grid;
       grid-template-columns: minmax(0, 1fr) 24px;
       align-items: center;
       gap: 8px;
@@ -383,6 +449,9 @@ export class ApartmentViewCardEditor extends LitElement {
       white-space: nowrap;
     }
     .room-summary-name ha-icon { --mdc-icon-size: 18px; color: var(--secondary-text-color); }
+    .room-mapping:not(.selected) .room-fields,
+    .room-mapping:not(.selected) .room-boundary-button { display: none; }
+    .room-mapping.selected .room-summary-name { display: none; }
     .room-fields label { display: grid; gap: 4px; color: var(--secondary-text-color); font-size: 0.75em; }
     .room-fields input,
     .room-fields select {
@@ -399,8 +468,10 @@ export class ApartmentViewCardEditor extends LitElement {
       font-size: 1.12em;
     }
     .room-fields input:disabled { opacity: 0.6; }
-    .room-status { padding-top: 3px; color: var(--secondary-text-color); font-size: 0.72em; white-space: nowrap; }
+    .room-floor-color { padding: 4px !important; }
+    .room-status { grid-column: 3; grid-row: 1; padding-top: 3px; color: var(--secondary-text-color); font-size: 0.72em; white-space: nowrap; }
     .room-status.linked { color: var(--success-color, #6fba98); }
+    .room-boundary-button { grid-column: 2; justify-self: start; }
     .element-kinds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
     .element-kinds button,
     .element-kinds .element-upload,
@@ -490,7 +561,33 @@ export class ApartmentViewCardEditor extends LitElement {
     .condition-row input,
     .condition-row select { width: 100%; min-width: 0; min-height: 42px; box-sizing: border-box; padding: 8px; border: 1px solid var(--studio-line); border-radius: 2px; background: var(--card-background-color); color: var(--primary-text-color); font: inherit; font-size: 13px; }
     .condition-remove { align-self: end; color: var(--error-color, #e57373); }
-    .advanced-workspace { max-width: 920px; }
+    .advanced-workspace { max-width: 1120px; }
+    .advanced-form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 24px;
+      margin-top: 20px;
+    }
+    .advanced-form-grid > div { min-width: 0; }
+    .advanced-form-grid strong { display: block; margin-bottom: 8px; font-size: 14px; }
+    .floor-editor-list { display: grid; gap: 8px; margin-top: 18px; }
+    .floor-editor-row {
+      display: grid;
+      grid-template-columns: 44px minmax(140px, 1fr) minmax(150px, .8fr) auto auto;
+      align-items: center;
+      gap: 10px;
+      min-height: 52px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--studio-line);
+    }
+    .floor-editor-row > ha-icon { color: var(--studio-accent); justify-self: center; }
+    .floor-editor-row input {
+      width: 100%; min-width: 0; min-height: 44px; box-sizing: border-box;
+      border: 1px solid var(--studio-line); border-radius: 6px; padding: 0 12px;
+      background: color-mix(in srgb, var(--card-background-color) 88%, #000); color: var(--primary-text-color); font: inherit;
+    }
+    .floor-editor-row.active input:first-of-type { border-color: var(--studio-accent); }
+    .floor-remove.confirm { --mdc-theme-primary: var(--error-color, #e57373); }
     .backup-card { display: grid; grid-template-columns: 44px minmax(0, 1fr); column-gap: 14px; }
     .backup-icon { display: grid; place-items: center; width: 44px; height: 44px; background: color-mix(in srgb, var(--studio-accent) 16%, transparent); color: var(--studio-accent); }
     .backup-icon ha-icon { --mdc-icon-size: 22px; }
@@ -544,7 +641,7 @@ export class ApartmentViewCardEditor extends LitElement {
       .mode-switch button { flex: 1; }
       .room-mapping { grid-template-columns: 34px minmax(0, 1fr); }
       .room-number { width: 34px; height: 34px; }
-      .room-status { grid-column: 2; padding-top: 0; }
+      .room-status { grid-column: 2; grid-row: auto; padding-top: 0; }
       .setup-steps { gap: 24px; margin-bottom: 22px; }
       .setup-step { min-width: auto; font-size: 16px; padding-inline: 0; }
       .setup-step ha-icon { display: none; }
@@ -610,6 +707,8 @@ export class ApartmentViewCardEditor extends LitElement {
       margin: 0 0 10px;
       line-height: 1.4;
     }
+    .inline-error { margin-top: 8px; color: var(--error-color, #e57373); font-size: 13px; line-height: 1.4; }
+    .inline-error code { font: inherit; font-weight: 650; }
     .entity-row {
       border: 0;
       border-top: 1px solid var(--studio-line);
@@ -785,11 +884,10 @@ export class ApartmentViewCardEditor extends LitElement {
       .setup-card h3 { font-size: 20px; }
       .room-mapping { grid-template-columns: 34px minmax(0, 1fr); padding-inline: 0; }
       .room-number { width: 34px; height: 34px; }
-      .room-summary-name { display: grid; align-self: center; font-size: 15px; }
-      .room-mapping:not(.selected) .room-fields { display: none; }
-      .room-mapping.selected .room-summary-name { display: none; }
+      .room-summary-name { align-self: center; font-size: 15px; }
       .room-mapping.selected .room-fields { grid-column: 2; }
-      .room-status { grid-column: 2; padding-top: 0; }
+      .room-status { grid-column: 2; grid-row: auto; padding-top: 0; }
+      .room-boundary-button { grid-column: 2; }
       .element-kinds { grid-template-columns: 1fr; }
       .element-kinds button, .element-kinds .element-upload { min-height: 72px; }
       .glb-source { grid-template-columns: 1fr; }
@@ -808,6 +906,9 @@ export class ApartmentViewCardEditor extends LitElement {
       .condition-row label:nth-child(5) { grid-column: 1 / 3; }
       .condition-row .condition-remove { grid-column: 3; align-self: end; }
       .backup-card { display: block; }
+      .advanced-form-grid { grid-template-columns: 1fr; gap: 18px; }
+      .floor-editor-row { grid-template-columns: 40px minmax(0, 1fr) auto; }
+      .floor-editor-row .floor-icon-input { grid-column: 2 / -1; }
       .backup-icon { margin-bottom: 14px; }
       .backup-actions { grid-template-columns: 1fr; }
       .backup-actions,
@@ -833,7 +934,9 @@ export class ApartmentViewCardEditor extends LitElement {
     // normalizeConfig fills defaults, applies breaking renames, preserves unknown keys.
     const normalized = normalizeConfig(config);
     const echoed = this._lastEmittedConfig && JSON.stringify(normalized) === JSON.stringify(this._lastEmittedConfig);
-    this._config = normalized;
+    if (!normalized.floors?.length) this._activeFloorIndex = 0;
+    else this._activeFloorIndex = Math.min(this._activeFloorIndex, normalized.floors.length - 1);
+    this._config = this._floorView(normalized, this._activeFloorIndex);
     if (!this._selectedRoomId) {
       const surveyedRoom = normalized.spatial?.shell?.rooms?.[0];
       const plannedRoom = normalized.spatial?.plan?.rooms?.[0];
@@ -842,6 +945,7 @@ export class ApartmentViewCardEditor extends LitElement {
         : plannedRoom?.id ?? '';
     }
     if (!echoed) {
+      this._actionsDraft = null;
       this._undoStack = [];
       this._redoStack = [];
       this._syncHistoryState();
@@ -853,21 +957,121 @@ export class ApartmentViewCardEditor extends LitElement {
     this._redoCount = this._redoStack.length;
   }
 
+  private _floorView(config: ApartmentViewConfig, index: number): ApartmentViewConfig {
+    const floor = config.floors?.[index];
+    if (!floor) return config;
+    return {
+      ...config,
+      images: floor.images,
+      entities: floor.entities,
+      zones: floor.zones,
+      spatial: floor.spatial,
+    };
+  }
+
+  private _saveActiveFloor(config: ApartmentViewConfig): ApartmentViewConfig {
+    if (!config.floors?.length) return config;
+    const index = Math.min(this._activeFloorIndex, config.floors.length - 1);
+    return {
+      ...config,
+      floors: config.floors.map((floor, floorIndex) => floorIndex === index ? {
+        ...floor,
+        images: config.images,
+        entities: config.entities,
+        zones: config.zones,
+        spatial: config.spatial,
+      } : floor),
+    };
+  }
+
+  private _canonicalConfig(config: ApartmentViewConfig): ApartmentViewConfig {
+    const saved = this._saveActiveFloor(config);
+    const first = saved.floors?.[0];
+    if (!first) return saved;
+    return {
+      ...saved,
+      images: first.images,
+      entities: first.entities,
+      zones: first.zones,
+      spatial: first.spatial,
+    };
+  }
+
   private _applyConfig(config: ApartmentViewConfig, record = true): void {
     if (record && this._config && JSON.stringify(config) !== JSON.stringify(this._config)) {
       this._undoStack.push(this._config);
       if (this._undoStack.length > 50) this._undoStack.shift();
       this._redoStack = [];
     }
-    this._config = config;
-    this._lastEmittedConfig = config;
+    this._config = this._saveActiveFloor(config);
+    const emitted = this._canonicalConfig(this._config);
+    this._lastEmittedConfig = emitted;
     this._syncHistoryState();
-    fireEvent(this, 'config-changed', { config });
+    fireEvent(this, 'config-changed', { config: emitted });
+  }
+
+  private _switchEditorFloor(index: number): void {
+    const canonical = this._canonicalConfig(this._config);
+    if (!canonical.floors?.[index] || index === this._activeFloorIndex) return;
+    this._activeFloorIndex = index;
+    this._config = this._floorView(canonical, index);
+    this._selectedWallId = '';
+    this._selectedOpeningId = '';
+    this._selectedRoomId = '';
+    this._selectedElementId = '';
+    this._selectedEntity = -1;
+    this._actionsDraft = null;
+    this._floorDeleteArmed = null;
+  }
+
+  private _addFloor(): void {
+    const canonical = this._canonicalConfig(this._config);
+    const existing = canonical.floors?.length ? [...canonical.floors] : [{
+      name: 'Floor 1', icon: 'mdi:home-floor-1', images: canonical.images,
+      entities: canonical.entities, zones: canonical.zones, spatial: canonical.spatial,
+    } satisfies FloorConfig];
+    const source = existing[Math.min(this._activeFloorIndex, existing.length - 1)];
+    const copy = typeof structuredClone === 'function' ? structuredClone(source) : JSON.parse(JSON.stringify(source)) as FloorConfig;
+    copy.name = `Floor ${existing.length + 1}`;
+    copy.icon = `mdi:home-floor-${Math.min(existing.length + 1, 3)}`;
+    existing.push(copy);
+    this._activeFloorIndex = existing.length - 1;
+    this._applyConfig(this._floorView({ ...canonical, floors: existing }, this._activeFloorIndex));
+  }
+
+  private _updateFloor(index: number, patch: Partial<Pick<FloorConfig, 'name' | 'icon'>>): void {
+    const canonical = this._canonicalConfig(this._config);
+    if (!canonical.floors?.[index]) return;
+    const floors = canonical.floors.map((floor, floorIndex) => floorIndex === index ? { ...floor, ...patch } : floor);
+    this._applyConfig(this._floorView({ ...canonical, floors }, this._activeFloorIndex));
+  }
+
+  private _removeFloor(index: number): void {
+    const canonical = this._canonicalConfig(this._config);
+    if (!canonical.floors?.[index]) return;
+    const floors = canonical.floors.filter((_, floorIndex) => floorIndex !== index);
+    this._activeFloorIndex = Math.max(0, Math.min(this._activeFloorIndex - (index <= this._activeFloorIndex ? 1 : 0), floors.length - 1));
+    if (!floors.length) {
+      const { floors: _floors, ...single } = canonical;
+      this._applyConfig({ ...single, floors: [] });
+      return;
+    }
+    this._applyConfig(this._floorView({ ...canonical, floors }, this._activeFloorIndex));
+  }
+
+  private _requestFloorRemoval(index: number): void {
+    if (this._floorDeleteArmed !== index) {
+      this._floorDeleteArmed = index;
+      return;
+    }
+    this._floorDeleteArmed = null;
+    this._removeFloor(index);
   }
 
   private _undo(): void {
     const previous = this._undoStack.pop();
     if (!previous) return;
+    this._actionsDraft = null;
     this._redoStack.push(this._config);
     this._applyConfig(previous, false);
   }
@@ -875,6 +1079,7 @@ export class ApartmentViewCardEditor extends LitElement {
   private _redo(): void {
     const next = this._redoStack.pop();
     if (!next) return;
+    this._actionsDraft = null;
     this._undoStack.push(this._config);
     this._applyConfig(next, false);
   }
@@ -882,6 +1087,45 @@ export class ApartmentViewCardEditor extends LitElement {
   private _setMode(mode: EditorMode): void {
     this._mode = mode;
   }
+
+  private _onOptionsChanged(event: CustomEvent): void {
+    event.stopPropagation();
+    const value = event.detail.value as Partial<ApartmentViewConfig['options']>;
+    this._applyConfig({
+      ...this._config,
+      options: {
+        ...this._config.options,
+        ...value,
+        labels: this._config.options.labels,
+        interaction: this._config.options.interaction,
+      },
+    });
+  }
+
+  private _settingsLabel = (schema: { name: string }): string => ({
+    presentation: 'Information density',
+    view: 'Time of day',
+    lightStyle: '2D light appearance',
+    spatialLightingMode: '3D lighting fidelity',
+    weatherEntity: 'Weather source',
+    illuminanceEntity: 'Outdoor illuminance source',
+    hideWalls: 'Lower walls in overview',
+    freePanZoom: 'Allow free pan and zoom',
+    zoomMax: 'Maximum zoom',
+    duskDawnOffsetMinutes: 'Dawn and dusk transition',
+    iconSize: 'Overview marker size',
+    iconSizeMax: 'Room marker size',
+    iconSizeMobile: 'Mobile overview marker size',
+    iconSizeMaxMobile: 'Mobile room marker size',
+    aspectMobile: 'Mobile viewport proportion',
+    idleTimeout: 'Return to overview after inactivity',
+    source: 'Label content',
+    visibility: 'Label visibility',
+    wheel: 'Scroll gesture',
+    doubleTapZoom: 'Double-tap to zoom',
+    roomSwipe: 'Swipe between rooms',
+    inertia: 'Momentum while panning',
+  } as Record<string, string>)[schema.name] ?? schema.name;
 
   private _downloadBackup(format: 'json' | 'yaml'): void {
     const content = format === 'json'
@@ -905,16 +1149,34 @@ export class ApartmentViewCardEditor extends LitElement {
     if (!Array.isArray(candidate.zones)) errors.push('The rooms list is missing or invalid.');
     const spatial = candidate.spatial as Record<string, unknown> | undefined;
     const rawPlan = spatial?.plan as Record<string, unknown> | undefined;
+    const rawShell = spatial?.shell as Record<string, unknown> | undefined;
     if (rawPlan && !Array.isArray(rawPlan.elements)) errors.push('The spatial plan has no valid Elements list.');
+    if (rawShell) {
+      if (!Array.isArray(rawShell.floor) || !Array.isArray(rawShell.outer)) errors.push('The surveyed shell has no valid floor or outline.');
+      if (!Array.isArray(rawShell.openings)) errors.push('The surveyed shell has no valid openings list.');
+      if (rawShell.walls !== undefined && !Array.isArray(rawShell.walls)) errors.push('The surveyed shell has no valid walls list.');
+      if (rawShell.rooms !== undefined && !Array.isArray(rawShell.rooms)) errors.push('The surveyed shell has no valid rooms list.');
+    }
     if (errors.length) return { errors };
     const config = normalizeConfig(candidate);
     const plan = config.spatial?.plan;
+    const shell = config.spatial?.shell;
     if (plan) {
       errors.push(...validateSpatialPlan(plan, config.spatial?.openings).filter((issue) => issue.severity === 'error').map((issue) => issue.message));
       plan.elements.forEach((element) => {
         if (element.type === 'custom' && !element.primitives.length) errors.push(`Element ${element.name ?? element.id} has no primitives.`);
         if (element.type === 'glb' && (!element.glb || !element.glb.surfaces.length)) errors.push(`Element ${element.name ?? element.id} has no valid GLB surfaces.`);
       });
+    }
+    if (shell) {
+      const zoneIds = new Set(config.zones.flatMap((zone) => zone.id ? [zone.id] : []));
+      errors.push(...validateSpatialShell(shell, zoneIds).filter((issue) => issue.severity === 'error').map((issue) => issue.message));
+      const rawWallCount = Array.isArray(rawShell?.walls) ? rawShell.walls.length : 0;
+      const rawRoomCount = Array.isArray(rawShell?.rooms) ? rawShell.rooms.length : 0;
+      const rawOpeningCount = Array.isArray(rawShell?.openings) ? rawShell.openings.length : 0;
+      if (rawWallCount !== (shell.walls?.length ?? 0)) errors.push('One or more surveyed walls could not be restored.');
+      if (rawRoomCount !== (shell.rooms?.length ?? 0)) errors.push('One or more surveyed rooms could not be restored.');
+      if (rawOpeningCount !== shell.openings.length) errors.push('One or more surveyed openings could not be restored.');
     }
     return errors.length ? { errors } : { config, errors: [] };
   }
@@ -952,6 +1214,7 @@ export class ApartmentViewCardEditor extends LitElement {
 
   private _restorePendingBackup(): void {
     if (!this._pendingRestore) return;
+    this._actionsDraft = null;
     this._applyConfig(this._pendingRestore);
     this._pendingRestore = null;
     this._backupStatus = { kind: 'restored', message: `${this._pendingRestoreName} has been restored.` };
@@ -991,6 +1254,12 @@ export class ApartmentViewCardEditor extends LitElement {
     }
     const dialogs = new Set<HTMLElement>();
     ancestors.forEach((ancestor) => {
+      if (ancestor.matches('hui-dialog-edit-card, hui-dialog-edit-card-v2')) {
+        const host = ancestor as HTMLElement & { large?: boolean };
+        if (!this._dialogLargeRestores.has(host)) this._dialogLargeRestores.set(host, host.large);
+        host.large = true;
+        host.setAttribute('large', '');
+      }
       if (ancestor.matches('ha-dialog, md-dialog, hui-dialog-edit-card, hui-dialog-edit-card-v2')) dialogs.add(ancestor);
       ancestor.shadowRoot?.querySelectorAll<HTMLElement>('ha-dialog, md-dialog').forEach((dialog) => dialogs.add(dialog));
     });
@@ -1002,6 +1271,16 @@ export class ApartmentViewCardEditor extends LitElement {
   }
 
   public disconnectedCallback(): void {
+    this._dialogLargeRestores.forEach((large, element) => {
+      if (large === undefined) {
+        delete element.large;
+        element.removeAttribute('large');
+      } else {
+        element.large = large;
+        element.toggleAttribute('large', large);
+      }
+    });
+    this._dialogLargeRestores.clear();
     this._dialogStyleRestores.forEach((style, element) => {
       if (style === null) element.removeAttribute('style');
       else element.setAttribute('style', style);
@@ -1207,9 +1486,29 @@ export class ApartmentViewCardEditor extends LitElement {
     this._applyConfig({ ...this._config, spatial: { ...this._spatial(), shell } }, record);
   }
 
+  private _onSpatialWallDeleteRequested(ev: CustomEvent): void {
+    ev.stopPropagation();
+    const { wallId } = ev.detail as { wallId: string };
+    const spatial = this._spatial();
+    const plan = spatial.plan;
+    if (plan?.walls.some((wall) => wall.id === wallId)) {
+      this._commitSpatial({
+        ...spatial,
+        plan: removeSpatialWall(plan, wallId),
+        openings: spatial.openings.filter((opening) => opening.wallId !== wallId),
+      });
+    } else if (spatial.shell && shellSegmentById(spatial.shell, wallId)) {
+      this._commitSpatial({ ...spatial, shell: removeShellWallSegment(spatial.shell, wallId) });
+    } else return;
+    this._selectedWallId = '';
+    this._selectedOpeningId = '';
+  }
+
   private _onPreviewWallSelected(ev: CustomEvent): void {
     this._selectedWallId = (ev.detail as { wallId: string }).wallId;
     this._selectedOpeningId = '';
+    this._selectedRoomId = '';
+    this._selectedElementId = '';
     if (this._mode !== 'setup' || this._setupStep !== 'floorplan') this._setupStep = 'architecture';
     this._previewMode = 'edit';
   }
@@ -1218,12 +1517,17 @@ export class ApartmentViewCardEditor extends LitElement {
     const { id, wallId } = ev.detail as { id: string; wallId: string };
     this._selectedOpeningId = id;
     this._selectedWallId = wallId;
+    this._selectedRoomId = '';
+    this._selectedElementId = '';
     this._setupStep = 'architecture';
     this._previewMode = 'edit';
   }
 
   private _onSpatialRoomSelected(ev: CustomEvent): void {
     this._selectedRoomId = (ev.detail as { roomId: string }).roomId;
+    this._selectedWallId = '';
+    this._selectedOpeningId = '';
+    this._selectedElementId = '';
     this._setupStep = 'rooms';
     this._previewMode = 'edit';
   }
@@ -1385,6 +1689,22 @@ export class ApartmentViewCardEditor extends LitElement {
     await editor?.beginStructureEditing();
     const preview = this.renderRoot.querySelector<HTMLElement>('.preview-panel');
     if (typeof preview?.scrollIntoView === 'function') preview.scrollIntoView({ block: 'start', behavior: 'auto' });
+  }
+
+  private async _inspectIn3d(): Promise<void> {
+    this._previewMode = '3d';
+    this._previewCollapsed = false;
+    await this.updateComplete;
+    this.renderRoot.querySelector<HTMLElement>('.preview-panel')?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  private async _editRoomName(event: Event, selectedId: string): Promise<void> {
+    event.preventDefault();
+    event.stopPropagation();
+    const mapping = (event.currentTarget as HTMLElement | null)?.closest('.room-mapping');
+    this._selectedRoomId = selectedId;
+    await this.updateComplete;
+    mapping?.querySelector<HTMLInputElement>('.room-fields input')?.focus();
   }
 
   private _renderNorthSetting() {
@@ -1764,6 +2084,9 @@ export class ApartmentViewCardEditor extends LitElement {
 
   private _onSpatialElementSelected(ev: CustomEvent): void {
     this._selectedElementId = (ev.detail as { elementId: string }).elementId;
+    this._selectedWallId = '';
+    this._selectedOpeningId = '';
+    this._selectedRoomId = '';
     const element = this._spatial().plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
     this._selectedPrimitiveId = element?.primitives[0]?.id ?? '';
     this._selectedGlbSurfaceId = element?.glb?.surfaces[0]?.id ?? '';
@@ -1772,6 +2095,10 @@ export class ApartmentViewCardEditor extends LitElement {
 
   private _onSpatialEntitySelected(ev: CustomEvent): void {
     const entityId = (ev.detail as { entityId: string }).entityId;
+    this._selectedWallId = '';
+    this._selectedOpeningId = '';
+    this._selectedRoomId = '';
+    this._selectedElementId = '';
     this._selectedEntity = this._config.entities.findIndex((entity) => entity.entity === entityId);
     this._setupStep = 'devices';
   }
@@ -1939,6 +2266,29 @@ export class ApartmentViewCardEditor extends LitElement {
     } : zone));
   }
 
+  private _updateSurveyRoom(zoneId: string, patch: { finish?: SpatialFloorFinish; color?: string }): void {
+    const shell = this._spatial().shell;
+    if (!shell?.rooms) return;
+    this._commitSpatial({
+      ...this._spatial(),
+      shell: { ...shell, rooms: shell.rooms.map((room) => room.zoneId === zoneId ? { ...room, ...patch } : room) },
+    });
+  }
+
+  private _updatePlanRoom(roomId: string, patch: Partial<Pick<SpatialRoom, 'floorFinish' | 'floorColor'>>): void {
+    const plan = this._spatial().plan;
+    if (!plan) return;
+    this._commitSpatial({
+      ...this._spatial(),
+      plan: { ...plan, rooms: plan.rooms.map((room) => room.id === roomId ? { ...room, ...patch } : room) },
+    });
+  }
+
+  private async _editRoomBoundary(roomId: string): Promise<void> {
+    this._selectedRoomId = roomId;
+    await this._editStructure();
+  }
+
   private _selectUnplacedEntity(entity: EntityConfig): void {
     this._selectedEntity = this._config.entities.indexOf(entity);
     this._previewMode = 'edit';
@@ -1958,9 +2308,15 @@ export class ApartmentViewCardEditor extends LitElement {
     return this._actionsDraft ?? this._config.quickActions ?? [];
   }
 
+  private _actionIsValid(action: QuickAction): boolean {
+    const target = action.entity && /^[a-z0-9_]+\.[a-z0-9_]+$/i.test(action.entity.trim());
+    const service = action.service && /^[a-z0-9_]+\.[a-z0-9_]+$/i.test(action.service.trim());
+    return Boolean(action.name?.trim() && (target || service));
+  }
+
   private _commitActions(list: QuickAction[]): void {
     this._actionsDraft = list;
-    const valid = list.filter((a) => a.name && (a.entity || a.service));
+    const valid = list.filter((action) => this._actionIsValid(action));
     const config: ApartmentViewConfig = { ...this._config, quickActions: valid };
     this._applyConfig(config);
   }
@@ -2004,6 +2360,7 @@ export class ApartmentViewCardEditor extends LitElement {
       icon: 'Icon',
       entity: 'Entity to activate (scene, script, light…)',
       service: 'Service (advanced — overrides entity, e.g. light.turn_off)',
+      data: 'Service data and target',
     };
     return labels[schema.name] ?? schema.name;
   };
@@ -2027,19 +2384,21 @@ export class ApartmentViewCardEditor extends LitElement {
                   <ha-icon-button
                     class="action-up"
                     .label=${'Move action up'}
-                    .path=${'M7,15L12,10L17,15H7Z'}
+                    icon="mdi:chevron-up"
+                    ?disabled=${i === 0}
                     @click=${() => this._moveAction(i, -1)}
                   ></ha-icon-button>
                   <ha-icon-button
                     class="action-down"
                     .label=${'Move action down'}
-                    .path=${'M7,10L12,15L17,10H7Z'}
+                    icon="mdi:chevron-down"
+                    ?disabled=${i === list.length - 1}
                     @click=${() => this._moveAction(i, 1)}
                   ></ha-icon-button>
                   <ha-icon-button
                     class="remove-action"
                     .label=${'Delete action'}
-                    .path=${'M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z'}
+                    icon="mdi:delete-outline"
                     @click=${() => this._removeAction(i)}
                   ></ha-icon-button>
                 </div>
@@ -2052,6 +2411,11 @@ export class ApartmentViewCardEditor extends LitElement {
                 .computeLabel=${this._actionLabel}
                 @value-changed=${(ev: CustomEvent) => this._onActionChanged(ev, i)}
               ></ha-form>
+              ${a.service && !/^[a-z0-9_]+\.[a-z0-9_]+$/i.test(a.service.trim())
+                ? html`<div class="inline-error" role="alert">Use a complete service name such as <code>light.turn_off</code>.</div>`
+                : a.entity && !/^[a-z0-9_]+\.[a-z0-9_]+$/i.test(a.entity.trim())
+                  ? html`<div class="inline-error" role="alert">Choose a complete entity ID such as <code>scene.movie_night</code>.</div>`
+                  : nothing}
             </div>
           `
         )}
@@ -2061,6 +2425,7 @@ export class ApartmentViewCardEditor extends LitElement {
   }
 
   private _renderStudioHeader() {
+    const floors = this._canonicalConfig(this._config).floors ?? [];
     return html`
       <div class="editor-mode">
         <div class="editor-heading">
@@ -2069,6 +2434,10 @@ export class ApartmentViewCardEditor extends LitElement {
             ?disabled=${!this._undoCount} @click=${this._undo}></ha-icon-button>
           <ha-icon-button class="history-button redo" .label=${'Redo'} icon="mdi:redo"
             ?disabled=${!this._redoCount} @click=${this._redo}></ha-icon-button>
+          ${floors.length ? html`<select class="active-floor-select" aria-label="Floor being edited" .value=${String(this._activeFloorIndex)}
+            @change=${(event: Event) => this._switchEditorFloor(Number((event.target as HTMLSelectElement).value))}>
+            ${floors.map((floor, index) => html`<option value=${String(index)} ?selected=${index === this._activeFloorIndex}>${floor.name}</option>`)}
+          </select>` : nothing}
         </div>
         <div class="mode-switch" role="tablist" aria-label="Editor mode">
           <button class=${this._mode === 'setup' ? 'active' : ''} role="tab"
@@ -2136,7 +2505,7 @@ export class ApartmentViewCardEditor extends LitElement {
           <p>${wallCount} wall segment${wallCount === 1 ? '' : 's'}, ${roomCount} room${roomCount === 1 ? '' : 's'}, and ${elementCount} Element${elementCount === 1 ? '' : 's'}.</p>
           <div class="setup-actions">
             <ha-button @click=${this._editStructure}>Edit structure</ha-button>
-            <ha-button @click=${() => { this._previewMode = '3d'; }}>Inspect in 3D</ha-button>
+            <ha-button @click=${this._inspectIn3d}>Inspect in 3D</ha-button>
             <ha-button @click=${() => { this._setupStep = 'rooms'; }}>Continue to rooms</ha-button>
           </div>
         </div>
@@ -2214,9 +2583,10 @@ export class ApartmentViewCardEditor extends LitElement {
             const zone = this._config.zones.find((candidate) => candidate.id === room.zoneId);
             const selectedId = `survey:${room.zoneId}`;
             return html`<div class="room-mapping ${this._selectedRoomId === selectedId ? 'selected' : ''}"
-              @click=${() => { this._selectedRoomId = selectedId; }}>
+              role="group" aria-label=${zone?.name ?? room.zoneId}>
               <div class="room-number">${String(index + 1).padStart(2, '0')}</div>
-              <button type="button" class="room-summary-name" aria-label=${`Edit ${zone?.name ?? room.zoneId}`}>
+              <button type="button" class="room-summary-name" aria-label=${`Edit ${zone?.name ?? room.zoneId}`}
+                @click=${(event: Event) => this._editRoomName(event, selectedId)}>
                 <span>${zone?.name ?? room.zoneId}</span><ha-icon icon="mdi:pencil-outline"></ha-icon>
               </button>
               <div class="room-fields">
@@ -2239,8 +2609,21 @@ export class ApartmentViewCardEditor extends LitElement {
                     ${areas.map((area) => html`<option value=${area.area_id} ?selected=${zone?.areaId === area.area_id}>${area.name}</option>`)}
                   </select>
                 </label>
+                <label>
+                  <span>Floor finish</span>
+                  <select class="room-finish-select" aria-label=${`Floor finish for room ${index + 1}`} .value=${room.finish ?? 'wood'}
+                    @change=${(event: Event) => this._updateSurveyRoom(room.zoneId, { finish: (event.target as HTMLSelectElement).value as SpatialFloorFinish })}>
+                    <option value="wood">Wood</option><option value="tile">Tile</option><option value="stone">Stone</option><option value="carpet">Carpet</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Floor color</span>
+                  <input class="room-floor-color" type="color" aria-label=${`Floor color for room ${index + 1}`} .value=${room.color ?? '#8b745b'}
+                    @change=${(event: Event) => this._updateSurveyRoom(room.zoneId, { color: (event.target as HTMLInputElement).value })} />
+                </label>
               </div>
               <div class="room-status ${zone?.areaId ? 'linked' : ''}">${zone?.areaId ? 'Linked' : 'Local room'}</div>
+              <ha-button class="room-boundary-button" @click=${() => this._editRoomBoundary(selectedId)}>Edit boundary</ha-button>
             </div>`;
           })}
         </div>
@@ -2262,9 +2645,11 @@ export class ApartmentViewCardEditor extends LitElement {
         <div class="room-mapping-list">
           ${plan.rooms.map((room, index) => {
             const zone = room.zoneId ? this._config.zones.find((candidate) => candidate.id === room.zoneId) : undefined;
-            return html`<div class="room-mapping ${this._selectedRoomId === room.id ? 'selected' : ''}" @click=${() => { this._selectedRoomId = room.id; }}>
+            return html`<div class="room-mapping ${this._selectedRoomId === room.id ? 'selected' : ''}"
+              role="group" aria-label=${zone?.name ?? `Room ${index + 1}`}>
               <div class="room-number">${String(index + 1).padStart(2, '0')}</div>
-              <button type="button" class="room-summary-name" aria-label=${`Edit ${zone?.name ?? `Room ${index + 1}`}`}>
+              <button type="button" class="room-summary-name" aria-label=${`Edit ${zone?.name ?? `Room ${index + 1}`}`}
+                @click=${(event: Event) => this._editRoomName(event, room.id)}>
                 <span>${zone?.name ?? `Room ${index + 1}`}</span><ha-icon icon="mdi:pencil-outline"></ha-icon>
               </button>
               <div class="room-fields">
@@ -2287,8 +2672,21 @@ export class ApartmentViewCardEditor extends LitElement {
                     ${areas.map((area) => html`<option value=${area.area_id} ?selected=${zone?.areaId === area.area_id}>${area.name}</option>`)}
                   </select>
                 </label>
+                <label>
+                  <span>Floor finish</span>
+                  <select class="room-finish-select" aria-label=${`Floor finish for room ${index + 1}`} .value=${room.floorFinish}
+                    @change=${(event: Event) => this._updatePlanRoom(room.id, { floorFinish: (event.target as HTMLSelectElement).value as SpatialFloorFinish })}>
+                    <option value="wood">Wood</option><option value="tile">Tile</option><option value="stone">Stone</option><option value="carpet">Carpet</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Floor color</span>
+                  <input class="room-floor-color" type="color" aria-label=${`Floor color for room ${index + 1}`} .value=${room.floorColor ?? '#8b745b'}
+                    @change=${(event: Event) => this._updatePlanRoom(room.id, { floorColor: (event.target as HTMLInputElement).value })} />
+                </label>
               </div>
               <div class="room-status ${zone ? 'linked' : ''}">${zone ? 'Linked' : 'Needs a name'}</div>
+              <ha-button class="room-boundary-button" @click=${() => this._editRoomBoundary(room.id)}>Edit boundary</ha-button>
             </div>`;
           })}
         </div>
@@ -2331,7 +2729,7 @@ export class ApartmentViewCardEditor extends LitElement {
         ${selectedShellSegment ? html`<div class="setup-actions">
           <ha-button @click=${() => this._addOpening('door')}><ha-icon icon="mdi:door-open"></ha-icon>&nbsp; Add door</ha-button>
           <ha-button @click=${() => this._addOpening('window')}><ha-icon icon="mdi:window-closed-variant"></ha-icon>&nbsp; Add window</ha-button>
-          <ha-button @click=${() => { this._previewMode = '3d'; }}>View in 3D</ha-button>
+          <ha-button @click=${this._inspectIn3d}>View in 3D</ha-button>
         </div>` : html`<p>Select a wall in the plan to add a new opening.</p>`}
       </div>
       ${surveySelected && surveyAssignment ? html`<div class="setup-card">
@@ -2422,7 +2820,7 @@ export class ApartmentViewCardEditor extends LitElement {
           <div class="setup-actions">
             <ha-button @click=${() => this._addOpening('door')}><ha-icon icon="mdi:door-open"></ha-icon>&nbsp; Add door</ha-button>
             <ha-button @click=${() => this._addOpening('window')}><ha-icon icon="mdi:window-closed-variant"></ha-icon>&nbsp; Add window</ha-button>
-            <ha-button @click=${() => { this._previewMode = '3d'; }}>View in 3D</ha-button>
+            <ha-button @click=${this._inspectIn3d}>View in 3D</ha-button>
           </div>
           ${wallOpenings.length ? html`<div class="opening-list">${wallOpenings.map((opening, index) => html`
             <button class="opening-row ${opening.id === this._selectedOpeningId ? 'selected' : ''}"
@@ -2534,7 +2932,7 @@ export class ApartmentViewCardEditor extends LitElement {
         <label><span>Value</span><input type="text" .value=${String(rule.compare)} @change=${(event: Event) => this._updatePrimitiveRule(key, index, { compare: (event.target as HTMLInputElement).value })} /></label>
         <label class="condition-result"><span>Result</span>${isColor ? html`<input type="color" .value=${String(rule.value)} @input=${(event: Event) => this._updatePrimitiveRule(key, index, { value: (event.target as HTMLInputElement).value })} />`
           : html`<input type="number" min="0" max="1" step="0.05" .value=${String(rule.value)} @change=${(event: Event) => this._updatePrimitiveRule(key, index, { value: Number((event.target as HTMLInputElement).value) })} />`}</label>
-        <button class="condition-remove" title="Remove condition" @click=${() => this._removePrimitiveRule(key, index)}><ha-icon icon="mdi:close"></ha-icon></button>
+        <button class="condition-remove" title="Remove condition" aria-label="Remove condition" @click=${() => this._removePrimitiveRule(key, index)}><ha-icon icon="mdi:close"></ha-icon></button>
       </div>`)}
     </div>`;
   }
@@ -2565,7 +2963,7 @@ export class ApartmentViewCardEditor extends LitElement {
         <label><span>Value</span><input type="text" .value=${String(rule.compare)} @change=${(event: Event) => this._updateGlbSurfaceRule(key, index, { compare: (event.target as HTMLInputElement).value })} /></label>
         <label class="condition-result"><span>Result</span>${isColor ? html`<input type="color" .value=${String(rule.value)} @input=${(event: Event) => this._updateGlbSurfaceRule(key, index, { value: (event.target as HTMLInputElement).value })} />`
           : html`<input type="number" min="0" max="1" step="0.05" .value=${String(rule.value)} @change=${(event: Event) => this._updateGlbSurfaceRule(key, index, { value: Number((event.target as HTMLInputElement).value) })} />`}</label>
-        <button class="condition-remove" title="Remove condition" @click=${() => this._removeGlbSurfaceRule(key, index)}><ha-icon icon="mdi:close"></ha-icon></button>
+        <button class="condition-remove" title="Remove condition" aria-label="Remove condition" @click=${() => this._removeGlbSurfaceRule(key, index)}><ha-icon icon="mdi:close"></ha-icon></button>
       </div>`)}
     </div>`;
   }
@@ -2600,7 +2998,7 @@ export class ApartmentViewCardEditor extends LitElement {
           <label class="element-upload"><ha-icon icon="mdi:cube-scan"></ha-icon><span><strong>GLB sourced</strong><small>Import and map model surfaces</small></span><input type="file" accept=".glb,model/gltf-binary" hidden @change=${this._onGlbPicked} /></label>
         </div>
         <p class="glb-note">GLB files up to 2.5 MB are embedded in the dashboard, so they travel with backups and work on every device.</p>
-        ${this._glbStatus ? html`<div class=${`glb-status ${this._glbStatus.kind}`}><ha-icon icon=${this._glbStatus.kind === 'loading' ? 'mdi:progress-clock' : this._glbStatus.kind === 'ready' ? 'mdi:check-circle-outline' : 'mdi:alert-circle-outline'}></ha-icon><span>${this._glbStatus.message}</span></div>` : nothing}
+        ${this._glbStatus ? html`<div class=${`glb-status ${this._glbStatus.kind}`} role="status" aria-live="polite"><ha-icon icon=${this._glbStatus.kind === 'loading' ? 'mdi:progress-clock' : this._glbStatus.kind === 'ready' ? 'mdi:check-circle-outline' : 'mdi:alert-circle-outline'}></ha-icon><span>${this._glbStatus.message}</span></div>` : nothing}
       </div>
       ${selected ? html`<div class="setup-card">
         <div class="element-title"><div><span>Selected Element</span><h3>${selected.name || 'Element'}</h3></div><span class="element-type">${selected.type.replace('-', ' ')}</span></div>
@@ -2630,13 +3028,13 @@ export class ApartmentViewCardEditor extends LitElement {
             @change=${(event: Event) => this._updateSpatialElement({ scale: { ...selected.scale, [axis]: Number((event.target as HTMLInputElement).value) } })} /></label>`)}
         </div>
         <div class="setup-actions">
-          <ha-button @click=${() => { this._previewMode = '3d'; }}>Inspect in 3D</ha-button>
+          <ha-button @click=${this._inspectIn3d}>Inspect in 3D</ha-button>
           <ha-button @click=${this._duplicateSpatialElement}>Duplicate Element</ha-button>
           <ha-button @click=${this._removeSpatialElement}>Remove Element</ha-button>
         </div>
       </div>
       ${selected.type === 'custom' ? html`<div class="setup-card primitive-builder">
-        <div class="primitive-header"><div><span>Custom geometry</span><h3>Parts</h3></div><div class="primitive-add"><button title="Add cube" @click=${() => this._addElementPrimitive('cube')}><ha-icon icon="mdi:cube-outline"></ha-icon></button><button title="Add sphere" @click=${() => this._addElementPrimitive('sphere')}><ha-icon icon="mdi:sphere"></ha-icon></button><button title="Add cylinder" @click=${() => this._addElementPrimitive('cylinder')}><ha-icon icon="mdi:cylinder"></ha-icon></button></div></div>
+        <div class="primitive-header"><div><span>Custom geometry</span><h3>Parts</h3></div><div class="primitive-add"><button title="Add cube" aria-label="Add cube" @click=${() => this._addElementPrimitive('cube')}><ha-icon icon="mdi:cube-outline"></ha-icon></button><button title="Add sphere" aria-label="Add sphere" @click=${() => this._addElementPrimitive('sphere')}><ha-icon icon="mdi:sphere"></ha-icon></button><button title="Add cylinder" aria-label="Add cylinder" @click=${() => this._addElementPrimitive('cylinder')}><ha-icon icon="mdi:cylinder"></ha-icon></button></div></div>
         <div class="primitive-list">${selected.primitives.map((part) => html`<button class=${part.id === primitive?.id ? 'active' : ''} @click=${() => { this._selectedPrimitiveId = part.id; }}><ha-icon icon=${part.kind === 'cube' ? 'mdi:cube-outline' : part.kind === 'sphere' ? 'mdi:sphere' : 'mdi:cylinder'}></ha-icon><span>${part.name ?? part.id}</span></button>`)}</div>
         ${primitive ? html`<div class="primitive-editor">
           <div class="asset-fields">
@@ -2789,7 +3187,7 @@ export class ApartmentViewCardEditor extends LitElement {
             ${this._renderTooltipContentSelect('Inside its room', selected.tooltipContentInRoom ?? 'none', 'tooltipContentInRoom')}
           </div>
         </div>` : nothing}
-        <div class="setup-actions"><ha-button @click=${() => { this._previewMode = '3d'; }}>Inspect in 3D</ha-button></div>
+        <div class="setup-actions"><ha-button @click=${this._inspectIn3d}>Inspect in 3D</ha-button></div>
       </div>` : nothing}
       <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'actions'; }}>Continue to Actions</ha-button><ha-button @click=${() => { this._setupStep = 'review'; }}>Review setup</ha-button></div>
     `;
@@ -2797,11 +3195,13 @@ export class ApartmentViewCardEditor extends LitElement {
 
   private _renderSetupReview() {
     const plan = this._spatial().plan;
+    const shell = this._spatial().shell;
     const unplaced = this._unplacedEntities();
     const overlaps = plan ? [] : this._overlappingZones();
     const needsRevealImage = !plan && this._config.options.lightStyle === 'reveal' && !this._config.images.allLights;
     const spatialIssues = plan ? validateSpatialPlan(plan, this._spatial().openings) : [];
-    const ready = Boolean(plan?.rooms.length || this._config.zones.length) && this._config.zones.length > 0 && this._config.entities.length > 0 && !unplaced.length && !overlaps.length && !needsRevealImage && !spatialIssues.some((issue) => issue.severity === 'error');
+    const shellIssues = shell ? validateSpatialShell(shell, new Set(this._config.zones.flatMap((zone) => zone.id ? [zone.id] : []))) : [];
+    const ready = Boolean(plan?.rooms.length || shell?.rooms?.length || this._config.zones.length) && this._config.zones.length > 0 && this._config.entities.length > 0 && !unplaced.length && !overlaps.length && !needsRevealImage && !spatialIssues.some((issue) => issue.severity === 'error') && !shellIssues.some((issue) => issue.severity === 'error');
     const changes = this._homeChanges();
     return html`
       <p class="studio-intro">A final spatial check before the card goes into daily use. Nothing here can trigger a device.</p>
@@ -2818,6 +3218,7 @@ export class ApartmentViewCardEditor extends LitElement {
         <h3>${ready ? 'Your apartment is ready' : 'A few details to finish'}</h3>
         <div class="health-list">
           ${plan ? html`<div class="health-item ${spatialIssues.length ? 'warning' : 'ready'}"><ha-icon icon=${spatialIssues.length ? 'mdi:alert-circle-outline' : 'mdi:check-circle-outline'}></ha-icon><span>${spatialIssues.length ? `${spatialIssues.length} architecture issue${spatialIssues.length === 1 ? '' : 's'} to review.` : `${plan.walls.length} walls form ${plan.rooms.length} valid enclosed room${plan.rooms.length === 1 ? '' : 's'}.`}</span></div>` : nothing}
+          ${shell ? html`<div class="health-item ${shellIssues.length ? 'warning' : 'ready'}"><ha-icon icon=${shellIssues.length ? 'mdi:alert-circle-outline' : 'mdi:check-circle-outline'}></ha-icon><span>${shellIssues.length ? `${shellIssues.length} surveyed architecture issue${shellIssues.length === 1 ? '' : 's'} to review.` : `${shell.walls?.length ?? 0} surveyed wall runs, ${shell.rooms?.length ?? 0} room surfaces, and ${shell.openings.length} openings are valid.`}</span></div>` : nothing}
           <div class="health-item ${this._config.zones.length ? 'ready' : 'warning'}"><ha-icon icon=${this._config.zones.length ? 'mdi:check-circle-outline' : 'mdi:alert-circle-outline'}></ha-icon><span>${this._config.zones.length ? `${this._config.zones.length} room${this._config.zones.length === 1 ? '' : 's'} mapped.` : 'No rooms mapped yet.'}</span></div>
           <div class="health-item ${this._config.entities.length ? 'ready' : 'warning'}"><ha-icon icon=${this._config.entities.length ? 'mdi:check-circle-outline' : 'mdi:alert-circle-outline'}></ha-icon><span>${this._config.entities.length ? `${this._config.entities.length} device${this._config.entities.length === 1 ? '' : 's'} on the plan.` : 'No devices placed yet.'}</span></div>
           <div class="health-item ${unplaced.length ? 'warning' : 'ready'}"><ha-icon icon=${unplaced.length ? 'mdi:map-marker-alert-outline' : 'mdi:check-circle-outline'}></ha-icon><span>${unplaced.length ? `${unplaced.length} device${unplaced.length === 1 ? ' needs' : 's need'} a room.` : 'Every device belongs to a room.'}</span></div>
@@ -2835,8 +3236,37 @@ export class ApartmentViewCardEditor extends LitElement {
   }
 
   private _renderAdvanced() {
+    const floors = this._canonicalConfig(this._config).floors ?? [];
     return html`<div class="advanced-workspace">
-      <p class="studio-intro">Portable backups for the complete card: architecture, rooms, Elements, entity bindings, lighting, and actions.</p>
+      <p class="studio-intro">Tune how the spatial home looks and behaves, then keep a portable copy of the complete setup.</p>
+      <div class="setup-card">
+        <h3>Appearance and environment</h3>
+        <p>Control the live 3D environment, architectural cutaway, and automatic return to the apartment overview.</p>
+        <ha-form
+          .hass=${this.hass}
+          .data=${this._config.options}
+          .schema=${spatialOptionsSchema()}
+          .computeLabel=${this._settingsLabel}
+          @value-changed=${this._onOptionsChanged}
+        ></ha-form>
+      </div>
+      <div class="setup-card">
+        <h3>Floors</h3>
+        <p>${floors.length ? 'Switch floors to edit each complete spatial model. Names and icons appear in the runtime floor selector.' : 'This is a single-floor home. Add another floor only when it needs its own rooms, devices, and spatial model.'}</p>
+        ${floors.length ? html`<div class="floor-editor-list">
+          ${floors.map((floor, index) => html`<div class="floor-editor-row ${index === this._activeFloorIndex ? 'active' : ''}">
+            <ha-icon icon=${floor.icon ?? 'mdi:home-floor-1'}></ha-icon>
+            <input aria-label=${`Name for floor ${index + 1}`} .value=${floor.name}
+              @change=${(event: Event) => this._updateFloor(index, { name: (event.target as HTMLInputElement).value.trim() || `Floor ${index + 1}` })} />
+            <input class="floor-icon-input" aria-label=${`Icon for ${floor.name}`} .value=${floor.icon ?? ''} placeholder="mdi:home-floor-1"
+              @change=${(event: Event) => this._updateFloor(index, { icon: (event.target as HTMLInputElement).value.trim() || undefined })} />
+            <ha-button ?disabled=${index === this._activeFloorIndex} @click=${() => this._switchEditorFloor(index)}>${index === this._activeFloorIndex ? 'Editing' : 'Edit'}</ha-button>
+            <ha-button class="floor-remove ${this._floorDeleteArmed === index ? 'confirm' : ''}"
+              @click=${() => this._requestFloorRemoval(index)}>${this._floorDeleteArmed === index ? 'Confirm remove' : 'Remove'}</ha-button>
+          </div>`)}
+        </div>` : nothing}
+        <div class="setup-actions"><ha-button @click=${this._addFloor}>${floors.length ? 'Duplicate active floor' : 'Add a second floor'}</ha-button></div>
+      </div>
       <div class="setup-card backup-card">
         <div class="backup-icon"><ha-icon icon="mdi:tray-arrow-down"></ha-icon></div>
         <div class="backup-copy"><h3>Download configuration</h3><p>Keep a human-readable YAML copy or an exact JSON copy. Both contain the same complete configuration.</p></div>
@@ -2849,7 +3279,7 @@ export class ApartmentViewCardEditor extends LitElement {
         <div class="backup-icon"><ha-icon icon="mdi:backup-restore"></ha-icon></div>
         <div class="backup-copy"><h3>Restore a backup</h3><p>Choose a JSON or YAML file. It is parsed, normalized, and checked for broken geometry and invalid Elements before you can restore it.</p></div>
         <label class="backup-picker"><ha-icon icon="mdi:file-upload-outline"></ha-icon><span>Choose backup file</span><input type="file" accept=".json,.yaml,.yml,application/json,application/yaml,text/yaml" hidden @change=${this._onBackupPicked} /></label>
-        ${this._backupStatus ? html`<div class="backup-status ${this._backupStatus.kind}"><ha-icon icon=${this._backupStatus.kind === 'error' ? 'mdi:alert-circle-outline' : this._backupStatus.kind === 'ready' ? 'mdi:check-decagram-outline' : 'mdi:check-circle-outline'}></ha-icon><span><strong>${this._backupStatus.kind === 'error' ? 'Backup rejected' : this._backupStatus.kind === 'ready' ? this._pendingRestoreName : 'Restore complete'}</strong>${this._backupStatus.message}</span></div>` : nothing}
+        ${this._backupStatus ? html`<div class="backup-status ${this._backupStatus.kind}" role="status" aria-live="polite"><ha-icon icon=${this._backupStatus.kind === 'error' ? 'mdi:alert-circle-outline' : this._backupStatus.kind === 'ready' ? 'mdi:check-decagram-outline' : 'mdi:check-circle-outline'}></ha-icon><span><strong>${this._backupStatus.kind === 'error' ? 'Backup rejected' : this._backupStatus.kind === 'ready' ? this._pendingRestoreName : 'Restore complete'}</strong>${this._backupStatus.message}</span></div>` : nothing}
         ${this._pendingRestore ? html`<button class="restore-button" @click=${this._restorePendingBackup}><ha-icon icon="mdi:restore"></ha-icon><span>Restore validated backup</span></button>` : nothing}
       </div>
     </div>`;
@@ -2879,8 +3309,8 @@ export class ApartmentViewCardEditor extends LitElement {
       <section class="preview-panel ${this._previewCollapsed ? 'collapsed' : ''}" aria-label="Live preview">
       <div class="preview-toolbar">
         <div class="preview-switch" role="tablist" aria-label="Spatial preview">
-          <button class=${this._previewMode === 'edit' ? 'active' : ''} @click=${() => { this._previewMode = 'edit'; }}>Plan</button>
-          <button class=${this._previewMode === '3d' ? 'active' : ''} @click=${() => { this._previewMode = '3d'; }}>3D home</button>
+          <button class=${this._previewMode === 'edit' ? 'active' : ''} role="tab" aria-selected=${this._previewMode === 'edit'} @click=${() => { this._previewMode = 'edit'; }}>Plan</button>
+          <button class=${this._previewMode === '3d' ? 'active' : ''} role="tab" aria-selected=${this._previewMode === '3d'} @click=${this._inspectIn3d}>3D home</button>
         </div>
         <span class="preview-note">Preview only · device actions disabled</span>
         <button class="preview-collapse" aria-label=${this._previewCollapsed ? 'Show preview' : 'Hide preview'}
@@ -2899,6 +3329,7 @@ export class ApartmentViewCardEditor extends LitElement {
         .shell=${this._spatial().shell ?? null}
         .hass=${this.hass}
         .hideWalls=${this._config.options.hideWalls}
+        .overviewResetSeconds=${this._config.options.idleTimeout}
         .latitude=${this.hass.config?.latitude}
         .longitude=${this.hass.config?.longitude}
         .weatherEntity=${this._config.options.weatherEntity ?? ''}
@@ -2919,6 +3350,7 @@ export class ApartmentViewCardEditor extends LitElement {
         @spatial-edit-start=${this._onPreviewEditStart}
         @spatial-edit-end=${this._onPreviewEditEnd}
         @spatial-wall-selected=${this._onPreviewWallSelected}
+        @spatial-wall-delete-requested=${this._onSpatialWallDeleteRequested}
         @spatial-opening-selected=${this._onPreviewOpeningSelected}
         @spatial-element-selected=${this._onSpatialElementSelected}
         @spatial-room-selected=${this._onSpatialRoomSelected}

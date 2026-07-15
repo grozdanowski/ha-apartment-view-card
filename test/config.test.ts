@@ -95,7 +95,7 @@ describe('normalizeConfig', () => {
         roomSwipe: true,
         inertia: true,
       },
-      idleTimeout: 0,
+      idleTimeout: 10,
       presentation: 'control-heavy',
       spatialLightingMode: 'realistic',
     });
@@ -540,9 +540,9 @@ describe('normalizeConfig interaction + idleTimeout (spec v2.5 §7)', () => {
       roomSwipe: true,
       inertia: true,
     });
-    expect(cfg.options.idleTimeout).toBe(0);
-    expect(normalizeConfig({ images: { base: '/b.png' }, options: { idleTimeout: 'x' } }).options.idleTimeout).toBe(0);
-    expect(normalizeConfig({ images: { base: '/b.png' }, options: { idleTimeout: NaN } }).options.idleTimeout).toBe(0);
+    expect(cfg.options.idleTimeout).toBe(10);
+    expect(normalizeConfig({ images: { base: '/b.png' }, options: { idleTimeout: 'x' } }).options.idleTimeout).toBe(10);
+    expect(normalizeConfig({ images: { base: '/b.png' }, options: { idleTimeout: NaN } }).options.idleTimeout).toBe(10);
   });
 });
 

@@ -1345,6 +1345,25 @@ describe('card-component: quick actions', () => {
     const card = await mountCard();
     expect(card.shadowRoot!.querySelector('.quick-fab')).toBeNull();
   });
+  it('rejects malformed service and entity targets without calling Home Assistant', async () => {
+    for (const action of [
+      { name: 'Broken service', service: 'turn_on' },
+      { name: 'Broken entity', entity: 'movie_night' },
+    ]) {
+      const card = await mountCard({ ...BASE_CONFIG, quickActions: [action] } as any);
+      let message = '';
+      card.addEventListener('hass-notification', (event: Event) => {
+        message = (event as CustomEvent).detail.message;
+      });
+      (card.shadowRoot!.querySelector('.quick-fab') as HTMLElement).click();
+      await (card as any).updateComplete;
+      const before = ((card.hass as any).serviceCalls ?? []).length;
+      (card.shadowRoot!.querySelector('.quick-action') as HTMLElement).click();
+      expect(((card.hass as any).serviceCalls ?? []).length).toBe(before);
+      expect(message).toMatch(/valid (domain\.service action|entity ID)/);
+      card.remove();
+    }
+  });
 });
 
 describe('card-component: multi-floor', () => {

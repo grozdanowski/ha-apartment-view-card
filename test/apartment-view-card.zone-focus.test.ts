@@ -50,6 +50,23 @@ describe('ApartmentViewCard zone focus state machine', () => {
     expect((card as any)._focusedZone).toBeNull();
   });
 
+  it('returns a focused room to overview after the configured inactivity timeout', () => {
+    vi.useFakeTimers();
+    try {
+      document.body.append(card);
+      const config = makeConfig();
+      card.setConfig({ ...config, options: { ...config.options, idleTimeout: 0.05 } });
+      (card as any)._focusZone(living);
+      (card as any)._scheduleIdleReset();
+      expect((card as any)._focusedZone).toBe(living);
+      vi.advanceTimersByTime(60);
+      expect((card as any)._focusedZone).toBeNull();
+    } finally {
+      card.remove();
+      vi.useRealTimers();
+    }
+  });
+
   it('_focusZone sets the focused zone and a zoomToZone transform', () => {
     (card as any)._focusZone(living);
     expect((card as any)._focusedZone).toBe(living);

@@ -3,7 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { EntityConfig, OpeningConfig, SpatialElement, SpatialPlan, SpatialShellConfig, SpatialVertex, SpatialWallSegment } from '../core/config';
 import { spatialBounds, wallLength } from '../core/spatial-geometry';
 import { addSpatialVertex, addSpatialWall, emptySpatialPlan, moveSpatialVertex, nearestSpatialVertex, snapSpatialPoint, updateSpatialElement } from '../core/spatial-plan';
-import { assignShellOpenings, moveShellPoint, shellSegments } from '../core/spatial-shell';
+import { addShellWall, assignShellOpenings, moveShellPoint, shellSegments } from '../core/spatial-shell';
 
 type PlanEditorMode = 'select' | 'wall' | 'pan';
 
@@ -44,6 +44,8 @@ export class SpatialPlanEditor extends LitElement {
   @property() selectedRoomId = '';
   @state() private _mode: PlanEditorMode = 'select';
   @state() private _draftStartId = '';
+  @state() private _draftShellStart: [number, number] | null = null;
+  @state() private _deleteArmed = false;
   @state() private _dragVertexId = '';
   @state() private _dragElementId = '';
   @state() private _dragEntityId = '';
@@ -93,6 +95,9 @@ export class SpatialPlanEditor extends LitElement {
     button:focus-visible { outline: 2px solid #d9e5e7; outline-offset: 2px; }
     .hint { min-width: 0; color: #829093; font-size: 12px; line-height: 1.4; }
     .finish { flex: 0 0 auto; color: #dbe6e7; background: #273234; }
+    .delete-wall { flex: 0 0 auto; color: #efb3ad; background: rgba(150, 53, 45, 0.14); }
+    .delete-wall:hover { color: #ffe8e5; background: rgba(183, 67, 57, 0.24); }
+    .delete-wall.confirm { color: #fff; background: #a73f36; }
     .canvas { position: relative; min-height: 420px; aspect-ratio: 16 / 10; }
     svg { display: block; width: 100%; height: 100%; touch-action: none; cursor: default; }
     svg.drawing { cursor: crosshair; }
@@ -132,7 +137,15 @@ export class SpatialPlanEditor extends LitElement {
     .survey-room.tile { fill: #6d7776; fill-opacity: 0.3; }
     .survey-wall { fill: none; stroke: #d8dfdf; stroke-linecap: square; stroke-linejoin: round; pointer-events: none; }
     .survey-wall.selected { stroke: #9dcbd2; }
-    .survey-wall-hit { fill: none; stroke: transparent; cursor: pointer; pointer-events: stroke; }
+    .survey-wall-hit {
+      fill: none;
+      stroke: transparent;
+      outline: none;
+      cursor: pointer;
+      pointer-events: stroke;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .survey-wall:has(+ .survey-wall-hit:focus-visible) { stroke: #d9e5e7; }
     .survey-vertex-hit { fill: transparent; stroke: none; cursor: grab; pointer-events: all; }
     .survey-vertex { fill: #101617; stroke: #d8dfdf; stroke-width: 0.035; pointer-events: none; }
     .survey-vertex.selected { fill: #b9dce1; stroke: #101617; }
@@ -141,10 +154,19 @@ export class SpatialPlanEditor extends LitElement {
     .survey-opening-hit { stroke: transparent; cursor: pointer; }
     .wall { fill: none; stroke: #d8dfdf; stroke-linecap: square; stroke-linejoin: round; }
     .wall.selected { stroke: #9dcbd2; }
-    .wall-hit { fill: none; stroke: transparent; cursor: pointer; pointer-events: stroke; }
+    .wall-hit {
+      fill: none;
+      stroke: transparent;
+      outline: none;
+      cursor: pointer;
+      pointer-events: stroke;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .wall:has(+ .wall-hit:focus-visible) { stroke: #d9e5e7; }
     .vertex { fill: #101617; stroke: #d8dfdf; stroke-width: 0.035; cursor: grab; }
     .vertex.selected, .vertex.draft { fill: #b9dce1; stroke: #101617; }
     .opening { stroke: #0c1112; stroke-width: 0.16; stroke-linecap: butt; pointer-events: none; }
+    .opening-hit { stroke: transparent; cursor: pointer; }
     .element { cursor: grab; }
     .element-shape { fill: #879597; fill-opacity: 0.82; stroke: #c8d5d7; stroke-width: 0.025; }
     .element.selected .element-shape { fill: #a9cbd0; stroke: #edf6f7; stroke-width: 0.055; }
@@ -409,7 +431,11 @@ export class SpatialPlanEditor extends LitElement {
 
   private _setMode(mode: PlanEditorMode): void {
     this._mode = mode;
-    if (mode !== 'wall') this._draftStartId = '';
+    this._deleteArmed = false;
+    if (mode !== 'wall') {
+      this._draftStartId = '';
+      this._draftShellStart = null;
+    }
     if (mode !== 'pan') {
       this._viewportPointers.clear();
       this._viewportGesture = null;
@@ -426,7 +452,35 @@ export class SpatialPlanEditor extends LitElement {
 
   private _finishWalls(): void {
     this._draftStartId = '';
+    this._draftShellStart = null;
+    this._deleteArmed = false;
     this._mode = 'select';
+  }
+
+  private _requestDeleteWall(): void {
+    if (!this.selectedWallId) return;
+    if (!this._deleteArmed) {
+      this._deleteArmed = true;
+      return;
+    }
+    const wallId = this.selectedWallId;
+    this._deleteArmed = false;
+    this.selectedWallId = '';
+    this.selectedOpeningId = '';
+    this.dispatchEvent(new CustomEvent('spatial-wall-delete-requested', {
+      detail: { wallId }, bubbles: true, composed: true,
+    }));
+  }
+
+  private _snapShellPoint(point: { x: number; z: number }): [number, number] {
+    const tolerance = Math.max(0.12, 0.24 / this._zoom);
+    const nearest = this._shellControlPoints().reduce<{ point: [number, number]; distance: number } | null>((best, candidate) => {
+      const distance = Math.hypot(point.x - candidate[0], point.z - candidate[1]);
+      return !best || distance < best.distance ? { point: candidate, distance } : best;
+    }, null);
+    return nearest && nearest.distance <= tolerance
+      ? [nearest.point[0], nearest.point[1]]
+      : [point.x, point.z];
   }
 
   private _onCanvasPointerDown(event: PointerEvent): void {
@@ -437,6 +491,23 @@ export class SpatialPlanEditor extends LitElement {
     if (this._mode !== 'wall' || event.button !== 0) return;
     const point = this._point(event);
     if (!point) return;
+    this._deleteArmed = false;
+    if (this.shell) {
+      const shellPoint = this._snapShellPoint(point);
+      if (!this._draftShellStart) {
+        this._draftShellStart = shellPoint;
+        return;
+      }
+      const before = this.shell.walls?.length ?? 0;
+      const nextShell = addShellWall(this.shell, this._draftShellStart, shellPoint);
+      this._draftShellStart = shellPoint;
+      if ((nextShell.walls?.length ?? 0) > before) {
+        const wall = nextShell.walls!.at(-1)!;
+        this.selectedWallId = `shell:${wall.id}:0`;
+      }
+      this._commitShell(nextShell);
+      return;
+    }
     let nextPlan = this.plan;
     let vertex = nearestSpatialVertex(nextPlan, point, 0.22);
     if (!vertex) {
@@ -461,7 +532,10 @@ export class SpatialPlanEditor extends LitElement {
   private _selectWall(event: Event, wallId: string): void {
     if (this._mode !== 'select') return;
     event.stopPropagation();
+    this._deleteArmed = false;
     this.selectedWallId = wallId;
+    this.selectedRoomId = '';
+    this.selectedOpeningId = '';
     this.selectedVertexId = '';
     this.selectedElementId = '';
     this.dispatchEvent(new CustomEvent('spatial-wall-selected', { detail: { wallId }, bubbles: true, composed: true }));
@@ -470,17 +544,32 @@ export class SpatialPlanEditor extends LitElement {
   private _selectShellWall(event: Event, wallId: string): void {
     if (this._mode !== 'select') return;
     event.stopPropagation();
+    this._deleteArmed = false;
     this.selectedWallId = wallId;
+    this.selectedRoomId = '';
     this.selectedOpeningId = '';
     this.selectedElementId = '';
     this.dispatchEvent(new CustomEvent('spatial-wall-selected', { detail: { wallId }, bubbles: true, composed: true }));
   }
 
-  private _selectShellOpening(event: PointerEvent, openingId: string, wallId: string): void {
+  private _selectShellOpening(event: Event, openingId: string, wallId: string): void {
     if (this._mode !== 'select') return;
     event.stopPropagation();
     this.selectedOpeningId = openingId;
     this.selectedWallId = wallId;
+    this.selectedRoomId = '';
+    this.selectedElementId = '';
+    this.dispatchEvent(new CustomEvent('spatial-opening-selected', {
+      detail: { id: openingId, wallId }, bubbles: true, composed: true,
+    }));
+  }
+
+  private _selectPlanOpening(event: Event, openingId: string, wallId: string): void {
+    if (this._mode !== 'select') return;
+    event.stopPropagation();
+    this.selectedOpeningId = openingId;
+    this.selectedWallId = wallId;
+    this.selectedRoomId = '';
     this.selectedElementId = '';
     this.dispatchEvent(new CustomEvent('spatial-opening-selected', {
       detail: { id: openingId, wallId }, bubbles: true, composed: true,
@@ -494,7 +583,7 @@ export class SpatialPlanEditor extends LitElement {
     else this._selectWall(event, wallId);
   }
 
-  private _selectRoom(event: PointerEvent, roomId: string): void {
+  private _selectRoom(event: Event, roomId: string): void {
     if (this._mode !== 'select') return;
     event.stopPropagation();
     this.selectedRoomId = roomId;
@@ -505,6 +594,61 @@ export class SpatialPlanEditor extends LitElement {
     this.dispatchEvent(new CustomEvent('spatial-room-selected', {
       detail: { roomId }, bubbles: true, composed: true,
     }));
+  }
+
+  private _activateFromKeyboard(event: KeyboardEvent, action: () => void): void {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    event.stopPropagation();
+    action();
+  }
+
+  private _selectElementFromKeyboard(event: KeyboardEvent, elementId: string): void {
+    this._activateFromKeyboard(event, () => {
+      this.selectedElementId = elementId;
+      this.selectedRoomId = '';
+      this.selectedOpeningId = '';
+      this.selectedWallId = '';
+      this.selectedVertexId = '';
+      this.dispatchEvent(new CustomEvent('spatial-element-selected', { detail: { elementId }, bubbles: true, composed: true }));
+    });
+  }
+
+  private _selectEntityFromKeyboard(event: KeyboardEvent, entityId: string): void {
+    this._activateFromKeyboard(event, () => {
+      this.selectedElementId = '';
+      this.selectedRoomId = '';
+      this.selectedOpeningId = '';
+      this.selectedWallId = '';
+      this.selectedVertexId = '';
+      this.dispatchEvent(new CustomEvent('spatial-entity-selected', { detail: { entityId }, bubbles: true, composed: true }));
+    });
+  }
+
+  private _nudgeVertex(event: KeyboardEvent, vertexId: string): void {
+    const movement: Record<string, [number, number]> = {
+      ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
+    };
+    const direction = movement[event.key];
+    if (!direction) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const vertex = this.plan.vertices.find((candidate) => candidate.id === vertexId);
+    if (!vertex) return;
+    const step = event.shiftKey ? 0.25 : 0.05;
+    this._commit(moveSpatialVertex(this.plan, vertexId, { x: vertex.x + direction[0] * step, z: vertex.z + direction[1] * step }));
+  }
+
+  private _nudgeShellPoint(event: KeyboardEvent, point: [number, number]): void {
+    const movement: Record<string, [number, number]> = {
+      ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
+    };
+    const direction = movement[event.key];
+    if (!direction || !this.shell) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const step = event.shiftKey ? 0.25 : 0.05;
+    this._commitShell(moveShellPoint(this.shell, point, [point[0] + direction[0] * step, point[1] + direction[1] * step]));
   }
 
   private _startVertexDrag(event: PointerEvent, vertexId: string): void {
@@ -582,7 +726,15 @@ export class SpatialPlanEditor extends LitElement {
   }
 
   private _shellControlPoints(): [number, number][] {
-    const points = this.shell?.walls?.flatMap((wall) => wall.points) ?? [];
+    const shell = this.shell;
+    const points = shell ? [
+      ...(shell.walls?.flatMap((wall) => wall.points) ?? []),
+      ...shell.outer,
+      ...shell.floor,
+      ...(shell.floors?.flat() ?? []),
+      ...shell.holes.flat(),
+      ...(shell.rooms?.flatMap((room) => [room.floor, ...(room.floors ?? [])]).flat() ?? []),
+    ] : [];
     const unique = new Map<string, [number, number]>();
     points.forEach((point) => unique.set(`${point[0].toFixed(3)}:${point[1].toFixed(3)}`, point));
     return [...unique.values()];
@@ -595,6 +747,8 @@ export class SpatialPlanEditor extends LitElement {
     this._dragMoved = false;
     this.selectedElementId = '';
     this.selectedWallId = '';
+    this.selectedOpeningId = '';
+    this.selectedRoomId = '';
     this.selectedVertexId = '';
     (event.currentTarget as SVGCircleElement).setPointerCapture(event.pointerId);
     this.dispatchEvent(new CustomEvent('spatial-entity-selected', { detail: { entityId }, bubbles: true, composed: true }));
@@ -607,6 +761,8 @@ export class SpatialPlanEditor extends LitElement {
     this._dragMoved = false;
     this.selectedElementId = elementId;
     this.selectedWallId = '';
+    this.selectedOpeningId = '';
+    this.selectedRoomId = '';
     this.selectedVertexId = '';
     (event.currentTarget as SVGGElement).setPointerCapture(event.pointerId);
     this.dispatchEvent(new CustomEvent('spatial-element-selected', { detail: { elementId }, bubbles: true, composed: true }));
@@ -688,19 +844,22 @@ export class SpatialPlanEditor extends LitElement {
     const walls = new Map(this.plan.walls.map((wall) => [wall.id, wall]));
     const handleRadius = Math.max(0.09 / this._zoom, view.width / 105);
     const hitWidth = Math.max(0.06, 0.42 / this._zoom);
+    const hasDraftWall = Boolean(this._draftStartId || this._draftShellStart);
     return html`<div class="editor" @keydown=${this._keyDown}>
       <div class="toolbar">
         <div class="toolbar-row">
           <div class="mode-group" role="group" aria-label="Drawing mode">
             <button aria-pressed=${this._mode === 'select'} @click=${() => this._setMode('select')}>Select</button>
-            ${this.shell ? '' : html`<button aria-pressed=${this._mode === 'wall'} @click=${() => this._setMode('wall')}>Draw walls</button>`}
+            <button aria-pressed=${this._mode === 'wall'} @click=${() => this._setMode('wall')}>Draw walls</button>
           </div>
-          ${this._mode === 'wall' && this._draftStartId ? html`<button class="finish" @click=${this._finishWalls}>Finish walls</button>` : ''}
+          ${this._mode === 'wall' && hasDraftWall ? html`<button class="finish" @click=${this._finishWalls}>Finish walls</button>` : ''}
+          ${this._mode === 'select' && this.selectedWallId ? html`<button class="delete-wall ${this._deleteArmed ? 'confirm' : ''}"
+            @click=${this._requestDeleteWall}>${this._deleteArmed ? 'Confirm delete' : 'Delete wall'}</button>` : ''}
         </div>
-        <div class="hint">${this.shell
+        <div class="hint">${this._mode === 'wall'
+          ? hasDraftWall ? 'Tap the next corner. Existing points snap automatically.' : 'Tap where the first wall begins.'
+          : this.shell
           ? 'Select a wall to edit it, or drag any corner to reshape the home.'
-          : this._mode === 'wall'
-          ? this._draftStartId ? 'Tap the next corner. Existing points snap automatically.' : 'Tap where the first wall begins.'
           : 'Select a wall, or drag a corner to adjust the plan.'}</div>
       </div>
       <div class="canvas">
@@ -729,9 +888,13 @@ export class SpatialPlanEditor extends LitElement {
           <rect x=${view.x} y=${view.z} width=${view.width} height=${view.depth} fill="url(#major-grid)" />
           ${this.shell?.rooms?.map((room) => svg`
             <polygon class="survey-room ${room.finish === 'tile' ? 'tile' : ''} ${this.selectedRoomId === `survey:${room.zoneId}` ? 'selected' : ''}"
-              points=${room.floor.map(([x, z]) => `${x},${z}`).join(' ')} @pointerdown=${(event: PointerEvent) => this._selectRoom(event, `survey:${room.zoneId}`)} />
+              points=${room.floor.map(([x, z]) => `${x},${z}`).join(' ')} role="button" tabindex="0" aria-label=${`Edit room ${room.zoneId}`}
+              @pointerdown=${(event: PointerEvent) => this._selectRoom(event, `survey:${room.zoneId}`)}
+              @keydown=${(event: KeyboardEvent) => this._activateFromKeyboard(event, () => this._selectRoom(event, `survey:${room.zoneId}`))} />
             ${room.floors?.map((floor) => svg`<polygon class="survey-room ${room.finish === 'tile' ? 'tile' : ''} ${this.selectedRoomId === `survey:${room.zoneId}` ? 'selected' : ''}"
-              points=${floor.map(([x, z]) => `${x},${z}`).join(' ')} @pointerdown=${(event: PointerEvent) => this._selectRoom(event, `survey:${room.zoneId}`)} />`)}
+              points=${floor.map(([x, z]) => `${x},${z}`).join(' ')} role="button" tabindex="0" aria-label=${`Edit room ${room.zoneId}`}
+              @pointerdown=${(event: PointerEvent) => this._selectRoom(event, `survey:${room.zoneId}`)}
+              @keydown=${(event: KeyboardEvent) => this._activateFromKeyboard(event, () => this._selectRoom(event, `survey:${room.zoneId}`))} />`)}
           `)}
           ${this.shell ? shellSegments(this.shell).map((segment) => svg`
             <line class="survey-wall ${this.selectedWallId === segment.id ? 'selected' : ''}"
@@ -751,16 +914,18 @@ export class SpatialPlanEditor extends LitElement {
               <line class="survey-opening ${this.selectedOpeningId === opening.id ? 'selected' : ''}"
                 x1=${opening.x - halfX} y1=${opening.z - halfZ} x2=${opening.x + halfX} y2=${opening.z + halfZ} stroke-width=${Math.max(0.1, opening.depth * 1.15)} />
               <line class="survey-opening-hit" x1=${opening.x - halfX} y1=${opening.z - halfZ} x2=${opening.x + halfX} y2=${opening.z + halfZ}
-                stroke-width=${hitWidth}
-                @pointerdown=${(event: PointerEvent) => this._selectShellOpening(event, opening.id, segment.id)} />
+                stroke-width=${hitWidth} role="button" tabindex="0" aria-label=${`Edit ${opening.kind} ${opening.id}`}
+                @pointerdown=${(event: PointerEvent) => this._selectShellOpening(event, opening.id, segment.id)}
+                @keydown=${(event: KeyboardEvent) => this._activateFromKeyboard(event, () => this._selectShellOpening(event, opening.id, segment.id))} />
             `;
           }) : ''}
           ${this.shell ? this._shellControlPoints().map((point) => {
             const key = `${point[0].toFixed(3)}:${point[1].toFixed(3)}`;
             return svg`
               <circle class="survey-vertex-hit" cx=${point[0]} cy=${point[1]} r=${handleRadius * 2.6}
-                role="button" tabindex="0" aria-label="Drag wall corner"
-                @pointerdown=${(event: PointerEvent) => this._startShellPointDrag(event, point)} />
+                role="button" tabindex="0" aria-label="Move wall corner. Use arrow keys for precise adjustment."
+                @pointerdown=${(event: PointerEvent) => this._startShellPointDrag(event, point)}
+                @keydown=${(event: KeyboardEvent) => this._nudgeShellPoint(event, point)} />
               <circle class="survey-vertex ${this._dragShellPointKey === key ? 'selected' : ''}"
                 cx=${point[0]} cy=${point[1]} r=${handleRadius * 0.82} aria-hidden="true" />
             `;
@@ -772,7 +937,9 @@ export class SpatialPlanEditor extends LitElement {
               return vertex ? [`${vertex.x},${vertex.z}`] : [];
             });
             return points.length >= 3 ? svg`<polygon class="room ${this.selectedRoomId === room.id ? 'selected' : ''}"
-              points=${points.join(' ')} @pointerdown=${(event: PointerEvent) => this._selectRoom(event, room.id)} />` : '';
+              points=${points.join(' ')} role="button" tabindex="0" aria-label=${`Edit room ${room.id}`}
+              @pointerdown=${(event: PointerEvent) => this._selectRoom(event, room.id)}
+              @keydown=${(event: KeyboardEvent) => this._activateFromKeyboard(event, () => this._selectRoom(event, room.id))} />` : '';
           })}
           ${this.plan.walls.map((wall) => {
             const path = this._wallPath(wall, vertices);
@@ -792,7 +959,11 @@ export class SpatialPlanEditor extends LitElement {
           ${this.openings.map((opening) => {
             const wall = walls.get(opening.wallId);
             const line = wall ? this._openingLine(opening, wall, vertices) : null;
-            return line ? svg`<line class="opening" x1=${line.x1} y1=${line.z1} x2=${line.x2} y2=${line.z2} />` : '';
+            return line ? svg`<g><line class="opening" x1=${line.x1} y1=${line.z1} x2=${line.x2} y2=${line.z2} />
+              <line class="opening-hit" x1=${line.x1} y1=${line.z1} x2=${line.x2} y2=${line.z2} stroke-width=${hitWidth}
+                role="button" tabindex="0" aria-label=${`Edit ${opening.kind} ${opening.id}`}
+                @pointerdown=${(event: PointerEvent) => this._selectPlanOpening(event, opening.id, opening.wallId)}
+                @keydown=${(event: KeyboardEvent) => this._activateFromKeyboard(event, () => this._selectPlanOpening(event, opening.id, opening.wallId))} /></g>` : '';
           })}
           ${this.plan.elements.map((item) => {
             const footprint = this._elementFootprint(item);
@@ -804,6 +975,7 @@ export class SpatialPlanEditor extends LitElement {
               aria-label=${label}
               tabindex="0"
               @pointerdown=${(event: PointerEvent) => this._startElementDrag(event, item.id)}
+              @keydown=${(event: KeyboardEvent) => this._selectElementFromKeyboard(event, item.id)}
             >
               <rect class="element-shape" x=${-footprint.width / 2} y=${-footprint.depth / 2} width=${footprint.width} height=${footprint.depth} rx=".06" />
               <text class="element-label" y=".06">${label}</text>
@@ -818,12 +990,17 @@ export class SpatialPlanEditor extends LitElement {
             aria-label=${entity.name ?? entity.entity}
             tabindex="0"
             @pointerdown=${(event: PointerEvent) => this._startEntityDrag(event, entity.entity)}
+            @keydown=${(event: KeyboardEvent) => this._selectEntityFromKeyboard(event, entity.entity)}
           />`)}
           ${this.plan.vertices.map((vertex) => svg`<circle
             class="vertex ${this.selectedVertexId === vertex.id ? 'selected' : ''} ${this._draftStartId === vertex.id ? 'draft' : ''}"
-            cx=${vertex.x} cy=${vertex.z} r=${handleRadius}
+            cx=${vertex.x} cy=${vertex.z} r=${handleRadius} role="button" tabindex="0"
+            aria-label="Move wall corner. Use arrow keys for precise adjustment."
             @pointerdown=${(event: PointerEvent) => this._startVertexDrag(event, vertex.id)}
+            @keydown=${(event: KeyboardEvent) => this._nudgeVertex(event, vertex.id)}
           />`)}
+          ${this._draftShellStart ? svg`<circle class="survey-vertex selected"
+            cx=${this._draftShellStart[0]} cy=${this._draftShellStart[1]} r=${handleRadius * 0.92} aria-hidden="true" />` : ''}
         </svg>
         <div class="viewport-controls" role="toolbar" aria-label="Plan view controls">
           <button

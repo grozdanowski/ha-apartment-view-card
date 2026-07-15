@@ -191,6 +191,7 @@ export class ApartmentViewCard extends LitElement {
    * (trackpad pinch / kiosk plain-wheel arrive as a sustained ctrl-wheel
    * stream; the whole stream must share one latch — spec L7 / P0-2). */
   private _wheelIdleTimer: ReturnType<typeof setTimeout> | null = null;
+  private _idleResetTimer: ReturnType<typeof setTimeout> | null = null;
   /** Previous scene tap (client coords + timestamp) for double-tap detection. */
   private _lastSceneTap: { x: number; y: number; t: number } | null = null;
 
@@ -1000,6 +1001,7 @@ export class ApartmentViewCard extends LitElement {
   public setConfig(raw: any): void {
     this.config = normalizeConfig(raw);
     this._syncPanZoomFromConfig();
+    this._scheduleIdleReset();
   }
 
   public getCardSize(): number {
@@ -1018,6 +1020,7 @@ export class ApartmentViewCard extends LitElement {
   private _setSpatialRoomFocus = (zoneId: string | null): void => {
     if (this._spatialFocusedZoneId === zoneId) return;
     this._spatialFocusedZoneId = zoneId;
+    this._scheduleIdleReset();
   };
 
   static getConfigElement(): HTMLElement {
@@ -1078,6 +1081,7 @@ export class ApartmentViewCard extends LitElement {
     // Re-arm the multi-touch guards on reconnect (the wrapper node survives
     // in the persisted renderRoot; no-op before the first render).
     this._attachWrapperTouchGuards();
+    this._scheduleIdleReset();
   }
 
   private _onBreakpointChange = (e: MediaQueryListEvent): void => {
@@ -1150,6 +1154,7 @@ export class ApartmentViewCard extends LitElement {
     this._cancelHold();
     this._cancelSceneTap();
     this._cancelWheelIdle();
+    this._clearIdleReset();
     // A disconnect mid-gesture must not leak pointer state into the next
     // mount (HA re-attaches cards when switching tabs): a leaked entry makes
     // the first touch after reattach read size === 2 → phantom pinch, and a
@@ -1715,6 +1720,7 @@ export class ApartmentViewCard extends LitElement {
   }
 
   private _onWheel = (e: WheelEvent) => {
+    this._scheduleIdleReset();
     if (this._focusedZone !== null) return;
     // Wheel gate (spec P0-3 / F7b): under the default 'modifier' mode a plain
     // wheel belongs to the dashboard — pass it through UNTOUCHED (no
@@ -1789,6 +1795,31 @@ export class ApartmentViewCard extends LitElement {
     }
   }
 
+  private _clearIdleReset(): void {
+    if (this._idleResetTimer === null) return;
+    clearTimeout(this._idleResetTimer);
+    this._idleResetTimer = null;
+  }
+
+  private _scheduleIdleReset(): void {
+    this._clearIdleReset();
+    const seconds = this.config?.options?.idleTimeout ?? 0;
+    if (!this.isConnected || seconds <= 0) return;
+    this._idleResetTimer = setTimeout(() => {
+      this._idleResetTimer = null;
+      this._quickOpen = false;
+      this._controlled = [];
+      this._selectMode = false;
+      if (this._spatialFocusedZoneId !== null) this._spatialFocusedZoneId = null;
+      if (this._focusedZone !== null) {
+        this._exitFocus();
+      } else if (this._transform.scale !== 1 || this._transform.panX !== 0 || this._transform.panY !== 0) {
+        this._panZoom.reset();
+        this._animateTransformTo({ scale: 1, panX: 0, panY: 0 });
+      }
+    }, seconds * 1_000);
+  }
+
   /**
    * One-shot hint when a plain wheel passes through at overview (modifier
    * mode): frosted mini-pill, fades in fast, auto-fades out after 1.6s.
@@ -1826,6 +1857,7 @@ export class ApartmentViewCard extends LitElement {
    * phantom device activation (spec §3: 2-finger anything → card owns it).
    */
   private _registerPointer(e: PointerEvent): boolean {
+    this._scheduleIdleReset();
     this._cancelSceneTap(); // any new pointer cancels a pending single-tap (F13)
     this._activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (this._activePointers.size === 2) {
@@ -2015,10 +2047,29 @@ export class ApartmentViewCard extends LitElement {
   private _runQuickAction(qa: QuickAction): void {
     if (this.hass) {
       if (qa.service) {
-        const dot = qa.service.indexOf('.');
-        this.hass.callService(qa.service.slice(0, dot), qa.service.slice(dot + 1), qa.data ?? {});
+        const match = /^([a-z0-9_]+)\.([a-z0-9_]+)$/i.exec(qa.service.trim());
+        if (!match) {
+          this.dispatchEvent(new CustomEvent('hass-notification', {
+            detail: { message: `“${qa.name}” needs a valid domain.service action.` },
+            bubbles: true,
+            composed: true,
+          }));
+          this._quickOpen = false;
+          return;
+        }
+        this.hass.callService(match[1], match[2], qa.data ?? {});
       } else if (qa.entity) {
-        this.hass.callService('homeassistant', 'turn_on', { entity_id: qa.entity });
+        const entityId = qa.entity.trim();
+        if (!/^[a-z0-9_]+\.[a-z0-9_]+$/i.test(entityId)) {
+          this.dispatchEvent(new CustomEvent('hass-notification', {
+            detail: { message: `“${qa.name}” needs a valid entity ID.` },
+            bubbles: true,
+            composed: true,
+          }));
+          this._quickOpen = false;
+          return;
+        }
+        this.hass.callService('homeassistant', 'turn_on', { entity_id: entityId });
       }
     }
     this._quickOpen = false;
@@ -2327,6 +2378,7 @@ export class ApartmentViewCard extends LitElement {
         .shell=${spatial.shell ?? null}
         .hass=${this.hass}
         .hideWalls=${this.config.options.hideWalls}
+        .overviewResetSeconds=${this.config.options.idleTimeout}
         .latitude=${spatial.site.latitude ?? this.hass?.config?.latitude ?? 0}
         .longitude=${spatial.site.longitude ?? this.hass?.config?.longitude ?? 0}
         .weatherEntity=${this.config.options.weatherEntity ?? ''}

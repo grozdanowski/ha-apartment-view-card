@@ -71,6 +71,26 @@ describe('3D spatial runtime', () => {
     expect(viewport.textContent).not.toContain('Your apartment');
   });
 
+  it('uses the configured overview reset delay and allows zero to disable it', () => {
+    vi.useFakeTimers();
+    try {
+      const preview = document.createElement('spatial-preview') as any;
+      preview.focusedZoneId = null;
+      preview.overviewResetSeconds = 0.05;
+      preview._moveCameraTo = vi.fn();
+      preview._scheduleOverviewReset();
+      vi.advanceTimersByTime(60);
+      expect(preview._moveCameraTo).toHaveBeenCalledWith(null);
+      preview._moveCameraTo.mockClear();
+      preview.overviewResetSeconds = 0;
+      preview._scheduleOverviewReset();
+      vi.advanceTimersByTime(1000);
+      expect(preview._moveCameraTo).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('focuses a room from the navigation rail', async () => {
     const { card, preview } = await mount();
     const roomButtons = [...card.shadowRoot.querySelectorAll('.spatial-room-rail button')] as HTMLButtonElement[];
@@ -337,6 +357,28 @@ describe('3D spatial runtime', () => {
     expect(visual.children.some((node: THREE.Object3D) => node.userData.entityEffect)).toBe(false);
     expect(material.emissiveIntensity).toBeCloseTo(1.2 + (64 / 255) * 3.8);
     expect(material.emissive.r).toBeGreaterThan(material.emissive.b);
+  });
+
+  it('keeps media activity rings clear of the floating marker footprint', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.hass = {
+      states: {
+        'media_player.naim': {
+          entity_id: 'media_player.naim',
+          state: 'playing',
+          attributes: { media_content_type: 'music' },
+        },
+      },
+    };
+    const visual = preview._createEntityVisual('media_player.naim', new THREE.Vector3(), 'living');
+    const rings = visual.children
+      .filter((node: THREE.Object3D) => node.userData.entityEffect)
+      .map((node: THREE.Object3D) => (node as THREE.Mesh<THREE.TorusGeometry>).geometry.parameters.radius);
+
+    expect(rings).toHaveLength(3);
+    expect(rings[0]).toBeCloseTo(0.22);
+    expect(rings[1]).toBeCloseTo(0.315);
+    expect(rings[2]).toBeCloseTo(0.41);
   });
 
   it('scales air effects from live fan percentage', () => {

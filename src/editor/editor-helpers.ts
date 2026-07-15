@@ -208,6 +208,31 @@ export function optionsSchema(): HaFormSchema[] {
       name: 'iconSizeMaxMobile',
       selector: { number: { min: 30, max: 200, step: 2, mode: 'slider', unit_of_measurement: 'px' } },
     },
+    {
+      name: 'aspectMobile',
+      selector: { number: { min: 0.5, max: 2, step: 0.05, mode: 'slider' } },
+    },
+    {
+      name: 'idleTimeout',
+      selector: { number: { min: 0, max: 600, step: 5, mode: 'box', unit_of_measurement: 's' } },
+    },
+  ];
+}
+
+/** Settings that directly affect the current Three.js spatial runtime. */
+export function spatialOptionsSchema(): HaFormSchema[] {
+  return [
+    {
+      name: 'spatialLightingMode',
+      selector: { select: { mode: 'dropdown', options: SPATIAL_LIGHTING_OPTIONS } },
+    },
+    { name: 'weatherEntity', selector: { entity: { domain: 'weather' } } },
+    { name: 'illuminanceEntity', selector: { entity: { domain: 'sensor' } } },
+    { name: 'hideWalls', selector: { boolean: {} } },
+    {
+      name: 'idleTimeout',
+      selector: { number: { min: 0, max: 600, step: 5, mode: 'box', unit_of_measurement: 's' } },
+    },
   ];
 }
 
@@ -218,6 +243,21 @@ export function stageOptionsSchema(): HaFormSchema[] {
 /** Lighting-tab options: just the global light style. */
 export function lightingOptionsSchema(): HaFormSchema[] {
   return optionsSchema().filter((s) => ['lightStyle', 'spatialLightingMode', 'weatherEntity', 'illuminanceEntity'].includes(s.name));
+}
+
+export function interactionSchema(): HaFormSchema[] {
+  return [
+    {
+      name: 'wheel',
+      selector: { select: { mode: 'dropdown', options: [
+        { value: 'modifier', label: 'Ctrl/Command + scroll' },
+        { value: 'plain', label: 'Scroll directly' },
+      ] } },
+    },
+    { name: 'doubleTapZoom', selector: { boolean: {} } },
+    { name: 'roomSwipe', selector: { boolean: {} } },
+    { name: 'inertia', selector: { boolean: {} } },
+  ];
 }
 
 export function entitySchema(directional: boolean, labelSource = 'inherit'): HaFormSchema[] {
@@ -301,6 +341,7 @@ export function quickActionSchema(): HaFormSchema[] {
     { name: 'icon', selector: { icon: {} } },
     { name: 'entity', selector: { entity: {} } },
     { name: 'service', selector: { text: {} } },
+    { name: 'data', selector: { object: {} } },
   ];
 }
 

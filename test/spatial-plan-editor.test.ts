@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../src/editor/spatial-plan-editor';
 import { rectangularSpatialPlan } from '../src/core/spatial-plan';
+import type { SpatialShellConfig } from '../src/core/config';
 
 async function mount() {
   const editor = document.createElement('spatial-plan-editor') as any;
@@ -79,5 +80,97 @@ describe('spatial-plan-editor precision viewport', () => {
     editor.shadowRoot.querySelector('svg')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await editor.updateComplete;
     expect(editor._mode).toBe('select');
+  });
+
+  it('keeps the large wall hit target visually transparent when focused', async () => {
+    const editor = await mount();
+    const hit = editor.shadowRoot.querySelector('.wall-hit') as SVGPathElement;
+    hit.focus();
+
+    const style = getComputedStyle(hit);
+    expect(editor.shadowRoot.activeElement).toBe(hit);
+    expect(style.stroke).toMatch(/transparent|rgba\(0, 0, 0, 0\)/);
+    expect(style.outlineStyle).toBe('none');
+  });
+
+  it('offers wall drawing for surveyed homes too', async () => {
+    const editor = await mount();
+    const shell: SpatialShellConfig = {
+      outer: [[0, 0], [4, 0], [4, 3], [0, 3]], holes: [], floor: [[0, 0], [4, 0], [4, 3], [0, 3]],
+      walls: [{ id: 'north', points: [[0, 0], [4, 0]], thickness: 0.2 }], openings: [],
+    };
+    editor.shell = shell;
+    await editor.updateComplete;
+    const draw = [...editor.shadowRoot.querySelectorAll('.mode-group button')]
+      .find((button: Element) => button.textContent?.trim() === 'Draw walls') as HTMLButtonElement;
+    expect(draw).toBeTruthy();
+    draw.click();
+    await editor.updateComplete;
+    expect(editor._mode).toBe('wall');
+    expect(editor.shadowRoot.querySelector('.hint')?.textContent).toContain('first wall begins');
+  });
+
+  it('draws a snapped wall into the surveyed shell', async () => {
+    const editor = await mount();
+    editor.shell = {
+      outer: [[0, 0], [4, 0], [4, 3], [0, 3]], holes: [], floor: [[0, 0], [4, 0], [4, 3], [0, 3]],
+      walls: [{ id: 'north', points: [[0, 0], [4, 0]], thickness: 0.2 }], openings: [],
+    } satisfies SpatialShellConfig;
+    editor._mode = 'wall';
+    editor._point = vi.fn()
+      .mockReturnValueOnce({ x: 0.04, z: 0.03 })
+      .mockReturnValueOnce({ x: 2, z: 2 });
+    const changed = vi.fn();
+    editor.addEventListener('spatial-shell-changed', changed);
+
+    editor._onCanvasPointerDown({ button: 0 } as PointerEvent);
+    editor._onCanvasPointerDown({ button: 0 } as PointerEvent);
+
+    expect(editor.shell.walls).toHaveLength(2);
+    expect(editor.shell.walls.at(-1).points).toEqual([[0, 0], [2, 2]]);
+    expect(editor.selectedWallId).toBe('shell:wall-1:0');
+    expect(changed).toHaveBeenCalledOnce();
+  });
+
+  it('requires confirmation before requesting deletion of a selected wall', async () => {
+    const editor = await mount();
+    const requested = vi.fn();
+    editor.addEventListener('spatial-wall-delete-requested', requested);
+    editor.selectedWallId = editor.plan.walls[0].id;
+    await editor.updateComplete;
+
+    let button = editor.shadowRoot.querySelector('.delete-wall') as HTMLButtonElement;
+    expect(button.textContent?.trim()).toBe('Delete wall');
+    button.click();
+    await editor.updateComplete;
+    expect(requested).not.toHaveBeenCalled();
+    button = editor.shadowRoot.querySelector('.delete-wall') as HTMLButtonElement;
+    expect(button.textContent?.trim()).toBe('Confirm delete');
+    button.click();
+    expect(requested).toHaveBeenCalledOnce();
+    expect(requested.mock.calls[0][0].detail.wallId).toBe('wall-1');
+  });
+
+  it('clears a stale room highlight when a wall is selected', async () => {
+    const editor = await mount();
+    editor.selectedRoomId = editor.plan.rooms[0].id;
+    await editor.updateComplete;
+    const wall = editor.shadowRoot.querySelector('.wall-hit') as SVGPathElement;
+    wall.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true }));
+    await editor.updateComplete;
+    expect(editor.selectedRoomId).toBe('');
+    expect(editor.selectedWallId).toBe(editor.plan.walls[0].id);
+    expect(editor.shadowRoot.querySelector('.room.selected')).toBeNull();
+  });
+
+  it('exposes room-only floor corners for direct boundary editing', async () => {
+    const editor = await mount();
+    editor.shell = {
+      outer: [[0, 0], [4, 0], [4, 3], [0, 3]], holes: [], floor: [[0, 0], [4, 0], [4, 3], [0, 3]],
+      walls: [{ id: 'north', points: [[0, 0], [4, 0]], thickness: 0.2 }], openings: [],
+      rooms: [{ zoneId: 'living', floor: [[0, 0], [4, 0], [3.25, 2.25], [0, 3]] }],
+    } satisfies SpatialShellConfig;
+    await editor.updateComplete;
+    expect(editor._shellControlPoints()).toContainEqual([3.25, 2.25]);
   });
 });

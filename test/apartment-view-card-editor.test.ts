@@ -90,6 +90,22 @@ describe('apartment-view-card-editor', () => {
     expect(element.shadowRoot.querySelector('#structure-north-bearing')).toBeNull();
   });
 
+  it('removes a selected wall and every opening attached to it', async () => {
+    const element = await mount();
+    const wallId = element.config.spatial.plan.walls[0].id;
+    element._commitSpatial({
+      ...element.config.spatial,
+      openings: [{ id: 'door-1', kind: 'door', wallId, position: 0.5, width: 0.2 }],
+    });
+    element._selectedWallId = wallId;
+
+    element._onSpatialWallDeleteRequested(new CustomEvent('spatial-wall-delete-requested', { detail: { wallId } }));
+
+    expect(element.config.spatial.plan.walls.some((wall: any) => wall.id === wallId)).toBe(false);
+    expect(element.config.spatial.openings).toEqual([]);
+    expect(element._selectedWallId).toBe('');
+  });
+
   it('expands only its Home Assistant card dialog on desktop and restores it on close', async () => {
     const originalMatchMedia = window.matchMedia;
     window.matchMedia = (() => ({ matches: true })) as unknown as typeof window.matchMedia;
@@ -107,9 +123,13 @@ describe('apartment-view-card-editor', () => {
       wrapper.append(element);
       await element.updateComplete;
       element._expandHostDialog();
+      expect((wrapper as HTMLElement & { large?: boolean }).large).toBe(true);
+      expect(wrapper.hasAttribute('large')).toBe(true);
       expect(dialog.style.getPropertyValue('--mdc-dialog-max-width')).toBe('calc(100vw - 32px)');
       expect(surface.style.getPropertyValue('max-width')).toBe('calc(100vw - 32px)');
       wrapper.remove();
+      expect((wrapper as HTMLElement & { large?: boolean }).large).toBeUndefined();
+      expect(wrapper.hasAttribute('large')).toBe(false);
       expect(dialog.hasAttribute('style')).toBe(false);
       expect(surface.hasAttribute('style')).toBe(false);
     } finally {
@@ -239,6 +259,95 @@ describe('apartment-view-card-editor', () => {
     expect(fields.querySelector('select')).toBeTruthy();
   });
 
+  it('opens and focuses one room editor from its compact summary', async () => {
+    const element = await mount();
+    element._setupStep = 'rooms';
+    element._selectedRoomId = '';
+    await element.updateComplete;
+
+    const summary = element.shadowRoot.querySelector('.room-summary-name') as HTMLButtonElement;
+    summary.click();
+    await element.updateComplete;
+
+    const selected = element.shadowRoot.querySelector('.room-mapping.selected') as HTMLElement;
+    expect(selected).toBeTruthy();
+    expect(selected.querySelector('.room-fields input')).toBe(element.shadowRoot.activeElement);
+  });
+
+  it('edits room finish, color, and exposes boundary editing as a real command', async () => {
+    const element = await mount();
+    const roomId = element.config.spatial.plan.rooms[0].id;
+    element._setupStep = 'rooms';
+    element._selectedRoomId = roomId;
+    await element.updateComplete;
+    const fields = element.shadowRoot.querySelector('.room-fields') as HTMLElement;
+    const finish = fields.querySelector('.room-finish-select') as HTMLSelectElement;
+    finish.value = 'stone';
+    finish.dispatchEvent(new Event('change', { bubbles: true }));
+    const color = fields.querySelector('.room-floor-color') as HTMLInputElement;
+    color.value = '#445566';
+    color.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(element.config.spatial.plan.rooms[0]).toMatchObject({ floorFinish: 'stone', floorColor: '#445566' });
+    expect(fields.closest('.room-mapping')?.querySelector('.room-boundary-button')?.textContent).toContain('Edit boundary');
+  });
+
+  it('keeps every floor independently editable and switches the live editor model', async () => {
+    const element = await mount();
+    element._addFloor();
+    expect(element.config.floors).toHaveLength(2);
+    expect(element._activeFloorIndex).toBe(1);
+    element._applyConfig({
+      ...element.config,
+      zones: element.config.zones.map((zone: any) => ({ ...zone, name: 'Upper lounge' })),
+    });
+    element._switchEditorFloor(0);
+    expect(element.config.zones[0].name).toBe('Living Room');
+    element._switchEditorFloor(1);
+    expect(element.config.zones[0].name).toBe('Upper lounge');
+    expect(element._canonicalConfig(element.config).floors[1].zones[0].name).toBe('Upper lounge');
+  });
+
+  it('requires an explicit second press before removing a floor', async () => {
+    const element = await mount();
+    element._addFloor();
+    expect(element.config.floors).toHaveLength(2);
+
+    element._requestFloorRemoval(1);
+    expect(element._floorDeleteArmed).toBe(1);
+    expect(element.config.floors).toHaveLength(2);
+
+    element._requestFloorRemoval(1);
+    expect(element._floorDeleteArmed).toBeNull();
+    expect(element.config.floors).toHaveLength(1);
+  });
+
+  it('only exposes controls that affect the current spatial runtime', async () => {
+    const element = await mount();
+    element._mode = 'advanced';
+    await element.updateComplete;
+    const form = element.shadowRoot.querySelector('.advanced-workspace ha-form') as any;
+    expect(form.schema.map((row: any) => row.name)).toEqual([
+      'spatialLightingMode', 'weatherEntity', 'illuminanceEntity', 'hideWalls', 'idleTimeout',
+    ]);
+    expect(element.shadowRoot.textContent).not.toContain('Labels and interaction');
+  });
+
+  it('keeps unfinished quick actions as drafts and commits complete service data', async () => {
+    const element = await mount();
+    element._addAction();
+    expect(element.config.quickActions).toEqual([]);
+    element._onActionChanged(new CustomEvent('value-changed', { detail: {
+      value: { name: 'Movie night', service: 'scene.turn_on', data: { entity_id: 'scene.movie_night' } },
+    } }), 0);
+    expect(element.config.quickActions).toEqual([{
+      name: 'Movie night', icon: 'mdi:flash', service: 'scene.turn_on', data: { entity_id: 'scene.movie_night' },
+    }]);
+    element._onActionChanged(new CustomEvent('value-changed', { detail: {
+      value: { name: 'Movie night', service: 'broken' },
+    } }), 0);
+    expect(element.config.quickActions).toEqual([]);
+  });
+
   it('shows structured condition controls instead of raw YAML fields', async () => {
     const element = await mount();
     element._addSpatialElement('custom');
@@ -275,7 +384,7 @@ describe('apartment-view-card-editor', () => {
     expect(element.config.entities[0].tooltipContentInRoom).toBe('state');
   });
 
-  it('replaces old Advanced controls with JSON/YAML backup and restore', async () => {
+  it('combines runtime settings with JSON/YAML backup and restore', async () => {
     const element = await mount();
     element._mode = 'advanced';
     await element.updateComplete;
@@ -283,7 +392,7 @@ describe('apartment-view-card-editor', () => {
     expect(element.shadowRoot.textContent).toContain('Download YAML');
     expect(element.shadowRoot.textContent).toContain('Restore a backup');
     expect(element.shadowRoot.querySelector('input[type="file"]')).toBeTruthy();
-    expect(element.shadowRoot.querySelector('ha-form.options')).toBeNull();
+    expect(element.shadowRoot.textContent).toContain('Appearance and environment');
     expect(element.shadowRoot.querySelector('.image-url')).toBeNull();
   });
 

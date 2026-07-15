@@ -126,6 +126,7 @@ export class SpatialPreview extends LitElement {
   @property({ attribute: false }) focusedZoneId: string | null = null;
   @property({ type: Boolean }) showRoomControls = true;
   @property({ type: Boolean }) hideWalls = false;
+  @property({ type: Number }) overviewResetSeconds = 10;
   @property({ type: Number }) latitude = 0;
   @property({ type: Number }) longitude = 0;
   @property() weatherEntity = '';
@@ -133,7 +134,7 @@ export class SpatialPreview extends LitElement {
   @property() spatialLightingMode: SpatialLightingMode = 'realistic';
   @state() private _error = '';
   @state() private _loadingModel = false;
-  @state() private _expandedEntityId: string | null = null;
+  private _expandedEntityId: string | null = null;
 
   private _renderer?: THREE.WebGLRenderer;
   private _composer?: EffectComposer;
@@ -161,6 +162,7 @@ export class SpatialPreview extends LitElement {
   private readonly _glbElementCache = new Map<string, Promise<THREE.Object3D>>();
   private _elementLoadGeneration = 0;
   private _prefersReducedMotion = false;
+  private _beaconsDirty = true;
   private readonly _raycaster = new THREE.Raycaster();
   private readonly _pointer = new THREE.Vector2();
 
@@ -473,7 +475,10 @@ export class SpatialPreview extends LitElement {
       if (this.modelUrl) void this._loadModel();
       this._animate();
     } catch (error) {
-      this._error = error instanceof Error ? error.message : '3D preview is unavailable.';
+      const message = error instanceof Error ? error.message : '3D preview is unavailable.';
+      queueMicrotask(() => {
+        if (this.isConnected) this._error = message;
+      });
     }
   }
 
@@ -481,7 +486,14 @@ export class SpatialPreview extends LitElement {
     if (changed.has('focusedZoneId')) this._expandedEntityId = null;
   }
 
+  private _setExpandedEntityId(entityId: string | null): void {
+    if (this._expandedEntityId === entityId) return;
+    this._expandedEntityId = entityId;
+    this.requestUpdate();
+  }
+
   protected updated(changed: Map<PropertyKey, unknown>): void {
+    this._beaconsDirty = true;
     if (this._scene && (changed.has('zones') || changed.has('entities') || changed.has('openings') || changed.has('walls') || changed.has('dimensions') || changed.has('shell') || changed.has('plan'))) {
       this._buildModel();
     }
@@ -675,9 +687,18 @@ export class SpatialPreview extends LitElement {
     // rings are reserved for devices whose state is expressed as motion/flow.
     if (resolved.effect !== 'none' && resolved.effect !== 'light') {
       const ringCount = resolved.effect === 'media' || resolved.effect === 'air' ? 3 : 2;
+      const ringRadius = resolved.effect === 'media' ? 0.22 : 0.11;
+      const ringSpacing = resolved.effect === 'media' ? 0.095 : 0.055;
+      const ringThickness = resolved.effect === 'media' ? 0.01 : 0.008;
       for (let index = 0; index < ringCount; index += 1) {
         const ring = new THREE.Mesh(
-          new THREE.TorusGeometry(0.11 + index * 0.055, 0.008, 8, 40, resolved.effect === 'air' ? Math.PI * 1.45 : Math.PI * 2),
+          new THREE.TorusGeometry(
+            ringRadius + index * ringSpacing,
+            ringThickness,
+            8,
+            40,
+            resolved.effect === 'air' ? Math.PI * 1.45 : Math.PI * 2,
+          ),
           new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.4, transparent: true, opacity: 0.34, depthWrite: false }),
         );
         ring.rotation.x = Math.PI / 2;
@@ -2466,11 +2487,11 @@ export class SpatialPreview extends LitElement {
 
   private _scheduleOverviewReset = (): void => {
     this._clearOverviewReset();
-    if (this.focusedZoneId !== null) return;
+    if (this.focusedZoneId !== null || this.overviewResetSeconds <= 0) return;
     this._overviewResetTimer = window.setTimeout(() => {
       this._overviewResetTimer = undefined;
       if (this.focusedZoneId === null) this._moveCameraTo(null);
-    }, 10_000);
+    }, this.overviewResetSeconds * 1_000);
   };
 
   private _applyFocus(): void {
@@ -2559,7 +2580,7 @@ export class SpatialPreview extends LitElement {
   private _activateEntityBeacon(event: Event, entityId: string, roomFocused: boolean, contentVisible: boolean): void {
     event.stopPropagation();
     if (roomFocused && !contentVisible && this._expandedEntityId !== entityId) {
-      this._expandedEntityId = entityId;
+      this._setExpandedEntityId(entityId);
       return;
     }
     this._selectEntity(entityId);
@@ -2569,7 +2590,7 @@ export class SpatialPreview extends LitElement {
     if (event.key !== 'Escape' || this._expandedEntityId === null) return;
     event.preventDefault();
     event.stopPropagation();
-    this._expandedEntityId = null;
+    this._setExpandedEntityId(null);
   }
 
   private _entityObjectIsVisible(object: THREE.Object3D): boolean {
@@ -2745,7 +2766,7 @@ export class SpatialPreview extends LitElement {
       this._selectEntity(entity.object.userData.entityId as string);
       return;
     }
-    this._expandedEntityId = null;
+    this._setExpandedEntityId(null);
     const floor = hits.find((hit) => hit.object.userData.roomFloor);
     if (floor) this._focusZone(floor.object.userData.zoneId as string);
   };
@@ -2759,6 +2780,7 @@ export class SpatialPreview extends LitElement {
     this._composer?.setSize(width, height);
     this._camera.aspect = width / height;
     this._camera.updateProjectionMatrix();
+    this._beaconsDirty = true;
     if (this._overviewBounds && Math.abs(previousAspect - this._camera.aspect) > 0.01) {
       this._moveCameraTo(this.focusedZoneId);
     }
@@ -2766,6 +2788,7 @@ export class SpatialPreview extends LitElement {
 
   private _animate = () => {
     this._frame = requestAnimationFrame(this._animate);
+    const tweening = Boolean(this._cameraTween);
     if (this._cameraTween && this._camera && this._controls) {
       const elapsed = (performance.now() - this._cameraTween.started) / this._cameraTween.duration;
       const progress = Math.min(1, elapsed);
@@ -2774,9 +2797,12 @@ export class SpatialPreview extends LitElement {
       this._controls.target.lerpVectors(this._cameraTween.fromTarget, this._cameraTween.toTarget, eased);
       if (progress >= 1) this._cameraTween = undefined;
     }
-    this._controls?.update();
+    const cameraChanged = this._controls?.update() ?? false;
     this._animateEntityEffects(performance.now());
-    this._syncEntityBeacons();
+    if (this._beaconsDirty || tweening || cameraChanged) {
+      this._syncEntityBeacons();
+      this._beaconsDirty = false;
+    }
     if (this._grainPass) this._grainPass.uniforms.time.value = performance.now() * 0.001;
     if (this._composer) this._composer.render();
     else if (this._renderer && this._scene && this._camera) this._renderer.render(this._scene, this._camera);
