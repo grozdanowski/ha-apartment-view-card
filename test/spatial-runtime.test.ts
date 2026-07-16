@@ -97,6 +97,30 @@ describe('3D spatial runtime', () => {
     expect(preview._model.children.some((child: THREE.Object3D) => child.userData.zoneId === 'living')).toBe(false);
   });
 
+  it('frames every edge of an isolated Element with comfortable preview padding', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview._camera = new THREE.PerspectiveCamera(34, 1, 0.1, 50);
+    preview._overviewBounds = new THREE.Box3(
+      new THREE.Vector3(-2.4, -0.2, -0.35),
+      new THREE.Vector3(2.4, 1.4, 0.35),
+    );
+    const pose = preview._isolatedElementPose();
+    preview._camera.position.copy(pose.position);
+    preview._camera.lookAt(pose.target);
+    preview._camera.updateMatrixWorld(true);
+    preview._camera.updateProjectionMatrix();
+
+    for (const x of [-2.4, 2.4]) {
+      for (const y of [-0.2, 1.4]) {
+        for (const z of [-0.35, 0.35]) {
+          const projected = new THREE.Vector3(x, y, z).project(preview._camera);
+          expect(Math.abs(projected.x)).toBeLessThanOrEqual(0.84);
+          expect(Math.abs(projected.y)).toBeLessThanOrEqual(0.84);
+        }
+      }
+    }
+  });
+
   it('shows only the selected Element in Home Assistant card preview and restores the card afterward', async () => {
     const plan = addSpatialElement(rectangularSpatialPlan(8, 6), 'custom', { x: 4, z: 3 }, {
       name: 'Media cabinet',
@@ -119,7 +143,11 @@ describe('3D spatial runtime', () => {
     window.dispatchEvent(new CustomEvent(ELEMENT_INSPECTOR_EVENT, { detail: { elementId: selected.id } }));
     await card.updateComplete;
     expect(card.shadowRoot.querySelector('.spatial-room-navigation')).toBeNull();
-    expect((card.shadowRoot.querySelector('spatial-preview') as any).isolatedElementId).toBe(selected.id);
+    const isolatedPreview = card.shadowRoot.querySelector('spatial-preview') as any;
+    expect(isolatedPreview.isolatedElementId).toBe(selected.id);
+    expect(isolatedPreview.shadowRoot.querySelector('.room-navigation')).toBeNull();
+    expect(isolatedPreview.shadowRoot.querySelector('.entity-layer')).toBeNull();
+    expect(isolatedPreview.shadowRoot.querySelector('.entity-shortcuts')).toBeNull();
 
     window.dispatchEvent(new CustomEvent(ELEMENT_INSPECTOR_EVENT, { detail: { elementId: null } }));
     await card.updateComplete;

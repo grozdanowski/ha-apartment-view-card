@@ -2518,15 +2518,23 @@ export class SpatialPreview extends LitElement {
     if (!this._camera || !this._overviewBounds || this._overviewBounds.isEmpty()) return undefined;
     const bounds = this._overviewBounds;
     const target = bounds.getCenter(new THREE.Vector3());
-    const size = bounds.getSize(new THREE.Vector3());
-    const radius = Math.max(0.45, size.length() / 2);
     const direction = new THREE.Vector3(1.05, 0.72, 1.2).normalize();
+    const forward = direction.clone().negate();
+    const right = new THREE.Vector3().crossVectors(forward, this._camera.up).normalize();
+    const up = new THREE.Vector3().crossVectors(right, forward).normalize();
     const verticalTangent = Math.tan(THREE.MathUtils.degToRad(this._camera.fov) / 2);
     const horizontalTangent = verticalTangent * Math.max(this._camera.aspect, 0.2);
-    const distance = Math.max(
-      radius / Math.max(0.1, verticalTangent),
-      radius / Math.max(0.1, horizontalTangent),
-    ) * 1.18;
+    const corners = [bounds.min.x, bounds.max.x].flatMap((x) =>
+      [bounds.min.y, bounds.max.y].flatMap((y) =>
+        [bounds.min.z, bounds.max.z].map((z) => new THREE.Vector3(x, y, z))));
+    const distance = corners.reduce((fit, corner) => {
+      const relative = corner.clone().sub(target);
+      return Math.max(
+        fit,
+        relative.dot(direction) + Math.abs(relative.dot(right)) / (horizontalTangent * 0.8),
+        relative.dot(direction) + Math.abs(relative.dot(up)) / (verticalTangent * 0.8),
+      );
+    }, this._camera.near * 2) * 1.05;
     return { target, position: target.clone().addScaledVector(direction, distance) };
   }
 
@@ -2947,7 +2955,7 @@ export class SpatialPreview extends LitElement {
     const isolatedLightState = isolatedLight?.entityId ? this.hass?.states?.[isolatedLight.entityId] : undefined;
     const isolatedLightColor = isolatedLightState ? resolveLightColor(isolatedLightState) : null;
     const isolatedAccent = isolatedLightColor ? `rgb(${isolatedLightColor.r} ${isolatedLightColor.g} ${isolatedLightColor.b})` : '#a9d2d8';
-    return html`${this.showRoomControls && this.zones.length ? html`<nav class="room-navigation" aria-label="Rooms">
+    return html`${!this.isolatedElementId && this.showRoomControls && this.zones.length ? html`<nav class="room-navigation" aria-label="Rooms">
       ${this.focusedZoneId !== null ? html`<button class="room-back" aria-label="Back to apartment overview" title="Overview"
         @pointerup=${(event: PointerEvent) => this._focusZoneFromPointer(event, null)}
         @click=${() => this._focusZone(null)}><ha-icon icon="mdi:arrow-left"></ha-icon></button><span class="room-divider" aria-hidden="true"></span>` : ''}
