@@ -579,7 +579,14 @@ export class SpatialPreview extends LitElement {
       if (element.zoneId) zoneIds.add(element.zoneId);
     });
     this.shell?.rooms?.forEach((room) => zoneIds.add(room.zoneId));
-    [...zoneIds].slice(0, 31).forEach((zoneId, index) => this._zoneLightLayers.set(zoneId, index + 1));
+    this._camera?.layers.set(0);
+    [...zoneIds].slice(0, 31).forEach((zoneId, index) => {
+      const layer = index + 1;
+      this._zoneLightLayers.set(zoneId, layer);
+      // The camera must collect room-scoped lights before Three.js can match them
+      // against receiving geometry. Every visible mesh also retains layer 0.
+      this._camera?.layers.enable(layer);
+    });
   }
 
   private _applyZoneLightLayers(object: THREE.Object3D, zoneIds: Array<string | undefined>): void {

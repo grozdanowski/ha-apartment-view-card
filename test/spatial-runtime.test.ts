@@ -415,6 +415,7 @@ describe('3D spatial runtime', () => {
 
   it('confines practical light to its room while shared walls receive adjacent room light', () => {
     const preview = document.createElement('spatial-preview') as any;
+    preview._camera = new THREE.PerspectiveCamera();
     preview.zones = [
       { id: 'living', name: 'Living Room', x: 0, y: 0, width: 50, height: 100 },
       { id: 'hallway', name: 'Hallway', x: 50, y: 0, width: 50, height: 100 },
@@ -437,6 +438,7 @@ describe('3D spatial runtime', () => {
     expect(livingLight.layers.test(sharedWall.layers)).toBe(true);
     expect(daylight.layers.test(livingFloor.layers)).toBe(true);
     expect(daylight.layers.test(hallwayFloor.layers)).toBe(true);
+    expect(livingLight.layers.test(preview._camera.layers)).toBe(true);
     expect(livingLight.shadow.camera.layers.mask).toBe(livingLight.layers.mask);
   });
 
