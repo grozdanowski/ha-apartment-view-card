@@ -413,6 +413,79 @@ describe('3D spatial runtime', () => {
     expect(practical.shadow.camera.far).toBeGreaterThanOrEqual(4.5);
   });
 
+  it('confines practical light to its room while shared walls receive adjacent room light', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.zones = [
+      { id: 'living', name: 'Living Room', x: 0, y: 0, width: 50, height: 100 },
+      { id: 'hallway', name: 'Hallway', x: 50, y: 0, width: 50, height: 100 },
+    ];
+    preview._configureZoneLightLayers();
+
+    const livingFloor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1));
+    const hallwayFloor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1));
+    const sharedWall = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 0.1));
+    preview._applyZoneLightLayers(livingFloor, ['living']);
+    preview._applyZoneLightLayers(hallwayFloor, ['hallway']);
+    preview._setObjectZoneIds(sharedWall, ['living', 'hallway']);
+
+    const livingLight = new THREE.PointLight(0xffffff, 1, 4, 1.65);
+    preview._configurePracticalLight(livingLight, 'living');
+    const daylight = new THREE.DirectionalLight(0xffffff, 1);
+
+    expect(livingLight.layers.test(livingFloor.layers)).toBe(true);
+    expect(livingLight.layers.test(hallwayFloor.layers)).toBe(false);
+    expect(livingLight.layers.test(sharedWall.layers)).toBe(true);
+    expect(daylight.layers.test(livingFloor.layers)).toBe(true);
+    expect(daylight.layers.test(hallwayFloor.layers)).toBe(true);
+    expect(livingLight.shadow.camera.layers.mask).toBe(livingLight.layers.mask);
+  });
+
+  it('wires generated room floors, shared architecture, and entity lights to room layers', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview._scene = new THREE.Scene();
+    preview.dimensions = { width: 4, aspectRatio: 2, wallHeight: 2.6 };
+    preview.zones = [
+      { id: 'living', name: 'Living Room', x: 0, y: 0, width: 50, height: 100 },
+      { id: 'hallway', name: 'Hallway', x: 50, y: 0, width: 50, height: 100 },
+    ];
+    preview.shell = {
+      outer: [[0, 0], [4, 0], [4, 2], [0, 2]],
+      holes: [],
+      floor: [[0, 0], [4, 0], [4, 2], [0, 2]],
+      rooms: [
+        { zoneId: 'living', floor: [[0, 0], [2, 0], [2, 2], [0, 2]] },
+        { zoneId: 'hallway', floor: [[2, 0], [4, 0], [4, 2], [2, 2]] },
+      ],
+      walls: [{ id: 'shared', points: [[2, 0], [2, 2]], zoneIds: ['living', 'hallway'] }],
+      openings: [],
+    };
+    preview.entities = [{
+      entity: 'light.living', x: 25, y: 50, size: 'medium', tap: 'toggle', orientation: null, zoneId: 'living',
+      spatial: { position: { x: 1, y: 2.3, z: 1 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'ceiling', visible: true },
+    }];
+
+    preview._buildModel();
+
+    let livingFloor: THREE.Object3D | undefined;
+    let hallwayFloor: THREE.Object3D | undefined;
+    let sharedWall: THREE.Object3D | undefined;
+    let practical: THREE.PointLight | undefined;
+    preview._model.traverse((node: THREE.Object3D) => {
+      if (node.userData.architecturalRoomFloor && node.userData.zoneId === 'living') livingFloor = node;
+      if (node.userData.architecturalRoomFloor && node.userData.zoneId === 'hallway') hallwayFloor = node;
+      if (node.userData.zoneIds?.includes('living') && node.userData.zoneIds?.includes('hallway')) sharedWall = node;
+      if (node instanceof THREE.PointLight && node.userData.entityLight) practical = node;
+    });
+
+    expect(livingFloor).toBeDefined();
+    expect(hallwayFloor).toBeDefined();
+    expect(sharedWall).toBeDefined();
+    expect(practical).toBeDefined();
+    expect(practical!.layers.test(livingFloor!.layers)).toBe(true);
+    expect(practical!.layers.test(hallwayFloor!.layers)).toBe(false);
+    expect(practical!.layers.test(sharedWall!.layers)).toBe(true);
+  });
+
   it('represents both light Element types as beacon anchors with practical light and no solid mesh', () => {
     const preview = document.createElement('spatial-preview') as any;
     preview.hass = {

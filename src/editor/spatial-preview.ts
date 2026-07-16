@@ -11,7 +11,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import * as SunCalc from 'suncalc';
-import { wallIdFor, type EntityConfig, type OpeningConfig, type SiteConfig, type SpatialDimensions, type SpatialElement, type SpatialElementPrimitive, type SpatialFloorFinish, type SpatialGlbSurface, type SpatialPlan, type SpatialShellConfig, type SpatialShellOpening, type SpatialShellWall, type WallConfig, type ZoneConfig } from '../core/config';
+import { wallIdFor, wallParts, type EntityConfig, type OpeningConfig, type SiteConfig, type SpatialDimensions, type SpatialElement, type SpatialElementPrimitive, type SpatialFloorFinish, type SpatialGlbSurface, type SpatialPlan, type SpatialShellConfig, type SpatialShellOpening, type SpatialShellWall, type WallConfig, type ZoneConfig } from '../core/config';
 import type { HassLike } from '../core/ha-types';
 import { iconForEntity } from '../core/entity-state';
 import { resolveLightColor } from '../core/light-color';
@@ -161,6 +161,7 @@ export class SpatialPreview extends LitElement {
   private _environment?: SpatialEnvironment;
   private _effectMeshes: THREE.Mesh[] = [];
   private readonly _entityVisuals = new Map<string, THREE.Object3D>();
+  private readonly _zoneLightLayers = new Map<string, number>();
   private readonly _glbElementCache = new Map<string, Promise<THREE.Object3D>>();
   private _elementLoadGeneration = 0;
   private _prefersReducedMotion = false;
@@ -562,7 +563,34 @@ export class SpatialPreview extends LitElement {
     return 18 * level;
   }
 
-  private _configurePracticalLight(light: THREE.PointLight): void {
+  private _configureZoneLightLayers(): void {
+    this._zoneLightLayers.clear();
+    const zoneIds = new Set<string>();
+    this.zones.forEach((zone) => {
+      if (zone.id) zoneIds.add(zone.id);
+    });
+    this.entities.forEach((entity) => {
+      if (entity.zoneId) zoneIds.add(entity.zoneId);
+    });
+    this.plan?.rooms.forEach((room) => {
+      if (room.zoneId) zoneIds.add(room.zoneId);
+    });
+    this.plan?.elements.forEach((element) => {
+      if (element.zoneId) zoneIds.add(element.zoneId);
+    });
+    this.shell?.rooms?.forEach((room) => zoneIds.add(room.zoneId));
+    [...zoneIds].slice(0, 31).forEach((zoneId, index) => this._zoneLightLayers.set(zoneId, index + 1));
+  }
+
+  private _applyZoneLightLayers(object: THREE.Object3D, zoneIds: Array<string | undefined>): void {
+    const layers = [...new Set(zoneIds
+      .map((zoneId) => zoneId ? this._zoneLightLayers.get(zoneId) : undefined)
+      .filter((layer): layer is number => layer !== undefined))];
+    if (!layers.length) return;
+    object.traverse((node) => layers.forEach((layer) => node.layers.enable(layer)));
+  }
+
+  private _configurePracticalLight(light: THREE.PointLight, zoneId?: string): void {
     light.castShadow = true;
     const mapSize = this.clientWidth < 600 ? 256 : 512;
     light.shadow.mapSize.set(mapSize, mapSize);
@@ -571,6 +599,11 @@ export class SpatialPreview extends LitElement {
     light.shadow.radius = 2.4;
     light.shadow.camera.near = 0.08;
     light.shadow.camera.far = Math.max(4.5, light.distance || 4.5);
+    const roomLayer = zoneId ? this._zoneLightLayers.get(zoneId) : undefined;
+    const layer = roomLayer ?? 0;
+    light.layers.set(layer);
+    light.shadow.camera.layers.set(layer);
+    light.userData.spatialLightLayer = layer;
   }
 
   private _isConfiguredGroupWithPlacedChildren(entityId: string): boolean {
@@ -1039,7 +1072,7 @@ export class SpatialPreview extends LitElement {
         if (canEmit) {
           node.geometry.computeBoundingSphere();
           const light = new THREE.PointLight(0xffffff, 0, 3.8, 1.8);
-          this._configurePracticalLight(light);
+          this._configurePracticalLight(light, element.zoneId);
           light.position.copy(node.geometry.boundingSphere?.center ?? new THREE.Vector3());
           light.userData.elementGlbSurfaceLight = surface.id;
           light.userData.spatialElementId = element.id;
@@ -1056,6 +1089,7 @@ export class SpatialPreview extends LitElement {
           node.receiveShadow = true;
         }
       });
+      this._applyZoneLightLayers(imported, [element.zoneId]);
       group.add(imported);
       this._updateEntityStateVisuals();
       this._refreshModelBounds();
@@ -1083,7 +1117,7 @@ export class SpatialPreview extends LitElement {
       if (!primitive) return group;
       const appearance = this._elementPrimitiveAppearance(element, primitive);
       const practical = new THREE.PointLight(appearance.color, appearance.luminosity * 18, 4.2, 1.65);
-      this._configurePracticalLight(practical);
+      this._configurePracticalLight(practical, element.zoneId);
       practical.userData.entityId = element.entityId;
       practical.userData.spatialElementId = element.id;
       practical.userData.elementPrimitiveLight = primitive;
@@ -1117,7 +1151,7 @@ export class SpatialPreview extends LitElement {
       group.add(mesh);
 
       const practical = new THREE.PointLight(appearance.color, appearance.luminosity * 12, 3.8, 1.8);
-      this._configurePracticalLight(practical);
+      this._configurePracticalLight(practical, element.zoneId);
       practical.position.copy(mesh.position);
       practical.userData.entityId = element.entityId;
       practical.userData.spatialElementId = element.id;
@@ -1152,6 +1186,7 @@ export class SpatialPreview extends LitElement {
     if (!this._scene) return;
     const generation = ++this._elementLoadGeneration;
     this._disposeModel();
+    this._configureZoneLightLayers();
     const group = new THREE.Group();
     const isolatedElement = this.isolatedElementId
       ? this.plan?.elements.find((element) => element.id === this.isolatedElementId)
@@ -1169,6 +1204,7 @@ export class SpatialPreview extends LitElement {
         node.userData.spatialElementId = isolatedElement.id;
         node.userData.entityId ??= isolatedElement.entityId;
       });
+      this._applyZoneLightLayers(element, [isolatedElement.zoneId]);
       group.add(element);
       this._model = group;
       this._scene.add(group);
@@ -1261,6 +1297,7 @@ export class SpatialPreview extends LitElement {
         addWallRecord(`v:${keyNumber(xStart)}:${keyNumber(zStart)}:${keyNumber(zEnd)}`, { length: depth, id: wallIdFor(zone.id, 'left'), x: xStart, z: zStart, rotation: -Math.PI / 2 });
         addWallRecord(`v:${keyNumber(xEnd)}:${keyNumber(zStart)}:${keyNumber(zEnd)}`, { length: depth, id: wallIdFor(zone.id, 'right'), x: xEnd, z: zStart, rotation: -Math.PI / 2 });
       }
+      this._applyZoneLightLayers(room, [zone.id]);
       group.add(room);
     });
 
@@ -1272,6 +1309,10 @@ export class SpatialPreview extends LitElement {
         : this._wallWithOpenings(record.length, this.dimensions.wallHeight, WALL_DEPTH, openings, wallMaterial);
       wallGroup.position.set(record.x, 0, record.z);
       wallGroup.rotation.y = record.rotation;
+      this._setObjectZoneIds(
+        wallGroup,
+        [...new Set(record.ids.map((wallId) => wallParts(wallId)?.zoneId).filter((zoneId): zoneId is string => Boolean(zoneId)))],
+      );
       group.add(wallGroup);
     });
 
@@ -1298,6 +1339,7 @@ export class SpatialPreview extends LitElement {
           node.userData.spatialElementId = item.id;
           node.userData.entityId = item.entityId;
         });
+        this._applyZoneLightLayers(element, [item.zoneId]);
         group.add(element);
         if (item.entityId) {
           this._entityVisuals.set(item.entityId, element);
@@ -1322,13 +1364,14 @@ export class SpatialPreview extends LitElement {
           THREE.MathUtils.degToRad(entity.spatial?.rotation.y ?? 0),
           THREE.MathUtils.degToRad(entity.spatial?.rotation.z ?? 0),
         );
+        this._applyZoneLightLayers(visual, [entity.zoneId]);
         group.add(visual);
       }
       if ((entity.entity.startsWith('light.') || entity.light)
         && !elementBoundEntities.has(entity.entity)
         && !this._isConfiguredGroupWithPlacedChildren(entity.entity)) {
         const light = new THREE.PointLight(0xffd7a0, 0, 4, 1.65);
-        this._configurePracticalLight(light);
+        this._configurePracticalLight(light, entity.zoneId);
         light.position.copy(position);
         light.position.y = Math.max(1.55, light.position.y);
         light.userData.zoneId = entity.zoneId;
@@ -1467,6 +1510,7 @@ export class SpatialPreview extends LitElement {
         floor.userData.zoneId = room.zoneId;
         floor.userData.roomFloor = true;
         floor.userData.architecturalRoomFloor = true;
+        this._applyZoneLightLayers(floor, [room.zoneId]);
         result.add(floor);
       });
     });
@@ -1566,6 +1610,7 @@ export class SpatialPreview extends LitElement {
     ceiling.receiveShadow = false;
     ceiling.userData.ceilingShadowOccluder = true;
     ceiling.userData.zoneId = zoneId;
+    this._applyZoneLightLayers(ceiling, [zoneId]);
     ceiling.raycast = () => {};
     return ceiling;
   }
@@ -2678,6 +2723,7 @@ export class SpatialPreview extends LitElement {
   }
 
   private _setObjectZoneIds(object: THREE.Object3D, zoneIds: string[], anchor?: THREE.Vector2): void {
+    this._applyZoneLightLayers(object, zoneIds);
     object.traverse((node) => {
       if (zoneIds.length) node.userData.zoneIds = zoneIds;
       if (anchor) node.userData.cutawayAnchor = [anchor.x, anchor.y];
