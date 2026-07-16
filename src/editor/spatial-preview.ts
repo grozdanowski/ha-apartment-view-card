@@ -19,7 +19,7 @@ import { suggestedOverviewVisibility, suggestedRoomVisibility } from '../core/en
 import { elementPrimitivesForType, resolveSpatialValue } from '../core/spatial-elements';
 import { objectAtGlbNodePath } from '../core/spatial-glb';
 import { assignShellOpenings, shellSegments } from '../core/spatial-shell';
-import { resolveSpatialEntityState, resolveSpatialEnvironment, spatialEntityPresentation, type SpatialEffectKind, type SpatialEnvironment, type SpatialLightingMode } from '../core/spatial-state';
+import { resolveDirectSpatialEntityState, resolveSpatialEnvironment, spatialEntityPresentation, type SpatialEffectKind, type SpatialEnvironment, type SpatialLightingMode } from '../core/spatial-state';
 
 export interface SpatialPoint {
   x: number;
@@ -544,12 +544,12 @@ export class SpatialPreview extends LitElement {
   }
 
   private _entityIsActive(entityId: string): boolean {
-    const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entityId);
+    const resolved = resolveDirectSpatialEntityState(this.hass?.states ?? {}, entityId);
     return resolved.activity === 'active' || resolved.activity === 'attention';
   }
 
   private _entityLightColor(entityId: string): THREE.Color {
-    const state = resolveSpatialEntityState(this.hass?.states ?? {}, entityId).state;
+    const state = resolveDirectSpatialEntityState(this.hass?.states ?? {}, entityId).state;
     if (!state) return new THREE.Color(0xfffae6);
     const rgb = resolveLightColor(state);
     return new THREE.Color(rgb.r / 255, rgb.g / 255, rgb.b / 255);
@@ -557,9 +557,20 @@ export class SpatialPreview extends LitElement {
 
   private _entityLightIntensity(entityId: string): number {
     if (!this._entityIsActive(entityId)) return 0;
-    const brightness = Number(resolveSpatialEntityState(this.hass?.states ?? {}, entityId).state?.attributes?.brightness);
-    const level = Number.isFinite(brightness) ? Math.max(0.03, brightness / 255) : 0.72;
+    const brightness = Number(resolveDirectSpatialEntityState(this.hass?.states ?? {}, entityId).state?.attributes?.brightness);
+    const level = Number.isFinite(brightness) ? Math.max(0.02, brightness / 255) : 1;
     return 18 * level;
+  }
+
+  private _configurePracticalLight(light: THREE.PointLight): void {
+    light.castShadow = true;
+    const mapSize = this.clientWidth < 600 ? 256 : 512;
+    light.shadow.mapSize.set(mapSize, mapSize);
+    light.shadow.bias = -0.0005;
+    light.shadow.normalBias = 0.035;
+    light.shadow.radius = 2.4;
+    light.shadow.camera.near = 0.08;
+    light.shadow.camera.far = Math.max(4.5, light.distance || 4.5);
   }
 
   private _isConfiguredGroupWithPlacedChildren(entityId: string): boolean {
@@ -637,7 +648,7 @@ export class SpatialPreview extends LitElement {
 
       const entityId = node.userData.entityId as string | undefined;
       if (!entityId) return;
-      const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entityId);
+      const resolved = resolveDirectSpatialEntityState(this.hass?.states ?? {}, entityId);
       const active = resolved.activity === 'active' || resolved.activity === 'attention';
       const strength = spatialEntityPresentation(entityId, resolved.state).strength;
       if (node instanceof THREE.PointLight && node.userData.entityLight) {
@@ -697,7 +708,7 @@ export class SpatialPreview extends LitElement {
   }
 
   private _createEntityVisual(entityId: string, position: THREE.Vector3, zoneId?: string, visible = true): THREE.Group {
-    const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entityId);
+    const resolved = resolveDirectSpatialEntityState(this.hass?.states ?? {}, entityId);
     const color = this._effectColor(resolved.effect);
     const root = new THREE.Group();
     root.position.copy(position);
@@ -1028,6 +1039,7 @@ export class SpatialPreview extends LitElement {
         if (canEmit) {
           node.geometry.computeBoundingSphere();
           const light = new THREE.PointLight(0xffffff, 0, 3.8, 1.8);
+          this._configurePracticalLight(light);
           light.position.copy(node.geometry.boundingSphere?.center ?? new THREE.Vector3());
           light.userData.elementGlbSurfaceLight = surface.id;
           light.userData.spatialElementId = element.id;
@@ -1071,6 +1083,7 @@ export class SpatialPreview extends LitElement {
       if (!primitive) return group;
       const appearance = this._elementPrimitiveAppearance(element, primitive);
       const practical = new THREE.PointLight(appearance.color, appearance.luminosity * 18, 4.2, 1.65);
+      this._configurePracticalLight(practical);
       practical.userData.entityId = element.entityId;
       practical.userData.spatialElementId = element.id;
       practical.userData.elementPrimitiveLight = primitive;
@@ -1104,6 +1117,7 @@ export class SpatialPreview extends LitElement {
       group.add(mesh);
 
       const practical = new THREE.PointLight(appearance.color, appearance.luminosity * 12, 3.8, 1.8);
+      this._configurePracticalLight(practical);
       practical.position.copy(mesh.position);
       practical.userData.entityId = element.entityId;
       practical.userData.spatialElementId = element.id;
@@ -1314,6 +1328,7 @@ export class SpatialPreview extends LitElement {
         && !elementBoundEntities.has(entity.entity)
         && !this._isConfiguredGroupWithPlacedChildren(entity.entity)) {
         const light = new THREE.PointLight(0xffd7a0, 0, 4, 1.65);
+        this._configurePracticalLight(light);
         light.position.copy(position);
         light.position.y = Math.max(1.55, light.position.y);
         light.userData.zoneId = entity.zoneId;
@@ -2745,7 +2760,7 @@ export class SpatialPreview extends LitElement {
     if (!(entity.spatial?.visible ?? true)) return false;
     const roomFocused = this.focusedZoneId !== null;
     if (roomFocused && entity.zoneId !== this.focusedZoneId) return false;
-    const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entity.entity);
+    const resolved = resolveDirectSpatialEntityState(this.hass?.states ?? {}, entity.entity);
     const configured = roomFocused ? entity.roomVisibility : entity.overviewVisibility;
     if (this._isConfiguredGroupWithPlacedChildren(entity.entity) && (!configured || configured === 'auto')) return false;
     const visibility = !configured || configured === 'auto'
@@ -2760,7 +2775,7 @@ export class SpatialPreview extends LitElement {
   private _renderEntityBeacon(entity: EntityConfig) {
     const element = this.plan?.elements.find((candidate) => candidate.entityId === entity.entity);
     if (!this._entityMarkerIsVisible(entity)) return '';
-    const resolved = resolveSpatialEntityState(this.hass?.states ?? {}, entity.entity);
+    const resolved = resolveDirectSpatialEntityState(this.hass?.states ?? {}, entity.entity);
     const roomFocused = this.focusedZoneId !== null;
     const fallbackState = resolved.state ?? { entity_id: entity.entity, state: 'unavailable', attributes: {} };
     const presentation = spatialEntityPresentation(

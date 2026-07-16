@@ -185,7 +185,8 @@ export function resolveSpatialEntityState(
   states: Record<string, HassEntity>,
   entityId: string,
 ): ResolvedSpatialState {
-  const direct = states[entityId];
+  const directResolved = resolveDirectSpatialEntityState(states, entityId);
+  const direct = directResolved.state;
   let resolved = direct;
   let sourceEntityId = entityId;
   let usedGroupFallback = false;
@@ -208,6 +209,25 @@ export function resolveSpatialEntityState(
     usedGroupFallback,
     activity: activityFor(entityId, resolved),
     effect: effectFor(entityId, resolved),
+  };
+}
+
+/**
+ * Resolve only the configured entity itself. Spatial effects must use this
+ * stricter form: a group can describe an unavailable child, but it cannot tell
+ * us which physical fixture is emitting light or what colour it is emitting.
+ */
+export function resolveDirectSpatialEntityState(
+  states: Record<string, HassEntity>,
+  entityId: string,
+): ResolvedSpatialState {
+  const state = states[entityId];
+  return {
+    state,
+    sourceEntityId: entityId,
+    usedGroupFallback: false,
+    activity: activityFor(entityId, state),
+    effect: effectFor(entityId, state),
   };
 }
 
@@ -275,21 +295,26 @@ export function resolveSpatialEnvironment(args: {
     const direct = states[entityId];
     if (Array.isArray(direct?.attributes?.entity_id)
       && direct.attributes.entity_id.some((member: string) => configured.has(member))) return [];
-    const resolved = resolveSpatialEntityState(states, entityId);
+    const resolved = resolveDirectSpatialEntityState(states, entityId);
     return resolved.activity === 'active' ? [resolved.sourceEntityId] : [];
   }));
   const activeLightCount = activeLightSources.size;
   const mode = args.mode ?? 'realistic';
-  const floor = mode === 'presentation' ? 0.3 : mode === 'balanced' ? 0.21 : 0.15;
-  const nightExposure = mode === 'presentation' ? 1.02 : mode === 'balanced' ? 0.93 : 0.86;
-  const activeLift = Math.min(0.18, activeLightCount * 0.035);
+  const floor = mode === 'presentation' ? 0.2 : mode === 'balanced' ? 0.1 : 0.045;
+  const nightExposure = mode === 'presentation' ? 0.94 : mode === 'balanced' ? 0.86 : 0.78;
+  const activeLift = mode === 'realistic' ? 0 : Math.min(mode === 'balanced' ? 0.045 : 0.08, activeLightCount * 0.012);
+  const bounceIntensity = mode === 'realistic'
+    ? 0
+    : activeLightCount
+      ? Math.min(mode === 'balanced' ? 0.07 : 0.14, 0.018 + activeLightCount * 0.014)
+      : 0;
   return {
     daylight,
     cloudFactor,
     sunIntensity: daylight * 3.25 * cloudFactor,
     skyIntensity: floor + daylight * (0.88 + cloudFactor * 0.18),
     fillIntensity: floor * 0.6 + daylight * 0.42,
-    bounceIntensity: activeLightCount ? Math.min(0.42, 0.07 + activeLightCount * 0.055) : 0,
+    bounceIntensity,
     exposure: nightExposure + daylight * (1.02 - nightExposure) + activeLift,
     elevationDegrees,
     azimuthDegrees,

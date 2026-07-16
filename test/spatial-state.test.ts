@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveSpatialEntityState, resolveSpatialEnvironment, spatialEntityPresentation, spatialEntityStrength } from '../src/core/spatial-state';
+import { resolveDirectSpatialEntityState, resolveSpatialEntityState, resolveSpatialEnvironment, spatialEntityPresentation, spatialEntityStrength } from '../src/core/spatial-state';
 import type { HassEntity } from '../src/core/ha-types';
 
 function entity(entityId: string, state: string, attributes: Record<string, unknown> = {}): HassEntity {
@@ -17,6 +17,17 @@ describe('spatial Home Assistant state', () => {
     expect(resolved.sourceEntityId).toBe('light.living_room');
     expect(resolved.activity).toBe('active');
     expect(resolved.effect).toBe('light');
+  });
+
+  it('keeps practical light state unavailable when only its parent group is on', () => {
+    const states = {
+      'light.ceiling_1': entity('light.ceiling_1', 'unavailable'),
+      'light.living_room': entity('light.living_room', 'on', { entity_id: ['light.ceiling_1'] }),
+    };
+    const resolved = resolveDirectSpatialEntityState(states, 'light.ceiling_1');
+    expect(resolved.usedGroupFallback).toBe(false);
+    expect(resolved.activity).toBe('unavailable');
+    expect(resolved.sourceEntityId).toBe('light.ceiling_1');
   });
 
   it('keeps a real night dark when no configured lights are active', () => {
@@ -40,7 +51,27 @@ describe('spatial Home Assistant state', () => {
     expect(environment.activeLightCount).toBe(0);
   });
 
-  it('counts a fallback light group once even when several unavailable children use it', () => {
+  it('keeps realistic ambient light local even when several fixtures are on', () => {
+    const environment = resolveSpatialEnvironment({
+      states: {
+        'sun.sun': entity('sun.sun', 'below_horizon', { elevation: -20.79, azimuth: 341.17 }),
+        'light.living': entity('light.living', 'on', { brightness: 230 }),
+        'light.hallway': entity('light.hallway', 'on', { brightness: 254 }),
+        'light.office': entity('light.office', 'off'),
+      },
+      entityIds: ['light.living', 'light.hallway', 'light.office'],
+      fallbackElevationRadians: -0.36,
+      fallbackAzimuthRadians: 5.95,
+      mode: 'realistic',
+    });
+    expect(environment.daylight).toBe(0);
+    expect(environment.activeLightCount).toBe(2);
+    expect(environment.bounceIntensity).toBe(0);
+    expect(environment.exposure).toBe(0.78);
+    expect(environment.skyIntensity).toBe(0.045);
+  });
+
+  it('does not turn unavailable child fixtures into emitters from a parent group', () => {
     const states = {
       'sun.sun': entity('sun.sun', 'below_horizon', { elevation: -12, azimuth: 250 }),
       'light.one': entity('light.one', 'unavailable'),
@@ -53,8 +84,8 @@ describe('spatial Home Assistant state', () => {
       fallbackElevationRadians: -0.2,
       fallbackAzimuthRadians: 1,
     });
-    expect(environment.activeLightCount).toBe(1);
-    expect(environment.bounceIntensity).toBeGreaterThan(0);
+    expect(environment.activeLightCount).toBe(0);
+    expect(environment.bounceIntensity).toBe(0);
   });
 
   it('uses live outdoor illuminance as an upper-bounded daylight input', () => {

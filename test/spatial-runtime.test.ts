@@ -365,6 +365,54 @@ describe('3D spatial runtime', () => {
     expect(practical.color.g).toBeCloseTo(180 / 255);
   });
 
+  it('keeps unavailable child fixtures dark even when a containing light group is on', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.hass = {
+      states: {
+        'light.child': { entity_id: 'light.child', state: 'unavailable', attributes: {} },
+        'light.room': { entity_id: 'light.room', state: 'on', attributes: { entity_id: ['light.child'], brightness: 255 } },
+      },
+    };
+    const practical = new THREE.PointLight();
+    practical.userData.entityId = 'light.child';
+    practical.userData.entityLight = true;
+    const model = new THREE.Group();
+    model.add(practical);
+    preview._model = model;
+    preview._updateEntityStateVisuals();
+    expect(practical.intensity).toBe(0);
+  });
+
+  it('ignores stale brightness and colour attributes while a fixture is off', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.hass = {
+      states: {
+        'light.office': {
+          entity_id: 'light.office', state: 'off',
+          attributes: { brightness: 255, rgb_color: [255, 80, 20] },
+        },
+      },
+    };
+    const practical = new THREE.PointLight();
+    practical.userData.entityId = 'light.office';
+    practical.userData.entityLight = true;
+    const model = new THREE.Group();
+    model.add(practical);
+    preview._model = model;
+    preview._updateEntityStateVisuals();
+    expect(practical.intensity).toBe(0);
+  });
+
+  it('configures practical lights to be occluded by architectural walls', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    Object.defineProperty(preview, 'clientWidth', { configurable: true, value: 390 });
+    const practical = new THREE.PointLight(0xffffff, 1, 4, 1.65);
+    preview._configurePracticalLight(practical);
+    expect(practical.castShadow).toBe(true);
+    expect(practical.shadow.mapSize.x).toBe(256);
+    expect(practical.shadow.camera.far).toBeGreaterThanOrEqual(4.5);
+  });
+
   it('represents both light Element types as beacon anchors with practical light and no solid mesh', () => {
     const preview = document.createElement('spatial-preview') as any;
     preview.hass = {
