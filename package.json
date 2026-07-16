@@ -1,6 +1,6 @@
 {
   "name": "ha-apartment-view-card",
-  "version": "3.1.1",
+  "version": "3.2.0",
   "description": "A spatial, state-aware 3D home for Home Assistant with an integrated architectural editor.",
   "type": "module",
   "main": "dist/apartment-view-card.js",

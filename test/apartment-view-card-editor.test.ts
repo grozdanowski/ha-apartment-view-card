@@ -259,19 +259,55 @@ describe('apartment-view-card-editor', () => {
     expect(fields.querySelector('select')).toBeTruthy();
   });
 
-  it('opens and focuses one room editor from its compact summary', async () => {
+  it('shows one room editor directly beneath the searchable room picker', async () => {
     const element = await mount();
     element._setupStep = 'rooms';
     element._selectedRoomId = '';
     await element.updateComplete;
 
-    const summary = element.shadowRoot.querySelector('.room-summary-name') as HTMLButtonElement;
-    summary.click();
-    await element.updateComplete;
-
+    const picker = element.shadowRoot.querySelector('studio-searchable-select') as any;
     const selected = element.shadowRoot.querySelector('.room-mapping.selected') as HTMLElement;
+    expect(picker).toBeTruthy();
+    expect(picker.options).toHaveLength(1);
+    expect(picker.value).toBe(element.config.spatial.plan.rooms[0].id);
     expect(selected).toBeTruthy();
-    expect(selected.querySelector('.room-fields input')).toBe(element.shadowRoot.activeElement);
+    expect(element.shadowRoot.querySelectorAll('.room-mapping')).toHaveLength(1);
+  });
+
+  it('uses searchable pickers instead of long item inventories throughout setup', async () => {
+    const element = await mount({ quickActions: [
+      { name: 'Movie night', entity: 'scene.movie_night', icon: 'mdi:movie-open' },
+      { name: 'All lights off', entity: 'script.all_lights_off', icon: 'mdi:lightbulb-off-outline' },
+    ] });
+    const wallId = element.config.spatial.plan.walls[0].id;
+    element._commitSpatial({ ...element.config.spatial, openings: [
+      { id: 'door-1', kind: 'door', wallId, position: 0.3, width: 0.2 },
+      { id: 'window-1', kind: 'window', wallId, position: 0.7, width: 0.25 },
+    ] });
+
+    element._setupStep = 'architecture';
+    await element.updateComplete;
+    expect(element.shadowRoot.querySelector('studio-searchable-select')?.getAttribute('label')).toBe('Opening to edit');
+    expect(element.shadowRoot.querySelector('.opening-list')).toBeNull();
+
+    element._addSpatialElement('custom');
+    element._addElementPrimitive('sphere');
+    element._setupStep = 'elements';
+    await element.updateComplete;
+    const elementPickers = Array.from(element.shadowRoot.querySelectorAll('studio-searchable-select')) as any[];
+    expect(elementPickers.map((picker) => picker.label)).toEqual(['Element to edit', 'Part to edit']);
+    expect(element.shadowRoot.querySelector('.primitive-list')).toBeNull();
+
+    element._setupStep = 'devices';
+    await element.updateComplete;
+    expect((element.shadowRoot.querySelector('studio-searchable-select') as any).label).toBe('Device to edit');
+    expect(element.shadowRoot.querySelector('.wiring-list')).toBeNull();
+    expect(element.shadowRoot.querySelector('.unplaced-list')).toBeNull();
+
+    element._setupStep = 'actions';
+    await element.updateComplete;
+    expect((element.shadowRoot.querySelector('studio-searchable-select') as any).label).toBe('Action to edit');
+    expect(element.shadowRoot.querySelectorAll('ha-form.action-form')).toHaveLength(1);
   });
 
   it('edits room finish, color, and exposes boundary editing as a real command', async () => {

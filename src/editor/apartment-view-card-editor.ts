@@ -75,6 +75,8 @@ const SETUP_STEPS: { id: SetupStep; label: string; icon: string }[] = [
 const MAX_EMBEDDED_GLB_BYTES = 2_500_000;
 import './spatial-preview';
 import './spatial-plan-editor';
+import './searchable-select';
+import type { SearchableSelectOption } from './searchable-select';
 
 @customElement('apartment-view-card-editor')
 export class ApartmentViewCardEditor extends LitElement {
@@ -89,6 +91,7 @@ export class ApartmentViewCardEditor extends LitElement {
   @state() private _selectedElementId = '';
   @state() private _selectedPrimitiveId = '';
   @state() private _selectedGlbSurfaceId = '';
+  @state() private _selectedAction = -1;
   @state() private _glbSurfaceScope: GlbSurfaceScope = 'surface';
   @state() private _glbStatus: { kind: 'loading' | 'ready' | 'error'; message: string } | null = null;
   @state() private _previewMode: PreviewMode = 'edit';
@@ -249,6 +252,12 @@ export class ApartmentViewCardEditor extends LitElement {
     }
     .setup-card h3 { margin: 0 0 8px; font-size: 22px; font-weight: 520; }
     .setup-card p { max-width: 720px; margin: 0; color: var(--secondary-text-color); font-size: 15px; line-height: 1.5; }
+    .selection-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin-top: 16px; }
+    .selection-toolbar > ha-button { min-height: 48px; }
+    .selection-editor { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--studio-line); }
+    .selection-editor > h3 { margin-bottom: 6px; }
+    .selection-empty { margin-top: 16px; padding: 18px 0; border-block: 1px solid var(--studio-line); color: var(--secondary-text-color); font-size: 14px; line-height: 1.45; }
+    .selection-notice { margin-top: 14px; }
     .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
     .section-heading h3 { margin: 2px 0 0; }
     .section-heading > ha-icon { --mdc-icon-size: 22px; color: var(--secondary-text-color); }
@@ -882,6 +891,8 @@ export class ApartmentViewCardEditor extends LitElement {
       .setup-progress-copy strong { display: block; overflow: hidden; font-size: 16px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
       .setup-card { padding: 20px 0; }
       .setup-card h3 { font-size: 20px; }
+      .selection-toolbar { grid-template-columns: 1fr; }
+      .selection-toolbar > ha-button { width: 100%; }
       .room-mapping { grid-template-columns: 34px minmax(0, 1fr); padding-inline: 0; }
       .room-number { width: 34px; height: 34px; }
       .room-summary-name { align-self: center; font-size: 15px; }
@@ -946,6 +957,8 @@ export class ApartmentViewCardEditor extends LitElement {
     }
     if (!echoed) {
       this._actionsDraft = null;
+      const actionCount = normalized.quickActions?.length ?? 0;
+      this._selectedAction = actionCount ? Math.min(Math.max(0, this._selectedAction), actionCount - 1) : -1;
       this._undoStack = [];
       this._redoStack = [];
       this._syncHistoryState();
@@ -1020,6 +1033,7 @@ export class ApartmentViewCardEditor extends LitElement {
     this._selectedRoomId = '';
     this._selectedElementId = '';
     this._selectedEntity = -1;
+    this._selectedAction = -1;
     this._actionsDraft = null;
     this._floorDeleteArmed = null;
   }
@@ -1515,20 +1529,32 @@ export class ApartmentViewCardEditor extends LitElement {
 
   private _onPreviewOpeningSelected(ev: CustomEvent): void {
     const { id, wallId } = ev.detail as { id: string; wallId: string };
-    this._selectedOpeningId = id;
-    this._selectedWallId = wallId;
-    this._selectedRoomId = '';
-    this._selectedElementId = '';
-    this._setupStep = 'architecture';
-    this._previewMode = 'edit';
+    this._selectOpening(id, wallId);
   }
 
   private _onSpatialRoomSelected(ev: CustomEvent): void {
-    this._selectedRoomId = (ev.detail as { roomId: string }).roomId;
+    this._selectRoom((ev.detail as { roomId: string }).roomId);
+  }
+
+  private _selectRoom(roomId: string): void {
+    this._selectedRoomId = roomId;
     this._selectedWallId = '';
     this._selectedOpeningId = '';
     this._selectedElementId = '';
     this._setupStep = 'rooms';
+    this._previewMode = 'edit';
+  }
+
+  private _selectOpening(openingId: string, wallId?: string): void {
+    const shellAssignment = this._spatial().shell
+      ? assignShellOpenings(this._spatial().shell!).find(({ opening }) => opening.id === openingId)
+      : undefined;
+    const opening = this._spatial().openings.find((candidate) => candidate.id === openingId);
+    this._selectedOpeningId = openingId;
+    this._selectedWallId = wallId ?? shellAssignment?.segment.id ?? opening?.wallId ?? '';
+    this._selectedRoomId = '';
+    this._selectedElementId = '';
+    this._setupStep = 'architecture';
     this._previewMode = 'edit';
   }
 
@@ -1696,15 +1722,6 @@ export class ApartmentViewCardEditor extends LitElement {
     this._previewCollapsed = false;
     await this.updateComplete;
     this.renderRoot.querySelector<HTMLElement>('.preview-panel')?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
-  }
-
-  private async _editRoomName(event: Event, selectedId: string): Promise<void> {
-    event.preventDefault();
-    event.stopPropagation();
-    const mapping = (event.currentTarget as HTMLElement | null)?.closest('.room-mapping');
-    this._selectedRoomId = selectedId;
-    await this.updateComplete;
-    mapping?.querySelector<HTMLInputElement>('.room-fields input')?.focus();
   }
 
   private _renderNorthSetting() {
@@ -2083,7 +2100,11 @@ export class ApartmentViewCardEditor extends LitElement {
   }
 
   private _onSpatialElementSelected(ev: CustomEvent): void {
-    this._selectedElementId = (ev.detail as { elementId: string }).elementId;
+    this._selectElement((ev.detail as { elementId: string }).elementId);
+  }
+
+  private _selectElement(elementId: string): void {
+    this._selectedElementId = elementId;
     this._selectedWallId = '';
     this._selectedOpeningId = '';
     this._selectedRoomId = '';
@@ -2091,16 +2112,21 @@ export class ApartmentViewCardEditor extends LitElement {
     this._selectedPrimitiveId = element?.primitives[0]?.id ?? '';
     this._selectedGlbSurfaceId = element?.glb?.surfaces[0]?.id ?? '';
     this._setupStep = 'elements';
+    this._previewMode = 'edit';
   }
 
   private _onSpatialEntitySelected(ev: CustomEvent): void {
-    const entityId = (ev.detail as { entityId: string }).entityId;
+    this._selectEntity((ev.detail as { entityId: string }).entityId);
+  }
+
+  private _selectEntity(entityId: string): void {
     this._selectedWallId = '';
     this._selectedOpeningId = '';
     this._selectedRoomId = '';
     this._selectedElementId = '';
     this._selectedEntity = this._config.entities.findIndex((entity) => entity.entity === entityId);
     this._setupStep = 'devices';
+    this._previewMode = 'edit';
   }
 
   private _onSpatialEntityMoved(ev: CustomEvent): void {
@@ -2289,11 +2315,6 @@ export class ApartmentViewCardEditor extends LitElement {
     await this._editStructure();
   }
 
-  private _selectUnplacedEntity(entity: EntityConfig): void {
-    this._selectedEntity = this._config.entities.indexOf(entity);
-    this._previewMode = 'edit';
-  }
-
   // ---------------------------------------------------------------------------
   // Quick actions (radial ⚡ menu) editing
   // ---------------------------------------------------------------------------
@@ -2322,11 +2343,15 @@ export class ApartmentViewCardEditor extends LitElement {
   }
 
   private _addAction(): void {
-    this._commitActions([...this._actions(), { name: 'New action', icon: 'mdi:flash' }]);
+    const list = this._actions();
+    this._selectedAction = list.length;
+    this._commitActions([...list, { name: 'New action', icon: 'mdi:flash' }]);
   }
 
   private _removeAction(index: number): void {
-    this._commitActions(this._actions().filter((_, i) => i !== index));
+    const next = this._actions().filter((_, i) => i !== index);
+    this._selectedAction = next.length ? Math.min(index, next.length - 1) : -1;
+    this._commitActions(next);
   }
 
   private _moveAction(index: number, delta: number): void {
@@ -2335,6 +2360,7 @@ export class ApartmentViewCardEditor extends LitElement {
     if (target < 0 || target >= list.length) return;
     const [a] = list.splice(index, 1);
     list.splice(target, 0, a);
+    this._selectedAction = target;
     this._commitActions(list);
   }
 
@@ -2367,6 +2393,14 @@ export class ApartmentViewCardEditor extends LitElement {
 
   private _renderActions() {
     const list = this._actions();
+    const selectedIndex = this._selectedAction >= 0 && this._selectedAction < list.length
+      ? this._selectedAction
+      : list.length ? 0 : -1;
+    const selected = selectedIndex >= 0 ? list[selectedIndex] : undefined;
+    const options: SearchableSelectOption[] = list.map((action, index) => ({
+      value: String(index), label: action.name || `Action ${index + 1}`,
+      description: action.entity ?? action.service ?? 'Needs a target', icon: action.icon ?? 'mdi:flash-outline',
+    }));
     return html`
       <div class="section">
         <div class="section-title">Quick actions</div>
@@ -2375,51 +2409,54 @@ export class ApartmentViewCardEditor extends LitElement {
           a scene, script, or any entity to activate — or use an advanced
           service call. An action appears once it has a name and a target.
         </p>
-        ${list.map(
-          (a, i) => html`
-            <div class="zone-row action-row">
+        <div class="selection-toolbar">
+          <studio-searchable-select label="Action to edit" placeholder="Search actions" .options=${options}
+            .value=${selectedIndex >= 0 ? String(selectedIndex) : ''}
+            @value-changed=${(event: CustomEvent<{ value: string }>) => { this._selectedAction = Number(event.detail.value); }}></studio-searchable-select>
+          <ha-button class="add-action" @click=${this._addAction}>Add quick action</ha-button>
+        </div>
+        ${selected ? html`
+            <div class="zone-row action-row selection-editor">
               <div class="row-header">
-                <span class="row-title">${a.name || 'Unnamed action'}</span>
+                <span class="row-title">${selected.name || 'Unnamed action'}</span>
                 <div class="zone-actions">
                   <ha-icon-button
                     class="action-up"
                     .label=${'Move action up'}
                     icon="mdi:chevron-up"
-                    ?disabled=${i === 0}
-                    @click=${() => this._moveAction(i, -1)}
+                    ?disabled=${selectedIndex === 0}
+                    @click=${() => this._moveAction(selectedIndex, -1)}
                   ></ha-icon-button>
                   <ha-icon-button
                     class="action-down"
                     .label=${'Move action down'}
                     icon="mdi:chevron-down"
-                    ?disabled=${i === list.length - 1}
-                    @click=${() => this._moveAction(i, 1)}
+                    ?disabled=${selectedIndex === list.length - 1}
+                    @click=${() => this._moveAction(selectedIndex, 1)}
                   ></ha-icon-button>
                   <ha-icon-button
                     class="remove-action"
                     .label=${'Delete action'}
                     icon="mdi:delete-outline"
-                    @click=${() => this._removeAction(i)}
+                    @click=${() => this._removeAction(selectedIndex)}
                   ></ha-icon-button>
                 </div>
               </div>
               <ha-form
                 class="action-form"
                 .hass=${this.hass}
-                .data=${a}
+                .data=${selected}
                 .schema=${quickActionSchema()}
                 .computeLabel=${this._actionLabel}
-                @value-changed=${(ev: CustomEvent) => this._onActionChanged(ev, i)}
+                @value-changed=${(ev: CustomEvent) => this._onActionChanged(ev, selectedIndex)}
               ></ha-form>
-              ${a.service && !/^[a-z0-9_]+\.[a-z0-9_]+$/i.test(a.service.trim())
+              ${selected.service && !/^[a-z0-9_]+\.[a-z0-9_]+$/i.test(selected.service.trim())
                 ? html`<div class="inline-error" role="alert">Use a complete service name such as <code>light.turn_off</code>.</div>`
-                : a.entity && !/^[a-z0-9_]+\.[a-z0-9_]+$/i.test(a.entity.trim())
+                : selected.entity && !/^[a-z0-9_]+\.[a-z0-9_]+$/i.test(selected.entity.trim())
                   ? html`<div class="inline-error" role="alert">Choose a complete entity ID such as <code>scene.movie_night</code>.</div>`
                   : nothing}
             </div>
-          `
-        )}
-        <ha-button class="add-action" @click=${this._addAction}>Add quick action</ha-button>
+        ` : html`<div class="selection-empty">No quick actions yet.</div>`}
       </div>
     `;
   }
@@ -2574,21 +2611,28 @@ export class ApartmentViewCardEditor extends LitElement {
     const plan = this._spatial().plan;
     const surveyedRooms = this._spatial().shell?.rooms ?? [];
     const areas = this._areaList();
+    const surveyedIndex = Math.max(0, surveyedRooms.findIndex((room) => `survey:${room.zoneId}` === this._selectedRoomId));
+    const surveyedRoom = surveyedRooms[surveyedIndex];
+    const surveyedOptions: SearchableSelectOption[] = surveyedRooms.map((room) => {
+      const zone = this._config.zones.find((candidate) => candidate.id === room.zoneId);
+      return { value: `survey:${room.zoneId}`, label: zone?.name ?? room.zoneId,
+        description: zone?.areaId ? 'Linked to Home Assistant Area' : 'Local room', icon: 'mdi:floor-plan' };
+    });
     if ((!plan || !plan.rooms.length) && surveyedRooms.length) return html`
       <p class="studio-intro">${surveyedRooms.length} room${surveyedRooms.length === 1 ? ' is' : 's are'} ready to name and connect to Home Assistant Areas.</p>
       <div class="setup-card">
         <h3>Your rooms</h3>
+        <studio-searchable-select label="Room to edit" placeholder="Search rooms" .options=${surveyedOptions}
+          .value=${surveyedRoom ? `survey:${surveyedRoom.zoneId}` : ''}
+          @value-changed=${(event: CustomEvent<{ value: string }>) => this._selectRoom(event.detail.value)}></studio-searchable-select>
         <div class="room-mapping-list">
-          ${surveyedRooms.map((room, index) => {
+          ${(surveyedRoom ? [surveyedRoom] : []).map((room) => {
+            const index = surveyedRooms.indexOf(room);
             const zone = this._config.zones.find((candidate) => candidate.id === room.zoneId);
             const selectedId = `survey:${room.zoneId}`;
-            return html`<div class="room-mapping ${this._selectedRoomId === selectedId ? 'selected' : ''}"
+            return html`<div class="room-mapping selected selection-editor"
               role="group" aria-label=${zone?.name ?? room.zoneId}>
               <div class="room-number">${String(index + 1).padStart(2, '0')}</div>
-              <button type="button" class="room-summary-name" aria-label=${`Edit ${zone?.name ?? room.zoneId}`}
-                @click=${(event: Event) => this._editRoomName(event, selectedId)}>
-                <span>${zone?.name ?? room.zoneId}</span><ha-icon icon="mdi:pencil-outline"></ha-icon>
-              </button>
               <div class="room-fields">
                 <label>
                   <span>Room name</span>
@@ -2638,20 +2682,27 @@ export class ApartmentViewCardEditor extends LitElement {
         <div class="setup-actions"><ha-button @click=${this._editStructure}>Edit structure</ha-button></div>
       </div>
     `;
+    const selectedIndex = Math.max(0, plan.rooms.findIndex((room) => room.id === this._selectedRoomId));
+    const selectedRoom = plan.rooms[selectedIndex];
+    const roomOptions: SearchableSelectOption[] = plan.rooms.map((room, index) => {
+      const zone = room.zoneId ? this._config.zones.find((candidate) => candidate.id === room.zoneId) : undefined;
+      return { value: room.id, label: zone?.name ?? `Room ${index + 1}`,
+        description: zone?.areaId ? 'Linked to Home Assistant Area' : zone ? 'Local room' : 'Needs a name', icon: 'mdi:floor-plan' };
+    });
     return html`
       <p class="studio-intro">${plan.rooms.length} enclosed ${plan.rooms.length === 1 ? 'space was' : 'spaces were'} found from the wall graph. Name each one or connect it to a Home Assistant Area.</p>
       <div class="setup-card">
         <h3>Your rooms</h3>
+        <studio-searchable-select label="Room to edit" placeholder="Search rooms" .options=${roomOptions}
+          .value=${selectedRoom?.id ?? ''}
+          @value-changed=${(event: CustomEvent<{ value: string }>) => this._selectRoom(event.detail.value)}></studio-searchable-select>
         <div class="room-mapping-list">
-          ${plan.rooms.map((room, index) => {
+          ${(selectedRoom ? [selectedRoom] : []).map((room) => {
+            const index = plan.rooms.indexOf(room);
             const zone = room.zoneId ? this._config.zones.find((candidate) => candidate.id === room.zoneId) : undefined;
-            return html`<div class="room-mapping ${this._selectedRoomId === room.id ? 'selected' : ''}"
+            return html`<div class="room-mapping selected selection-editor"
               role="group" aria-label=${zone?.name ?? `Room ${index + 1}`}>
               <div class="room-number">${String(index + 1).padStart(2, '0')}</div>
-              <button type="button" class="room-summary-name" aria-label=${`Edit ${zone?.name ?? `Room ${index + 1}`}`}
-                @click=${(event: Event) => this._editRoomName(event, room.id)}>
-                <span>${zone?.name ?? `Room ${index + 1}`}</span><ha-icon icon="mdi:pencil-outline"></ha-icon>
-              </button>
               <div class="room-fields">
                 <label>
                   <span>Room name</span>
@@ -2710,27 +2761,26 @@ export class ApartmentViewCardEditor extends LitElement {
     const planWall = plan?.walls.find((wall) => wall.id === this._selectedWallId);
     const selected = openings.find((opening) => opening.id === this._selectedOpeningId);
     const curve = this._selectedWallId ? this._wallCurve(this._selectedWallId) : 0;
-    const wallOpenings = this._selectedWallId
-      ? openings.filter((opening) => opening.wallId === this._selectedWallId)
-      : [];
+    const surveyOpeningOptions: SearchableSelectOption[] = shellAssignments.map(({ opening, segment }) => ({
+      value: opening.id,
+      label: opening.id.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' '),
+      description: `${opening.kind === 'door' ? 'Door' : 'Window'} on ${this._wallName(segment.id)} · ${opening.width.toFixed(2)} × ${opening.height.toFixed(2)} m`,
+      icon: opening.kind === 'door' ? 'mdi:door-open' : 'mdi:window-closed-variant',
+    }));
+    const openingOptions: SearchableSelectOption[] = openings.map((opening, index) => ({
+      value: opening.id, label: `${opening.kind === 'door' ? 'Door' : 'Window'} ${index + 1}`,
+      description: `${this._wallName(opening.wallId)} · ${opening.widthMeters?.toFixed(2) ?? `${Math.round(opening.width * 100)}%`}${opening.widthMeters ? ' m' : ''}`,
+      icon: opening.kind === 'door' ? 'mdi:door-open' : 'mdi:window-closed-variant',
+    }));
     if (this._spatial().shell && !plan?.walls.length) return html`
       <p class="studio-intro">Select a wall to add an opening, or select a door or window to edit it.</p>
       <div class="setup-card">
         <h3>Doors &amp; windows</h3>
         <p>${surveyOpenings.length} opening${surveyOpenings.length === 1 ? '' : 's'} in your structure.</p>
-        <div class="opening-list">
-          ${shellAssignments.map(({ opening, segment }) => html`<button class="opening-row ${opening.id === this._selectedOpeningId ? 'selected' : ''}"
-            @click=${() => { this._selectedOpeningId = opening.id; this._selectedWallId = segment.id; }}>
-            <ha-icon icon=${opening.kind === 'door' ? 'mdi:door-open' : 'mdi:window-closed-variant'}></ha-icon>
-            <span>${opening.id.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ')}</span>
-            <small>${opening.width.toFixed(2)} × ${opening.height.toFixed(2)} m</small>
-          </button>`)}
-        </div>
-        ${selectedShellSegment ? html`<div class="setup-actions">
-          <ha-button @click=${() => this._addOpening('door')}><ha-icon icon="mdi:door-open"></ha-icon>&nbsp; Add door</ha-button>
-          <ha-button @click=${() => this._addOpening('window')}><ha-icon icon="mdi:window-closed-variant"></ha-icon>&nbsp; Add window</ha-button>
-          <ha-button @click=${this._inspectIn3d}>View in 3D</ha-button>
-        </div>` : html`<p>Select a wall in the plan to add a new opening.</p>`}
+        ${surveyOpeningOptions.length ? html`<studio-searchable-select label="Opening to edit" placeholder="Search doors and windows"
+          .options=${surveyOpeningOptions} .value=${surveySelected?.id ?? ''}
+          @value-changed=${(event: CustomEvent<{ value: string }>) => this._selectOpening(event.detail.value)}></studio-searchable-select>`
+          : html`<div class="selection-empty">No doors or windows yet. Select a wall in the plan to add one.</div>`}
       </div>
       ${surveySelected && surveyAssignment ? html`<div class="setup-card">
         <h3>Edit ${surveySelected.kind}</h3>
@@ -2780,6 +2830,11 @@ export class ApartmentViewCardEditor extends LitElement {
         </div>
         <div class="setup-actions"><ha-button @click=${() => this._removeShellOpening(surveySelected.id)}>Remove ${surveySelected.kind}</ha-button></div>
       </div>` : nothing}
+      ${selectedShellSegment ? html`<div class="setup-actions">
+        <ha-button @click=${() => this._addOpening('door')}><ha-icon icon="mdi:door-open"></ha-icon>&nbsp; Add door</ha-button>
+        <ha-button @click=${() => this._addOpening('window')}><ha-icon icon="mdi:window-closed-variant"></ha-icon>&nbsp; Add window</ha-button>
+        <ha-button @click=${this._inspectIn3d}>View in 3D</ha-button>
+      </div>` : html`<p>Select a wall in the plan to add a new opening.</p>`}
       <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'elements'; this._previewMode = 'edit'; }}>Continue to Elements</ha-button></div>
     `;
     if (!plan?.rooms.length && !this._config.zones.length) return html`
@@ -2822,16 +2877,14 @@ export class ApartmentViewCardEditor extends LitElement {
             <ha-button @click=${() => this._addOpening('window')}><ha-icon icon="mdi:window-closed-variant"></ha-icon>&nbsp; Add window</ha-button>
             <ha-button @click=${this._inspectIn3d}>View in 3D</ha-button>
           </div>
-          ${wallOpenings.length ? html`<div class="opening-list">${wallOpenings.map((opening, index) => html`
-            <button class="opening-row ${opening.id === this._selectedOpeningId ? 'selected' : ''}"
-              @click=${() => { this._selectedOpeningId = opening.id; }}>
-              <ha-icon icon=${opening.kind === 'door' ? 'mdi:door-open' : 'mdi:window-closed-variant'}></ha-icon>
-              <span>${opening.kind === 'door' ? 'Door' : 'Window'} ${index + 1}</span>
-              <small>${Math.round(opening.position * 100)}% · ${opening.widthMeters?.toFixed(2) ?? `${Math.round(opening.width * 100)}%`} ${opening.widthMeters ? 'm' : ''}</small>
-            </button>
-          `)}</div>` : nothing}
         </div>
       `}
+      ${openingOptions.length ? html`<div class="setup-card">
+        <h3>Doors &amp; windows</h3>
+        <studio-searchable-select label="Opening to edit" placeholder="Search doors and windows"
+          .options=${openingOptions} .value=${selected?.id ?? ''}
+          @value-changed=${(event: CustomEvent<{ value: string }>) => this._selectOpening(event.detail.value)}></studio-searchable-select>
+      </div>` : nothing}
       ${selected ? html`
         <div class="setup-card">
           <h3>Adjust ${selected.kind}</h3>
@@ -2981,6 +3034,20 @@ export class ApartmentViewCardEditor extends LitElement {
       ? selected.glb.surfaces.filter((surface) => (surface.sourceColor ?? String(surface.color.base).toLowerCase()) === (glbSurface.sourceColor ?? String(glbSurface.color.base).toLowerCase())).length
       : 1;
     const glbScopeCount = this._glbSurfaceScope === 'material' ? glbMaterialCount : this._glbSurfaceScope === 'color' ? glbColorCount : 1;
+    const elementOptions: SearchableSelectOption[] = plan.elements.map((element, index) => ({
+      value: element.id, label: element.name || `Element ${index + 1}`,
+      description: `${element.type.replace('-', ' ')}${element.entityId ? ` · ${element.entityId}` : ''}`,
+      icon: element.type === 'glb' ? 'mdi:cube-scan' : element.type === 'custom' ? 'mdi:shape-outline' : 'mdi:lightbulb-outline',
+    }));
+    const primitiveOptions: SearchableSelectOption[] = selected?.primitives.map((part, index) => ({
+      value: part.id, label: part.name ?? `Part ${index + 1}`,
+      description: part.kind === 'cylinder' ? 'Solid cylinder' : part.kind[0].toUpperCase() + part.kind.slice(1),
+      icon: part.kind === 'cube' ? 'mdi:cube-outline' : part.kind === 'sphere' ? 'mdi:sphere' : 'mdi:cylinder',
+    })) ?? [];
+    const surfaceOptions: SearchableSelectOption[] = selected?.glb?.surfaces.map((surface) => ({
+      value: surface.id, label: surface.name,
+      description: `${surface.nodePath} · material ${surface.materialIndex + 1}`, icon: 'mdi:layers-triple-outline',
+    })) ?? [];
     const entityOptions = Object.values(this.hass.states ?? {}).slice().sort((left, right) => {
       const leftName = String(left.attributes?.friendly_name ?? left.entity_id);
       const rightName = String(right.attributes?.friendly_name ?? right.entity_id);
@@ -3000,6 +3067,11 @@ export class ApartmentViewCardEditor extends LitElement {
         <p class="glb-note">GLB files up to 2.5 MB are embedded in the dashboard, so they travel with backups and work on every device.</p>
         ${this._glbStatus ? html`<div class=${`glb-status ${this._glbStatus.kind}`} role="status" aria-live="polite"><ha-icon icon=${this._glbStatus.kind === 'loading' ? 'mdi:progress-clock' : this._glbStatus.kind === 'ready' ? 'mdi:check-circle-outline' : 'mdi:alert-circle-outline'}></ha-icon><span>${this._glbStatus.message}</span></div>` : nothing}
       </div>
+      ${elementOptions.length ? html`<div class="setup-card">
+        <h3>Edit an Element</h3>
+        <studio-searchable-select label="Element to edit" placeholder="Search Elements" .options=${elementOptions} .value=${selected?.id ?? ''}
+          @value-changed=${(event: CustomEvent<{ value: string }>) => this._selectElement(event.detail.value)}></studio-searchable-select>
+      </div>` : nothing}
       ${selected ? html`<div class="setup-card">
         <div class="element-title"><div><span>Selected Element</span><h3>${selected.name || 'Element'}</h3></div><span class="element-type">${selected.type.replace('-', ' ')}</span></div>
         <p>Position uses metres from the plan origin. Y is height above the finished floor.</p>
@@ -3035,7 +3107,8 @@ export class ApartmentViewCardEditor extends LitElement {
       </div>
       ${selected.type === 'custom' ? html`<div class="setup-card primitive-builder">
         <div class="primitive-header"><div><span>Custom geometry</span><h3>Parts</h3></div><div class="primitive-add"><button title="Add cube" aria-label="Add cube" @click=${() => this._addElementPrimitive('cube')}><ha-icon icon="mdi:cube-outline"></ha-icon></button><button title="Add sphere" aria-label="Add sphere" @click=${() => this._addElementPrimitive('sphere')}><ha-icon icon="mdi:sphere"></ha-icon></button><button title="Add cylinder" aria-label="Add cylinder" @click=${() => this._addElementPrimitive('cylinder')}><ha-icon icon="mdi:cylinder"></ha-icon></button></div></div>
-        <div class="primitive-list">${selected.primitives.map((part) => html`<button class=${part.id === primitive?.id ? 'active' : ''} @click=${() => { this._selectedPrimitiveId = part.id; }}><ha-icon icon=${part.kind === 'cube' ? 'mdi:cube-outline' : part.kind === 'sphere' ? 'mdi:sphere' : 'mdi:cylinder'}></ha-icon><span>${part.name ?? part.id}</span></button>`)}</div>
+        ${primitiveOptions.length ? html`<studio-searchable-select label="Part to edit" placeholder="Search parts" .options=${primitiveOptions} .value=${primitive?.id ?? ''}
+          @value-changed=${(event: CustomEvent<{ value: string }>) => { this._selectedPrimitiveId = event.detail.value; }}></studio-searchable-select>` : nothing}
         ${primitive ? html`<div class="primitive-editor">
           <div class="asset-fields">
             <label><span>Part name</span><input type="text" .value=${primitive.name ?? ''} @change=${(event: Event) => this._updateElementPrimitive({ name: (event.target as HTMLInputElement).value.trim() || undefined })} /></label>
@@ -3059,7 +3132,8 @@ export class ApartmentViewCardEditor extends LitElement {
           <div><strong>${selected.glb.fileName}</strong><span>${(selected.glb.byteLength / 1_000_000).toFixed(2)} MB · ${selected.glb.size.x.toFixed(2)} × ${selected.glb.size.y.toFixed(2)} × ${selected.glb.size.z.toFixed(2)} m</span></div>
           <label class="glb-replace"><ha-icon icon="mdi:file-replace-outline"></ha-icon><span>Replace file</span><input type="file" accept=".glb,model/gltf-binary" data-replace="true" hidden @change=${this._onGlbPicked} /></label>
         </div>
-        <div class="primitive-list">${selected.glb.surfaces.map((surface) => html`<button class=${surface.id === glbSurface?.id ? 'active' : ''} @click=${() => { this._selectedGlbSurfaceId = surface.id; this._glbSurfaceScope = 'surface'; }}><ha-icon icon="mdi:layers-triple-outline"></ha-icon><span>${surface.name}</span></button>`)}</div>
+        ${surfaceOptions.length ? html`<studio-searchable-select label="Surface to edit" placeholder="Search surfaces" .options=${surfaceOptions} .value=${glbSurface?.id ?? ''}
+          @value-changed=${(event: CustomEvent<{ value: string }>) => { this._selectedGlbSurfaceId = event.detail.value; this._glbSurfaceScope = 'surface'; }}></studio-searchable-select>` : nothing}
         ${glbSurface ? html`<div class="primitive-editor">
           <div class="asset-fields">
             <label><span>Surface name</span><input type="text" .value=${glbSurface.name} @change=${(event: Event) => this._updateGlbSurface({ name: (event.target as HTMLInputElement).value.trim() || glbSurface.name })} /></label>
@@ -3093,6 +3167,33 @@ export class ApartmentViewCardEditor extends LitElement {
     `;
   }
 
+  private _renderSelectedDeviceEditor(selected: EntityConfig, selectedSpatial: EntityConfig['spatial']) {
+    return html`<div class="selection-editor">
+      <h3>${selected.name || selected.entity || 'Device position'}</h3>
+      <p>Drag the marker in Plan view. Use Y and mount type to place it correctly in three-dimensional space.</p>
+      <div class="transform-grid">
+        ${(['x', 'y', 'z'] as const).map((axis) => html`<label><span>${axis.toUpperCase()} position</span><input type="number" step="0.05" .value=${String(selectedSpatial?.position[axis] ?? 0)}
+          @change=${(event: Event) => this._updateSelectedEntitySpatial({ position: { ...(selectedSpatial?.position ?? { x: 0, y: 0.18, z: 0 }), [axis]: Number((event.target as HTMLInputElement).value) } })} /></label>`)}
+        <label><span>Mount</span><select .value=${selectedSpatial?.mount ?? 'free'}
+          @change=${(event: Event) => this._updateSelectedEntitySpatial({ mount: (event.target as HTMLSelectElement).value as NonNullable<EntityConfig['spatial']>['mount'] })}>
+          ${(['floor', 'wall', 'ceiling', 'surface', 'free'] as const).map((mount) => html`<option value=${mount}>${mount[0].toUpperCase()}${mount.slice(1)}</option>`)}
+        </select></label>
+        <label><span>Rotation</span><input type="number" step="5" .value=${String(selectedSpatial?.rotation.y ?? 0)}
+          @change=${(event: Event) => this._updateSelectedEntitySpatial({ rotation: { ...(selectedSpatial?.rotation ?? { x: 0, y: 0, z: 0 }), y: Number((event.target as HTMLInputElement).value) } })} /></label>
+      </div>
+      <label class="visibility-toggle"><input type="checkbox" .checked=${selectedSpatial?.visible ?? true}
+        @change=${(event: Event) => this._updateSelectedEntitySpatial({ visible: (event.target as HTMLInputElement).checked })} /><span>Show this device as a marker</span></label>
+      ${(selectedSpatial?.visible ?? true) ? html`<div class="marker-policy">
+        <h4>Marker visibility</h4><p>Automatic keeps the overview quiet: lights affect the model without adding icons, while active equipment and anything needing attention can surface.</p>
+        <div class="marker-policy-grid">${this._renderMarkerVisibilitySelect('Apartment overview', selected.overviewVisibility ?? 'auto', 'overviewVisibility')}${this._renderMarkerVisibilitySelect('Inside its room', selected.roomVisibility ?? 'auto', 'roomVisibility')}</div>
+      </div><div class="marker-policy tooltip-policy">
+        <h4>Tooltip content</h4><p>Keep markers icon-only, or show the entity name and live state persistently in each context. Media detail appears only while the player is active.</p>
+        <div class="marker-policy-grid">${this._renderTooltipContentSelect('Apartment overview', selected.tooltipContentInOverview ?? 'none', 'tooltipContentInOverview')}${this._renderTooltipContentSelect('Inside its room', selected.tooltipContentInRoom ?? 'none', 'tooltipContentInRoom')}</div>
+      </div>` : nothing}
+      <div class="setup-actions"><ha-button @click=${this._inspectIn3d}>Inspect in 3D</ha-button></div>
+    </div>`;
+  }
+
   private _renderSetupDevices() {
     const areas = this._areaList().filter((area) => this._zoneForArea(area.area_id));
     const unplaced = this._unplacedEntities();
@@ -3107,29 +3208,30 @@ export class ApartmentViewCardEditor extends LitElement {
     const liveCount = wiring.filter(({ resolved }) => resolved.activity !== 'unavailable' && !resolved.usedGroupFallback).length;
     const fallbackCount = wiring.filter(({ resolved }) => resolved.usedGroupFallback).length;
     const missingCount = wiring.filter(({ resolved }) => resolved.activity === 'unavailable').length;
+    const deviceOptions: SearchableSelectOption[] = wiring.map(({ entity, resolved, elementBound }) => {
+      const fallback = resolved.usedGroupFallback;
+      const unavailable = resolved.activity === 'unavailable';
+      const stateLabel = fallback ? `Via ${resolved.sourceEntityId}` : unavailable ? 'Unavailable' : resolved.state?.state ?? 'Unknown';
+      const placement = elementBound ? 'Represented by an Element' : entity.zoneId
+        ? `Placed in ${this._config.zones.find((zone) => zone.id === entity.zoneId)?.name ?? entity.zoneId}` : 'Needs a room';
+      return { value: entity.entity, label: entity.name ?? resolved.state?.attributes?.friendly_name ?? entity.entity,
+        description: `${placement} · ${stateLabel}`,
+        icon: unavailable ? 'mdi:link-off' : fallback ? 'mdi:link-variant' : elementBound ? 'mdi:cube-scan' : 'mdi:map-marker-radius-outline' };
+    });
     return html`
       <p class="studio-intro">Bring in the things you use every day. Devices are suggested from Home Assistant Areas and land inside their matching room.</p>
       ${wiring.length ? html`<div class="setup-card">
         <h3>Live device wiring</h3>
-        <p>Every row is checked against the current Home Assistant state. Select one to adjust its physical position.</p>
+        <p>Search for a device to adjust its position, marker, and tooltip behavior.</p>
         <div class="wiring-summary">
           <span><strong>${liveCount}</strong><br />live</span>
           <span><strong>${fallbackCount}</strong><br />using group state</span>
           <span><strong>${missingCount}</strong><br />unavailable</span>
         </div>
-        <div class="wiring-list">
-          ${wiring.map(({ entity, index, resolved, elementBound }) => {
-            const fallback = resolved.usedGroupFallback;
-            const unavailable = resolved.activity === 'unavailable';
-            const stateLabel = fallback ? `Via ${resolved.sourceEntityId}` : unavailable ? 'Unavailable' : resolved.state?.state ?? 'Unknown';
-            const icon = unavailable ? 'mdi:link-off' : fallback ? 'mdi:link-variant' : elementBound ? 'mdi:cube-scan' : 'mdi:map-marker-radius-outline';
-            return html`<button class="wiring-row" @click=${() => { this._selectedEntity = index; this._previewMode = 'edit'; }}>
-              <ha-icon icon=${icon}></ha-icon>
-              <span class="wiring-copy"><strong>${entity.name ?? resolved.state?.attributes?.friendly_name ?? entity.entity}</strong><span>${elementBound ? 'Represented by an Element' : entity.zoneId ? `Placed in ${this._config.zones.find((zone) => zone.id === entity.zoneId)?.name ?? entity.zoneId}` : 'Needs a room'}</span></span>
-              <span class="wiring-state ${fallback ? 'fallback' : unavailable ? '' : 'live'}">${stateLabel}</span>
-            </button>`;
-          })}
-        </div>
+        <studio-searchable-select label="Device to edit" placeholder="Search devices" .options=${deviceOptions} .value=${selected?.entity ?? ''}
+          @value-changed=${(event: CustomEvent<{ value: string }>) => this._selectEntity(event.detail.value)}></studio-searchable-select>
+        ${unplaced.length ? html`<div class="health-item warning selection-notice"><ha-icon icon="mdi:map-marker-alert-outline"></ha-icon><span>${unplaced.length} device${unplaced.length === 1 ? ' needs' : 's need'} a room. Choose one above, then drag its marker into place.</span></div>` : nothing}
+        ${selected ? this._renderSelectedDeviceEditor(selected, selectedSpatial) : nothing}
       </div>` : nothing}
       ${areas.length ? html`
         <div class="setup-card">
@@ -3148,47 +3250,6 @@ export class ApartmentViewCardEditor extends LitElement {
       ` : html`
         <div class="setup-card"><h3>Map a room first</h3><p>Once a drawn room matches a Home Assistant Area, we can suggest its devices and place them inside it.</p><div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'rooms'; }}>Map rooms</ha-button></div></div>
       `}
-      ${unplaced.length ? html`
-        <div class="setup-card">
-          <h3>Needs a room</h3>
-          <p>Select a device, then drag its marker into a room. This keeps the overview calm and room summaries accurate.</p>
-          <div class="unplaced-list">
-            ${unplaced.map((entity) => html`<button class="unplaced-device" @click=${() => this._selectUnplacedEntity(entity)}>${entity.name || entity.entity || 'Unnamed device'}</button>`)}
-          </div>
-        </div>
-      ` : nothing}
-      ${selected ? html`<div class="setup-card">
-        <h3>${selected.name || selected.entity || 'Device position'}</h3>
-        <p>Drag the marker in Plan view. Use Y and mount type to place it correctly in three-dimensional space.</p>
-        <div class="transform-grid">
-          ${(['x', 'y', 'z'] as const).map((axis) => html`<label><span>${axis.toUpperCase()} position</span><input type="number" step="0.05" .value=${String(selectedSpatial?.position[axis] ?? 0)}
-            @change=${(event: Event) => this._updateSelectedEntitySpatial({ position: { ...(selectedSpatial?.position ?? { x: 0, y: 0.18, z: 0 }), [axis]: Number((event.target as HTMLInputElement).value) } })} /></label>`)}
-          <label><span>Mount</span><select .value=${selectedSpatial?.mount ?? 'free'}
-            @change=${(event: Event) => this._updateSelectedEntitySpatial({ mount: (event.target as HTMLSelectElement).value as NonNullable<EntityConfig['spatial']>['mount'] })}>
-            ${(['floor', 'wall', 'ceiling', 'surface', 'free'] as const).map((mount) => html`<option value=${mount}>${mount[0].toUpperCase()}${mount.slice(1)}</option>`)}
-          </select></label>
-          <label><span>Rotation</span><input type="number" step="5" .value=${String(selectedSpatial?.rotation.y ?? 0)}
-            @change=${(event: Event) => this._updateSelectedEntitySpatial({ rotation: { ...(selectedSpatial?.rotation ?? { x: 0, y: 0, z: 0 }), y: Number((event.target as HTMLInputElement).value) } })} /></label>
-        </div>
-        <label class="visibility-toggle"><input type="checkbox" .checked=${selectedSpatial?.visible ?? true}
-          @change=${(event: Event) => this._updateSelectedEntitySpatial({ visible: (event.target as HTMLInputElement).checked })} /><span>Show this device as a marker</span></label>
-        ${(selectedSpatial?.visible ?? true) ? html`<div class="marker-policy">
-          <h4>Marker visibility</h4>
-          <p>Automatic keeps the overview quiet: lights affect the model without adding icons, while active equipment and anything needing attention can surface.</p>
-          <div class="marker-policy-grid">
-            ${this._renderMarkerVisibilitySelect('Apartment overview', selected.overviewVisibility ?? 'auto', 'overviewVisibility')}
-            ${this._renderMarkerVisibilitySelect('Inside its room', selected.roomVisibility ?? 'auto', 'roomVisibility')}
-          </div>
-        </div><div class="marker-policy tooltip-policy">
-          <h4>Tooltip content</h4>
-          <p>Keep markers icon-only, or show the entity name and live state persistently in each context. Media detail appears only while the player is active.</p>
-          <div class="marker-policy-grid">
-            ${this._renderTooltipContentSelect('Apartment overview', selected.tooltipContentInOverview ?? 'none', 'tooltipContentInOverview')}
-            ${this._renderTooltipContentSelect('Inside its room', selected.tooltipContentInRoom ?? 'none', 'tooltipContentInRoom')}
-          </div>
-        </div>` : nothing}
-        <div class="setup-actions"><ha-button @click=${this._inspectIn3d}>Inspect in 3D</ha-button></div>
-      </div>` : nothing}
       <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'actions'; }}>Continue to Actions</ha-button><ha-button @click=${() => { this._setupStep = 'review'; }}>Review setup</ha-button></div>
     `;
   }
