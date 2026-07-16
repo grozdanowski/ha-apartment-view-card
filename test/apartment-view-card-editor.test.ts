@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import '../src/editor/apartment-view-card-editor';
 import type { ApartmentViewConfig } from '../src/core/config';
 import { addSpatialElement, rectangularSpatialPlan } from '../src/core/spatial-plan';
+import { editorPreviewElementId, publishEditorPreviewElement } from '../src/editor/editor-preview-state';
 
 function config(): ApartmentViewConfig {
   const plan = rectangularSpatialPlan(8, 6);
@@ -50,6 +51,41 @@ async function mount(patch: Partial<ApartmentViewConfig> = {}) {
 describe('apartment-view-card-editor', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
+    window.localStorage.clear();
+    publishEditorPreviewElement(null);
+  });
+
+  it('publishes the selected Element to the editor-only card preview', async () => {
+    const element = await mount();
+    element._addSpatialElement('custom');
+    await element.updateComplete;
+
+    expect(editorPreviewElementId()).toBe(element.config.spatial.plan.elements[0].id);
+
+    element._selectRoom(element.config.spatial.plan.rooms[0].id);
+    await element.updateComplete;
+    expect(editorPreviewElementId()).toBeNull();
+  });
+
+  it('pins the live preview while settings scroll and remembers the choice', async () => {
+    const element = await mount();
+    const toggle = element.shadowRoot.querySelector('input[aria-label="Pin preview while scrolling"]') as HTMLInputElement | null;
+    expect(toggle).toBeTruthy();
+    expect(toggle?.checked).toBe(false);
+    expect(element.shadowRoot.querySelector('.preview-panel')?.classList.contains('pinned')).toBe(false);
+
+    toggle!.checked = true;
+    toggle!.dispatchEvent(new Event('change', { bubbles: true }));
+    await element.updateComplete;
+
+    expect(element.shadowRoot.querySelector('.preview-panel')?.classList.contains('pinned')).toBe(true);
+    expect(element.shadowRoot.querySelector('spatial-plan-editor')?.hasAttribute('compact')).toBe(true);
+    expect(window.localStorage.getItem('apartment-view-card:editor:preview-pinned')).toBe('true');
+
+    element.remove();
+    const restored = await mount();
+    expect((restored.shadowRoot.querySelector('input[aria-label="Pin preview while scrolling"]') as HTMLInputElement | null)?.checked).toBe(true);
+    expect(restored.shadowRoot.querySelector('.preview-panel')?.classList.contains('pinned')).toBe(true);
   });
 
   it('preserves unknown configuration keys', async () => {
@@ -181,6 +217,13 @@ describe('apartment-view-card-editor', () => {
     expect(surface).toMatchObject({ entityId: 'fan.purifier', luminosity: { rules: [{ attribute: 'percentage', value: 0.8 }] } });
     expect(element.shadowRoot.textContent).toContain('Surface color');
     expect(element.shadowRoot.textContent).toContain('Light emission');
+    const surfacePicker = Array.from(element.shadowRoot.querySelectorAll('studio-searchable-select'))
+      .find((picker: any) => picker.label === 'Surface to edit') as any;
+    expect(surfacePicker).toBeTruthy();
+    expect(surfacePicker.placeholder).toBe('Search surfaces');
+    expect(surfacePicker.options[0]).toMatchObject({ value: 'screen', label: 'Screen' });
+    expect(surfacePicker.options[0].description).toContain('Mesh 0');
+    expect(element.shadowRoot.querySelector('.surface-list')).toBeNull();
   });
 
   it('applies GLB mappings to matching material instances or original colors', async () => {
@@ -308,6 +351,42 @@ describe('apartment-view-card-editor', () => {
     await element.updateComplete;
     expect((element.shadowRoot.querySelector('studio-searchable-select') as any).label).toBe('Action to edit');
     expect(element.shadowRoot.querySelectorAll('ha-form.action-form')).toHaveLength(1);
+  });
+
+  it('edits opening names and positions in metres while storing normalized geometry', async () => {
+    const element = await mount();
+    const wallId = element.config.spatial.plan.walls[0].id;
+    element._commitSpatial({ ...element.config.spatial, openings: [
+      { id: 'balcony-door', name: 'Balcony door', kind: 'door', wallId, position: 0.5, width: 0.2, widthMeters: 0.9 },
+    ] });
+    element._selectOpening('balcony-door', wallId);
+    await element.updateComplete;
+
+    const position = element.shadowRoot.querySelector('#opening-position') as HTMLInputElement;
+    expect(position.type).toBe('number');
+    expect(position.value).toBe('4.00');
+    expect(position.closest('.opening-control')?.querySelector('output')?.textContent).toBe('m');
+    position.value = '2.25';
+    position.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(element.config.spatial.openings[0].position).toBeCloseTo(2.25 / 8);
+
+    await element.updateComplete;
+    const width = element.shadowRoot.querySelector('#opening-size') as HTMLInputElement;
+    width.value = '1.2';
+    width.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(element.config.spatial.openings[0].widthMeters).toBe(1.2);
+    expect(element.config.spatial.openings[0].width).toBeCloseTo(1.2 / 8);
+
+    await element.updateComplete;
+    const name = element.shadowRoot.querySelector('#opening-name') as HTMLInputElement;
+    expect(name.value).toBe('Balcony door');
+    name.value = 'Terrace door';
+    name.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(element.config.spatial.openings[0].name).toBe('Terrace door');
+
+    await element.updateComplete;
+    const picker = element.shadowRoot.querySelector('studio-searchable-select') as any;
+    expect(picker.options[0].label).toBe('Terrace door');
   });
 
   it('edits room finish, color, and exposes boundary editing as a real command', async () => {

@@ -26,6 +26,7 @@ import './render/control-surface';
 import { controlKind, controlTarget } from './core/entity-capabilities';
 import { markerIsVisible } from './core/entity-policy';
 import { rectangularSpatialPlan } from './core/spatial-plan';
+import { editorPreviewElementId, ELEMENT_INSPECTOR_EVENT } from './editor/editor-preview-state';
 
 /** Viewport width at/below which the mobile icon-size overrides apply. */
 const MOBILE_BREAKPOINT_PX = 768;
@@ -95,6 +96,7 @@ export class ApartmentViewCard extends LitElement {
   @property({ attribute: false }) public hass?: HassLike;
   @property({ attribute: false }) public config!: ApartmentViewConfig;
   @state() private _cardWidth = 600;
+  @state() private _editorElementPreviewId: string | null = null;
   /** True when the viewport is a mobile screen (drives the icon-size override). */
   @state() private _isMobileScreen = false;
   /**
@@ -1008,6 +1010,14 @@ export class ApartmentViewCard extends LitElement {
 
   public setConfig(raw: any): void {
     this.config = normalizeConfig(raw);
+    if (this.isConnected && this._isCardEditorPreview()) {
+      const activeElementId = editorPreviewElementId();
+      this._editorElementPreviewId = activeElementId && this.config.spatial?.plan?.elements.some((element) => element.id === activeElementId)
+        ? activeElementId
+        : null;
+    } else if (this._editorElementPreviewId && !this.config.spatial?.plan?.elements.some((element) => element.id === this._editorElementPreviewId)) {
+      this._editorElementPreviewId = null;
+    }
     this._syncPanZoomFromConfig();
     this._scheduleIdleReset();
   }
@@ -1054,6 +1064,8 @@ export class ApartmentViewCard extends LitElement {
 
   public connectedCallback(): void {
     super.connectedCallback();
+    window.addEventListener(ELEMENT_INSPECTOR_EVENT, this._onEditorElementPreview as EventListener);
+    if (this._isCardEditorPreview()) this._editorElementPreviewId = editorPreviewElementId();
     this.addEventListener('wheel', this._onWheel, { passive: false });
     // Desktop Safari trackpad pinch fires proprietary gesture events that
     // page-zoom the dashboard; we consume its ctrl-wheel stream instead
@@ -1149,6 +1161,7 @@ export class ApartmentViewCard extends LitElement {
 
   public disconnectedCallback(): void {
     super.disconnectedCallback();
+    window.removeEventListener(ELEMENT_INSPECTOR_EVENT, this._onEditorElementPreview as EventListener);
     this.removeEventListener('wheel', this._onWheel);
     this.removeEventListener('gesturestart', this._onGestureStart);
     this._detachWrapperTouchGuards();
@@ -1180,6 +1193,27 @@ export class ApartmentViewCard extends LitElement {
     this._mql?.removeEventListener('change', this._onBreakpointChange);
     this._mql = undefined;
   }
+
+  private _isCardEditorPreview(): boolean {
+    let node: Node | null = this.parentNode
+      ?? ((this.getRootNode() instanceof ShadowRoot) ? (this.getRootNode() as ShadowRoot).host : null);
+    const visited = new Set<Node>();
+    while (node && !visited.has(node)) {
+      visited.add(node);
+      if (node instanceof HTMLElement && node.matches('hui-card-preview')) return true;
+      const root = node.getRootNode();
+      node = node.parentNode ?? (root instanceof ShadowRoot ? root.host : null);
+    }
+    return false;
+  }
+
+  private _onEditorElementPreview = (event: CustomEvent<{ elementId: string | null }>): void => {
+    if (!this._isCardEditorPreview()) return;
+    const elementId = event.detail.elementId;
+    this._editorElementPreviewId = elementId && this.config?.spatial?.plan?.elements.some((element) => element.id === elementId)
+      ? elementId
+      : null;
+  };
 
   /**
    * Perf gate: HA replaces the whole `hass` object on every state change across
@@ -2364,8 +2398,11 @@ export class ApartmentViewCard extends LitElement {
   protected render(): TemplateResult {
     const spatial = this.config?.spatial;
     if (spatial?.plan || spatial?.shell) {
+      const inspectingElement = this._editorElementPreviewId
+        ? spatial.plan?.elements.find((element) => element.id === this._editorElementPreviewId)
+        : undefined;
       return html`<ha-card>
-        ${this.config.zones.length ? html`<nav class="spatial-room-navigation" aria-label="Rooms">
+        ${!inspectingElement && this.config.zones.length ? html`<nav class="spatial-room-navigation" aria-label="Rooms">
           ${this._spatialFocusedZoneId !== null ? html`<button type="button" class="spatial-room-back"
             aria-label="Back to apartment overview" title="Overview"
             @click=${() => this._setSpatialRoomFocus(null)}>
@@ -2394,6 +2431,7 @@ export class ApartmentViewCard extends LitElement {
         .weatherEntity=${this.config.options.weatherEntity ?? ''}
         .illuminanceEntity=${this.config.options.illuminanceEntity ?? ''}
         .spatialLightingMode=${this.config.options.spatialLightingMode}
+        .isolatedElementId=${inspectingElement?.id ?? ''}
         .focusedZoneId=${this._spatialFocusedZoneId}
         .showRoomControls=${false}
         @spatial-entity-selected=${this._onSpatialEntitySelected}

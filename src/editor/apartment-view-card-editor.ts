@@ -54,6 +54,7 @@ import { assignShellOpenings, removeShellWallSegment, shellSegmentById, validate
 import { resolveSpatialEntityState } from '../core/spatial-state';
 import { createSpatialPrimitive, elementPrimitivesForType } from '../core/spatial-elements';
 import { discoverGlbSurfaces } from '../core/spatial-glb';
+import { publishEditorPreviewElement } from './editor-preview-state';
 
 type EditorMode = 'setup' | 'advanced';
 type SetupStep = 'floorplan' | 'rooms' | 'architecture' | 'elements' | 'devices' | 'actions' | 'review';
@@ -73,6 +74,7 @@ const SETUP_STEPS: { id: SetupStep; label: string; icon: string }[] = [
   { id: 'review', label: 'Review', icon: 'mdi:check-circle-outline' },
 ];
 const MAX_EMBEDDED_GLB_BYTES = 2_500_000;
+const PREVIEW_PIN_STORAGE_KEY = 'apartment-view-card:editor:preview-pinned';
 import './spatial-preview';
 import './spatial-plan-editor';
 import './searchable-select';
@@ -96,6 +98,7 @@ export class ApartmentViewCardEditor extends LitElement {
   @state() private _glbStatus: { kind: 'loading' | 'ready' | 'error'; message: string } | null = null;
   @state() private _previewMode: PreviewMode = 'edit';
   @state() private _previewCollapsed = false;
+  @state() private _previewPinned = false;
   @state() private _activeFloorIndex = 0;
   @state() private _floorDeleteArmed: number | null = null;
   @state() private _undoCount = 0;
@@ -125,6 +128,14 @@ export class ApartmentViewCardEditor extends LitElement {
     .editor-workspace { display: grid; min-width: 0; gap: 28px; }
     .preview-panel, .controls-panel { min-width: 0; }
     .preview-panel { align-self: start; }
+    .preview-panel.pinned {
+      position: sticky;
+      z-index: 8;
+      top: 0;
+      padding-bottom: 10px;
+      background: var(--card-background-color, var(--primary-background-color));
+      box-shadow: 0 1px 0 var(--studio-line);
+    }
     .preview-collapse { display: none; }
     .setup-progress { display: none; }
     .tabs {
@@ -167,6 +178,56 @@ export class ApartmentViewCardEditor extends LitElement {
     .preview-switch button { min-height: 44px; padding: 0 0 7px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--secondary-text-color); font: inherit; font-size: 16px; cursor: pointer; }
     .preview-switch button.active { border-bottom-color: var(--studio-accent); color: var(--primary-text-color); }
     .preview-note { color: var(--secondary-text-color); font-size: 12px; line-height: 1.35; text-align: right; margin-left: auto; }
+    .preview-pin {
+      position: relative;
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 7px;
+      min-height: 40px;
+      color: var(--secondary-text-color);
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .preview-pin input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .preview-pin-track {
+      position: relative;
+      width: 34px;
+      height: 20px;
+      border: 1px solid var(--studio-line);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
+      transition: background 140ms ease, border-color 140ms ease;
+    }
+    .preview-pin-track::after {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--secondary-text-color);
+      content: '';
+      transition: transform 140ms ease, background 140ms ease;
+    }
+    .preview-pin input:checked + .preview-pin-track {
+      border-color: var(--studio-accent);
+      background: color-mix(in srgb, var(--studio-accent) 34%, transparent);
+    }
+    .preview-pin input:checked + .preview-pin-track::after {
+      background: var(--primary-text-color);
+      transform: translateX(14px);
+    }
+    .preview-pin input:focus-visible + .preview-pin-track { outline: 2px solid var(--primary-text-color); outline-offset: 2px; }
+    .preview-pin input:checked ~ span:last-child { color: var(--primary-text-color); }
     .device-preview-shell { margin: 0 auto; max-width: 100%; }
     .device-preview-shell.phone { width: 390px; }
     .device-preview-shell.tablet { width: 768px; }
@@ -329,6 +390,14 @@ export class ApartmentViewCardEditor extends LitElement {
     .opening-control { display: grid; grid-template-columns: 86px minmax(0, 1fr) 48px; align-items: center; gap: 10px; }
     .opening-control label { color: var(--secondary-text-color); font-size: 0.88em; }
     .opening-control output { text-align: right; font-variant-numeric: tabular-nums; font-size: 0.88em; }
+    .opening-control input[type='text'],
+    .opening-control input[type='number'],
+    .opening-control select {
+      width: 100%; min-width: 0; min-height: 42px; box-sizing: border-box; padding: 8px 10px;
+      border: 1px solid var(--studio-line); border-radius: 2px;
+      background: var(--card-background-color); color: var(--primary-text-color); font: inherit;
+    }
+    .opening-name-control input { grid-column: 2 / -1; }
     .opening-control input[type='range'] {
       appearance: none;
       -webkit-appearance: none;
@@ -844,7 +913,6 @@ export class ApartmentViewCardEditor extends LitElement {
     }
     @container (min-width: 920px) {
       .editor-workspace { grid-template-columns: minmax(0, 1.08fr) minmax(360px, 0.92fr); align-items: start; }
-      .preview-panel { position: sticky; top: 8px; }
       .setup-steps { gap: 20px; }
       .setup-step { min-width: auto; }
       .studio-intro { margin-top: 0; }
@@ -874,6 +942,7 @@ export class ApartmentViewCardEditor extends LitElement {
       }
       .preview-panel.collapsed > :not(.preview-toolbar) { display: none; }
       .preview-panel spatial-preview { --spatial-aspect-mobile: 1 / 1; }
+      .preview-panel.pinned spatial-preview { --spatial-aspect-mobile: 16 / 9; }
       .setup-steps { display: none; }
       .setup-progress {
         display: grid;
@@ -1284,7 +1353,26 @@ export class ApartmentViewCardEditor extends LitElement {
     });
   }
 
+  public connectedCallback(): void {
+    super.connectedCallback();
+    try {
+      this._previewPinned = window.localStorage.getItem(PREVIEW_PIN_STORAGE_KEY) === 'true';
+    } catch {
+      this._previewPinned = false;
+    }
+  }
+
+  private _setPreviewPinned(event: Event): void {
+    this._previewPinned = (event.currentTarget as HTMLInputElement).checked;
+    try {
+      window.localStorage.setItem(PREVIEW_PIN_STORAGE_KEY, String(this._previewPinned));
+    } catch {
+      // The editor still works when storage is unavailable, for example in private browsing.
+    }
+  }
+
   public disconnectedCallback(): void {
+    publishEditorPreviewElement(null);
     this._dialogLargeRestores.forEach((large, element) => {
       if (large === undefined) {
         delete element.large;
@@ -1303,8 +1391,9 @@ export class ApartmentViewCardEditor extends LitElement {
     super.disconnectedCallback();
   }
 
-  protected updated(): void {
+  protected updated(changed: Map<PropertyKey, unknown>): void {
     this._expandHostDialog();
+    if (changed.has('_selectedElementId')) publishEditorPreviewElement(this._selectedElementId || null);
     if (!['phone', 'tablet', 'desktop'].includes(this._previewMode)) return;
     const card = this.renderRoot.querySelector('.device-preview-card') as unknown as {
       hass?: HomeAssistant;
@@ -1638,7 +1727,10 @@ export class ApartmentViewCardEditor extends LitElement {
     const shell = this._spatial().shell;
     const segment = shell ? shellSegmentById(shell, wallId) : undefined;
     if (!shell || !segment) return;
-    const clamped = Math.min(0.96, Math.max(0.04, position));
+    const opening = shell.openings.find((candidate) => candidate.id === id);
+    const edge = Math.max(0.04, Math.min(0.5, (opening?.width ?? 0) / Math.max(segment.length * 2, 0.01)));
+    const candidate = Number.isFinite(position) ? position : 0.5;
+    const clamped = Math.min(1 - edge, Math.max(edge, candidate));
     this._updateShellOpening(id, {
       x: segment.start[0] + (segment.end[0] - segment.start[0]) * clamped,
       z: segment.start[1] + (segment.end[1] - segment.start[1]) * clamped,
@@ -1655,14 +1747,25 @@ export class ApartmentViewCardEditor extends LitElement {
   }
 
   private _updateOpening(id: string, patch: Partial<OpeningConfig>, record = true): void {
+    const current = this._spatial();
+    const plan = current.plan;
+    const vertices = new Map(plan?.vertices.map((vertex) => [vertex.id, vertex]) ?? []);
     const spatial: SpatialConfig = {
-      ...this._spatial(),
-      openings: this._spatial().openings.map((opening) => {
+      ...current,
+      openings: current.openings.map((opening) => {
         if (opening.id !== id) return opening;
         const next = { ...opening, ...patch };
-        const width = Math.min(0.8, Math.max(0.08, next.width));
+        const wall = plan?.walls.find((candidate) => candidate.id === next.wallId);
+        const length = wall ? wallLength(wall, vertices) : 0;
+        const physicalWidth = length > 0 && Number.isFinite(next.widthMeters)
+          ? Math.min(Math.max(0.2, next.widthMeters!), Math.max(0.2, length - 0.08))
+          : undefined;
+        const width = physicalWidth !== undefined
+          ? Math.min(0.98, Math.max(0.01, physicalWidth / length))
+          : Math.min(0.8, Math.max(0.08, next.width));
         return {
           ...next,
+          ...(physicalWidth !== undefined ? { widthMeters: physicalWidth } : {}),
           width,
           position: Math.min(1 - width / 2, Math.max(width / 2, next.position)),
         };
@@ -2759,16 +2862,17 @@ export class ApartmentViewCardEditor extends LitElement {
     const selectedShellSegment = this._spatial().shell ? shellSegmentById(this._spatial().shell!, this._selectedWallId) : undefined;
     const surveyPosition = surveyAssignment ? Math.min(1, Math.max(0, surveyAssignment.along / surveyAssignment.segment.length)) : 0.5;
     const planWall = plan?.walls.find((wall) => wall.id === this._selectedWallId);
+    const planWallLength = planWall && plan ? wallLength(planWall, new Map(plan.vertices.map((vertex) => [vertex.id, vertex]))) : 0;
     const selected = openings.find((opening) => opening.id === this._selectedOpeningId);
     const curve = this._selectedWallId ? this._wallCurve(this._selectedWallId) : 0;
     const surveyOpeningOptions: SearchableSelectOption[] = shellAssignments.map(({ opening, segment }) => ({
       value: opening.id,
-      label: opening.id.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' '),
+      label: opening.name ?? opening.id.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' '),
       description: `${opening.kind === 'door' ? 'Door' : 'Window'} on ${this._wallName(segment.id)} · ${opening.width.toFixed(2)} × ${opening.height.toFixed(2)} m`,
       icon: opening.kind === 'door' ? 'mdi:door-open' : 'mdi:window-closed-variant',
     }));
     const openingOptions: SearchableSelectOption[] = openings.map((opening, index) => ({
-      value: opening.id, label: `${opening.kind === 'door' ? 'Door' : 'Window'} ${index + 1}`,
+      value: opening.id, label: opening.name ?? `${opening.kind === 'door' ? 'Door' : 'Window'} ${index + 1}`,
       description: `${this._wallName(opening.wallId)} · ${opening.widthMeters?.toFixed(2) ?? `${Math.round(opening.width * 100)}%`}${opening.widthMeters ? ' m' : ''}`,
       icon: opening.kind === 'door' ? 'mdi:door-open' : 'mdi:window-closed-variant',
     }));
@@ -2785,6 +2889,12 @@ export class ApartmentViewCardEditor extends LitElement {
       ${surveySelected && surveyAssignment ? html`<div class="setup-card">
         <h3>Edit ${surveySelected.kind}</h3>
         <div class="opening-editor">
+          <div class="opening-control opening-name-control">
+            <label for="shell-opening-name">Name</label>
+            <input id="shell-opening-name" type="text" maxlength="120" placeholder=${surveySelected.kind === 'door' ? 'e.g. Balcony door' : 'e.g. Kitchen window'}
+              .value=${surveySelected.name ?? ''}
+              @change=${(event: Event) => this._updateShellOpening(surveySelected.id, { name: (event.target as HTMLInputElement).value.trim() || undefined })} />
+          </div>
           <div class="opening-control">
             <label for="shell-opening-kind">Type</label>
             <select id="shell-opening-kind" .value=${surveySelected.kind}
@@ -2798,11 +2908,16 @@ export class ApartmentViewCardEditor extends LitElement {
             </select>
           </div>
           <div class="opening-control">
-            <label for="shell-opening-position">Position</label>
-            <input id="shell-opening-position" type="range" min="4" max="96" step="1" .value=${String(Math.round(surveyPosition * 100))}
-              @pointerdown=${this._onPreviewEditStart} @pointerup=${this._onPreviewEditEnd}
-              @input=${(event: Event) => this._moveShellOpening(surveySelected.id, surveyAssignment.segment.id, Number((event.target as HTMLInputElement).value) / 100, !this._dragStartConfig)} />
-            <output>${Math.round(surveyPosition * 100)}%</output>
+            <label for="shell-opening-position">From wall start</label>
+            <input id="shell-opening-position" type="number" min=${String(Math.min(surveySelected.width / 2, surveyAssignment.segment.length / 2))}
+              max=${String(Math.max(surveySelected.width / 2, surveyAssignment.segment.length - surveySelected.width / 2))} step="0.01"
+              .value=${(surveyPosition * surveyAssignment.segment.length).toFixed(2)}
+              @change=${(event: Event) => {
+                const meters = Number((event.target as HTMLInputElement).value);
+                this._moveShellOpening(surveySelected.id, surveyAssignment.segment.id,
+                  surveyAssignment.segment.length > 0 && Number.isFinite(meters) ? meters / surveyAssignment.segment.length : surveyPosition);
+              }} />
+            <output>m</output>
           </div>
           <div class="opening-control">
             <label for="shell-opening-width">Width</label>
@@ -2888,18 +3003,31 @@ export class ApartmentViewCardEditor extends LitElement {
       ${selected ? html`
         <div class="setup-card">
           <h3>Adjust ${selected.kind}</h3>
-          <p>Position runs along the wall. Width, height, and sill are real dimensions in metres.</p>
+          <p>Position is measured in metres from the start of the selected wall to the center of the opening.</p>
           <div class="opening-editor">
+            <div class="opening-control opening-name-control">
+              <label for="opening-name">Name</label>
+              <input id="opening-name" type="text" maxlength="120" placeholder=${selected.kind === 'door' ? 'e.g. Balcony door' : 'e.g. Kitchen window'}
+                .value=${selected.name ?? ''}
+                @change=${(event: Event) => this._updateOpening(selected.id, { name: (event.target as HTMLInputElement).value.trim() || undefined })} />
+            </div>
             <div class="opening-control">
-              <label for="opening-position">Position</label>
-              <input id="opening-position" type="range" min="8" max="92" step="1" .value=${String(Math.round(selected.position * 100))}
-                @pointerdown=${this._onPreviewEditStart} @pointerup=${this._onPreviewEditEnd}
-                @input=${(event: Event) => this._updateOpening(selected.id, { position: Number((event.target as HTMLInputElement).value) / 100 }, !this._dragStartConfig)} />
-              <output>${Math.round(selected.position * 100)}%</output>
+              <label for="opening-position">From wall start</label>
+              <input id="opening-position" type="number" min=${String(Math.min((selected.widthMeters ?? selected.width * planWallLength) / 2, planWallLength / 2))}
+                max=${String(Math.max((selected.widthMeters ?? selected.width * planWallLength) / 2, planWallLength - (selected.widthMeters ?? selected.width * planWallLength) / 2))}
+                step="0.01" .value=${(selected.position * planWallLength).toFixed(2)}
+                @change=${(event: Event) => {
+                  const meters = Number((event.target as HTMLInputElement).value);
+                  this._updateOpening(selected.id, {
+                    position: planWallLength > 0 && Number.isFinite(meters) ? meters / planWallLength : selected.position,
+                  });
+                }} />
+              <output>m</output>
             </div>
             ${plan ? html`<div class="opening-control">
               <label for="opening-size">Width</label>
-              <input id="opening-size" type="number" min="0.3" max="8" step="0.05" .value=${String(selected.widthMeters ?? 1)}
+              <input id="opening-size" type="number" min="0.2" max=${String(Math.max(0.2, planWallLength - 0.08))} step="0.01"
+                .value=${String(selected.widthMeters ?? selected.width * planWallLength)}
                 @change=${(event: Event) => this._updateOpening(selected.id, { widthMeters: Number((event.target as HTMLInputElement).value) })} />
               <output>m</output>
             </div>
@@ -3044,10 +3172,19 @@ export class ApartmentViewCardEditor extends LitElement {
       description: part.kind === 'cylinder' ? 'Solid cylinder' : part.kind[0].toUpperCase() + part.kind.slice(1),
       icon: part.kind === 'cube' ? 'mdi:cube-outline' : part.kind === 'sphere' ? 'mdi:sphere' : 'mdi:cylinder',
     })) ?? [];
-    const surfaceOptions: SearchableSelectOption[] = selected?.glb?.surfaces.map((surface) => ({
-      value: surface.id, label: surface.name,
-      description: `${surface.nodePath} · material ${surface.materialIndex + 1}`, icon: 'mdi:layers-triple-outline',
-    })) ?? [];
+    const surfaceOptions: SearchableSelectOption[] = selected?.glb?.surfaces.map((surface) => {
+      const sourceMaterial = surface.sourceMaterialKey?.replace(/^name:/, '');
+      return {
+        value: surface.id,
+        label: surface.name,
+        description: [
+          sourceMaterial ? `Material ${sourceMaterial}` : `Material ${surface.materialIndex + 1}`,
+          surface.sourceColor,
+          `Mesh ${surface.nodePath}`,
+        ].filter(Boolean).join(' · '),
+        icon: 'mdi:layers-triple-outline',
+      };
+    }) ?? [];
     const entityOptions = Object.values(this.hass.states ?? {}).slice().sort((left, right) => {
       const leftName = String(left.attributes?.friendly_name ?? left.entity_id);
       const rightName = String(right.attributes?.friendly_name ?? right.entity_id);
@@ -3367,13 +3504,17 @@ export class ApartmentViewCardEditor extends LitElement {
     return html`
       ${this._renderStudioHeader()}
       <div class="editor-workspace">
-      <section class="preview-panel ${this._previewCollapsed ? 'collapsed' : ''}" aria-label="Live preview">
+      <section class="preview-panel ${this._previewCollapsed ? 'collapsed' : ''} ${this._previewPinned ? 'pinned' : ''}" aria-label="Live preview">
       <div class="preview-toolbar">
         <div class="preview-switch" role="tablist" aria-label="Spatial preview">
           <button class=${this._previewMode === 'edit' ? 'active' : ''} role="tab" aria-selected=${this._previewMode === 'edit'} @click=${() => { this._previewMode = 'edit'; }}>Plan</button>
           <button class=${this._previewMode === '3d' ? 'active' : ''} role="tab" aria-selected=${this._previewMode === '3d'} @click=${this._inspectIn3d}>3D home</button>
         </div>
         <span class="preview-note">Preview only · device actions disabled</span>
+        <label class="preview-pin" title="Keep the preview visible while settings scroll">
+          <input type="checkbox" aria-label="Pin preview while scrolling" .checked=${this._previewPinned} @change=${this._setPreviewPinned} />
+          <span class="preview-pin-track" aria-hidden="true"></span><span>Pin preview</span>
+        </label>
         <button class="preview-collapse" aria-label=${this._previewCollapsed ? 'Show preview' : 'Hide preview'}
           title=${this._previewCollapsed ? 'Show preview' : 'Hide preview'} @click=${() => { this._previewCollapsed = !this._previewCollapsed; }}>
           <ha-icon icon=${this._previewCollapsed ? 'mdi:chevron-down' : 'mdi:chevron-up'}></ha-icon><span>${this._previewCollapsed ? 'Show' : 'Hide'}</span>
@@ -3398,6 +3539,7 @@ export class ApartmentViewCardEditor extends LitElement {
         .spatialLightingMode=${this._config.options.spatialLightingMode}
         @spatial-entity-selected=${this._onSpatialEntitySelected}
       ></spatial-preview>` : (this._spatial().plan || this._spatial().shell) ? html`<spatial-plan-editor
+        ?compact=${this._previewPinned}
         .plan=${this._spatial().plan ?? emptySpatialPlan()}
         .shell=${this._spatial().shell ?? null}
         .openings=${this._spatial().openings}

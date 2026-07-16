@@ -155,6 +155,8 @@ export interface SpatialElement {
 
 export interface SpatialShellOpening {
   id: string;
+  /** User-facing label; the id remains the stable internal identity. */
+  name?: string;
   kind: OpeningKind;
   x: number;
   z: number;
@@ -261,6 +263,8 @@ export interface ZoneConfig {
 
 export interface OpeningConfig {
   id: string;
+  /** User-facing label; the id remains the stable internal identity. */
+  name?: string;
   kind: OpeningKind;
   /** `${zoneId}:${side}`; stable across room renames and geometry edits. */
   wallId: string;
@@ -759,6 +763,7 @@ function normalizeSpatialShell(raw: any, zoneIds: Set<string>): SpatialShellConf
         bottom: clamp(item.bottom, 0, 5, item.kind === 'door' ? 0 : 0.9),
         height: clamp(item.height, 0.2, 5, item.kind === 'door' ? 2.1 : 1.2),
       };
+      if (typeof item.name === 'string' && item.name.trim()) opening.name = item.name.trim().slice(0, 120);
       if (item.kind === 'door' && /^#[0-9a-f]{6}$/i.test(item.color)) opening.color = item.color.toLowerCase();
       return opening;
     })
@@ -779,6 +784,8 @@ function normalizeSpatial(raw: any, zones: ZoneConfig[]): SpatialConfig {
   const plan = normalizeSpatialPlan(raw?.spatial?.plan, zoneIds);
   const shell = normalizeSpatialShell(raw?.spatial?.shell, zoneIds);
   const planWallIds = new Set(plan?.walls.map((wall) => wall.id) ?? []);
+  const planWalls = new Map(plan?.walls.map((wall) => [wall.id, wall]) ?? []);
+  const planVertices = new Map(plan?.vertices.map((vertex) => [vertex.id, vertex]) ?? []);
   const used = new Set<string>();
   const openings = (Array.isArray(raw?.spatial?.openings) ? raw.spatial.openings : [])
     .map((item: any, index: number): OpeningConfig | null => {
@@ -789,7 +796,17 @@ function normalizeSpatial(raw: any, zones: ZoneConfig[]): SpatialConfig {
         : planWallIds.has(planWallId) ? planWallId : null;
       if (!wallId || !VALID_OPENING_KINDS.includes(item?.kind)) return null;
       const baseId = slugId(typeof item.id === 'string' ? item.id : `${item.kind}-${index + 1}`, `${item.kind}-${index + 1}`);
-      const width = clamp(item.width, 0.08, 0.8, item.kind === 'door' ? 0.22 : 0.3);
+      const legacyWidth = clamp(item.width, 0.08, 0.8, item.kind === 'door' ? 0.22 : 0.3);
+      const planWall = planWalls.get(wallId);
+      const start = planWall ? planVertices.get(planWall.start) : undefined;
+      const end = planWall ? planVertices.get(planWall.end) : undefined;
+      const planWallLength = start && end ? Math.hypot(end.x - start.x, end.z - start.z) : 0;
+      const physicalWidth = planWallLength > 0
+        ? clamp(item.widthMeters, 0.2, Math.max(0.2, planWallLength - 0.08), legacyWidth * planWallLength)
+        : undefined;
+      const width = physicalWidth !== undefined
+        ? clamp(physicalWidth / planWallLength, 0.01, 0.98, legacyWidth)
+        : legacyWidth;
       const position = clamp(item.position, width / 2, 1 - width / 2, 0.5);
       const opening: OpeningConfig = {
         id: uniqueId(baseId, used),
@@ -798,7 +815,8 @@ function normalizeSpatial(raw: any, zones: ZoneConfig[]): SpatialConfig {
         position,
         width,
       };
-      if (Number.isFinite(item.widthMeters)) opening.widthMeters = clamp(item.widthMeters, 0.2, 10, item.kind === 'door' ? 0.9 : 1.2);
+      if (typeof item.name === 'string' && item.name.trim()) opening.name = item.name.trim().slice(0, 120);
+      if (physicalWidth !== undefined) opening.widthMeters = physicalWidth;
       if (Number.isFinite(item.height)) opening.height = clamp(item.height, 0.2, 5, item.kind === 'door' ? 2.1 : 1.2);
       if (Number.isFinite(item.bottom)) opening.bottom = clamp(item.bottom, 0, 5, item.kind === 'door' ? 0 : 0.9);
       if (item.hinge === 'left' || item.hinge === 'right') opening.hinge = item.hinge;

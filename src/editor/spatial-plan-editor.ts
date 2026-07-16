@@ -236,6 +236,9 @@ export class SpatialPlanEditor extends LitElement {
       .canvas { min-height: 340px; aspect-ratio: 1 / 1; }
       .viewport-controls { right: 8px; bottom: 8px; }
       .viewport-controls button { width: 44px; min-width: 44px; height: 44px; min-height: 44px; }
+      :host([compact]) .toolbar { min-height: 48px; }
+      :host([compact]) .hint { display: none; }
+      :host([compact]) .canvas { min-height: 230px; aspect-ratio: 16 / 9; }
     }
     @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
   `;
@@ -954,7 +957,7 @@ export class SpatialPlanEditor extends LitElement {
               <line class="survey-opening ${this.selectedOpeningId === opening.id ? 'selected' : ''}"
                 x1=${opening.x - halfX} y1=${opening.z - halfZ} x2=${opening.x + halfX} y2=${opening.z + halfZ} stroke-width=${Math.max(0.1, opening.depth * 1.15)} />
               <line class="survey-opening-hit" x1=${opening.x - halfX} y1=${opening.z - halfZ} x2=${opening.x + halfX} y2=${opening.z + halfZ}
-                stroke-width=${hitWidth} role="button" tabindex="0" aria-label=${`Edit ${opening.kind} ${opening.id}`}
+                stroke-width=${hitWidth} role="button" tabindex="0" aria-label=${`Edit ${opening.name ?? `${opening.kind} ${opening.id}`}`}
                 @pointerdown=${(event: PointerEvent) => this._selectShellOpening(event, opening.id, segment.id)}
                 @keydown=${(event: KeyboardEvent) => this._activateFromKeyboard(event, () => this._selectShellOpening(event, opening.id, segment.id))} />
             `;
@@ -1001,7 +1004,7 @@ export class SpatialPlanEditor extends LitElement {
             const line = wall ? this._openingLine(opening, wall, vertices) : null;
             return line ? svg`<g><line class="opening" x1=${line.x1} y1=${line.z1} x2=${line.x2} y2=${line.z2} />
               <line class="opening-hit" x1=${line.x1} y1=${line.z1} x2=${line.x2} y2=${line.z2} stroke-width=${hitWidth}
-                role="button" tabindex="0" aria-label=${`Edit ${opening.kind} ${opening.id}`}
+                role="button" tabindex="0" aria-label=${`Edit ${opening.name ?? `${opening.kind} ${opening.id}`}`}
                 @pointerdown=${(event: PointerEvent) => this._selectPlanOpening(event, opening.id, opening.wallId)}
                 @keydown=${(event: KeyboardEvent) => this._activateFromKeyboard(event, () => this._selectPlanOpening(event, opening.id, opening.wallId))} /></g>` : '';
           })}

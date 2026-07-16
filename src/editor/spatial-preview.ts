@@ -75,6 +75,7 @@ interface SmoothWallSample {
 const WALL_DEPTH = 0.09;
 const FLOOR_HEIGHT = 0.06;
 const OVERVIEW_ZOOM_OUT_MARGIN = 1.16;
+const ARCHITECTURAL_CAMERA_FOV = 26;
 const ARCHITECTURAL_WALL = 0xd4dad8;
 const WINDOW_GLASS = 0x9ebfc4;
 const DEFAULT_DOOR_COLOR = '#8f887d';
@@ -132,6 +133,7 @@ export class SpatialPreview extends LitElement {
   @property() weatherEntity = '';
   @property() illuminanceEntity = '';
   @property() spatialLightingMode: SpatialLightingMode = 'realistic';
+  @property({ attribute: 'isolated-element-id', reflect: true }) isolatedElementId = '';
   @state() private _error = '';
   @state() private _loadingModel = false;
   private _expandedEntityId: string | null = null;
@@ -198,6 +200,24 @@ export class SpatialPreview extends LitElement {
       border: 0;
       background: transparent;
     }
+    :host([isolated-element-id]:not([isolated-element-id=''])) .viewport { min-height: 420px; aspect-ratio: 1 / 1; }
+    .isolated-light-beacon {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      display: grid;
+      width: 64px;
+      height: 64px;
+      place-items: center;
+      border: 1px solid color-mix(in srgb, var(--isolated-accent, #a9d2d8) 55%, transparent);
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--isolated-accent, #a9d2d8) 18%, rgba(10, 15, 16, 0.88));
+      color: var(--isolated-accent, #a9d2d8);
+      box-shadow: 0 0 36px color-mix(in srgb, var(--isolated-accent, #a9d2d8) 32%, transparent);
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+    .isolated-light-beacon ha-icon { --mdc-icon-size: 27px; }
     canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; -webkit-tap-highlight-color: transparent; }
     button {
       appearance: none;
@@ -432,7 +452,7 @@ export class SpatialPreview extends LitElement {
 
       this._scene = new THREE.Scene();
       this._scene.background = null;
-      this._camera = new THREE.PerspectiveCamera(34, 1, 0.1, 50);
+      this._camera = new THREE.PerspectiveCamera(ARCHITECTURAL_CAMERA_FOV, 1, 0.1, 50);
       this._camera.position.set(8.8, 10.5, 11.5);
 
       this._controls = new OrbitControls(this._camera, canvas);
@@ -503,7 +523,8 @@ export class SpatialPreview extends LitElement {
 
   protected updated(changed: Map<PropertyKey, unknown>): void {
     this._beaconsDirty = true;
-    if (this._scene && (changed.has('zones') || changed.has('entities') || changed.has('openings') || changed.has('walls') || changed.has('dimensions') || changed.has('shell') || changed.has('plan'))) {
+    const isolatedElementChanged = changed.has('isolatedElementId');
+    if (this._scene && (changed.has('zones') || changed.has('entities') || changed.has('openings') || changed.has('walls') || changed.has('dimensions') || changed.has('shell') || changed.has('plan') || isolatedElementChanged)) {
       this._buildModel();
     }
     if (changed.has('modelUrl') && this._scene) void this._loadModel();
@@ -514,6 +535,7 @@ export class SpatialPreview extends LitElement {
         this._moveCameraTo(this.focusedZoneId);
       }
     }
+    if (isolatedElementChanged && this._scene) this._moveCameraTo(null);
     if (changed.has('hideWalls') && this._scene) this._applyWallCutaway();
     if (changed.has('hass')) {
       this._updateEntityStateVisuals();
@@ -831,6 +853,7 @@ export class SpatialPreview extends LitElement {
       const length = Math.hypot(end.x - start.x, end.z - start.z);
       return [{
         id: opening.id,
+        ...(opening.name ? { name: opening.name } : {}),
         kind: opening.kind,
         x: position[0],
         z: position[1],
@@ -1024,6 +1047,7 @@ export class SpatialPreview extends LitElement {
       group.add(imported);
       this._updateEntityStateVisuals();
       this._refreshModelBounds();
+      if (this.isolatedElementId === element.id) this._moveCameraTo(null);
     } catch (error) {
       this.dispatchEvent(new CustomEvent('spatial-element-load-error', {
         detail: { elementId: element.id, message: error instanceof Error ? error.message : 'The GLB Element could not be loaded.' },
@@ -1115,6 +1139,35 @@ export class SpatialPreview extends LitElement {
     const generation = ++this._elementLoadGeneration;
     this._disposeModel();
     const group = new THREE.Group();
+    const isolatedElement = this.isolatedElementId
+      ? this.plan?.elements.find((element) => element.id === this.isolatedElementId)
+      : undefined;
+    if (isolatedElement) {
+      this._activeShell = null;
+      const element = this._createSpatialElement(isolatedElement, generation);
+      element.rotation.set(
+        THREE.MathUtils.degToRad(isolatedElement.rotation.x),
+        THREE.MathUtils.degToRad(isolatedElement.rotation.y),
+        THREE.MathUtils.degToRad(isolatedElement.rotation.z),
+      );
+      element.scale.set(isolatedElement.scale.x, isolatedElement.scale.y, isolatedElement.scale.z);
+      element.traverse((node) => {
+        node.userData.spatialElementId = isolatedElement.id;
+        node.userData.entityId ??= isolatedElement.entityId;
+      });
+      group.add(element);
+      this._model = group;
+      this._scene.add(group);
+      group.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(group);
+      if (bounds.isEmpty()) bounds.set(new THREE.Vector3(-0.35, -0.35, -0.35), new THREE.Vector3(0.35, 0.35, 0.35));
+      this._overviewBounds = bounds;
+      const size = bounds.getSize(new THREE.Vector3());
+      this._modelRadius = Math.max(0.5, size.length() / 2);
+      this._updateEntityStateVisuals();
+      this._updateSun();
+      return;
+    }
     const usesImportedModel = Boolean(this._importedModel);
     const activeShell = this.shell ?? (this.plan ? this._shellFromPlan(this.plan) : null);
     this._activeShell = activeShell;
@@ -1283,7 +1336,6 @@ export class SpatialPreview extends LitElement {
     this._updateEntityStateVisuals();
     this._updateSun();
     this._applyFocus();
-    this._moveCameraTo(this.focusedZoneId);
   }
 
   private _refreshModelBounds(): void {
@@ -1572,6 +1624,8 @@ export class SpatialPreview extends LitElement {
             );
             glass.position.set(openingCenter, opening.bottom + visibleHeight / 2, 0);
             glass.userData.wallOpening = true;
+            glass.userData.openingId = opening.id;
+            glass.userData.openingWidth = to - from;
             this._configureGlazing(glass);
             segmentGroup.add(glass);
             const floorGlazing = opening.bottom <= 0.08;
@@ -1597,6 +1651,8 @@ export class SpatialPreview extends LitElement {
             );
             panel.position.set(openingCenter, panelHeight / 2, 0);
             panel.userData.wallOpening = true;
+            panel.userData.openingId = opening.id;
+            panel.userData.openingWidth = to - from;
             segmentGroup.add(panel);
           }
           cursor = Math.max(cursor, to);
@@ -2203,6 +2259,15 @@ export class SpatialPreview extends LitElement {
 
   private _updateSun(): void {
     if (!this._sun) return;
+    if (this.isolatedElementId) {
+      this._sun.position.set(5, 7, 6);
+      this._sun.intensity = 2.4;
+      if (this._sky) this._sky.intensity = 1.05;
+      if (this._fill) this._fill.intensity = 0.72;
+      if (this._warmBounce) this._warmBounce.intensity = 0.42;
+      if (this._renderer) this._renderer.toneMappingExposure = 1.12;
+      return;
+    }
     const latitude = this.site.latitude ?? this.latitude;
     const longitude = this.site.longitude ?? this.longitude;
     const solar = SunCalc.getPosition(new Date(), latitude, longitude);
@@ -2420,7 +2485,7 @@ export class SpatialPreview extends LitElement {
     this._clearOverviewReset();
     const zone = this.zones.find((candidate) => candidate.id === zoneId);
     const roomPose = zone ? this._roomPose(zone) : undefined;
-    const overviewPose = zone ? undefined : this._overviewPose();
+    const overviewPose = zone ? undefined : this.isolatedElementId ? this._isolatedElementPose() : this._overviewPose();
     const target = roomPose?.target ?? (zone ? this._zoneCenter(zone) : overviewPose?.target ?? new THREE.Vector3(0, 0, 0));
     const mobile = this.clientWidth < 600;
     const focusDistance = zone ? this._zoneRadius(zone) * (mobile ? 3.15 : 2.35) : 0;
@@ -2446,6 +2511,22 @@ export class SpatialPreview extends LitElement {
       toTarget: target,
     };
     this._controls.autoRotate = false;
+  }
+
+  private _isolatedElementPose(): { target: THREE.Vector3; position: THREE.Vector3 } | undefined {
+    if (!this._camera || !this._overviewBounds || this._overviewBounds.isEmpty()) return undefined;
+    const bounds = this._overviewBounds;
+    const target = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    const radius = Math.max(0.45, size.length() / 2);
+    const direction = new THREE.Vector3(1.05, 0.72, 1.2).normalize();
+    const verticalTangent = Math.tan(THREE.MathUtils.degToRad(this._camera.fov) / 2);
+    const horizontalTangent = verticalTangent * Math.max(this._camera.aspect, 0.2);
+    const distance = Math.max(
+      radius / Math.max(0.1, verticalTangent),
+      radius / Math.max(0.1, horizontalTangent),
+    ) * 1.18;
+    return { target, position: target.clone().addScaledVector(direction, distance) };
   }
 
   private _overviewPose(): { target: THREE.Vector3; position: THREE.Vector3 } | undefined {
@@ -2838,6 +2919,15 @@ export class SpatialPreview extends LitElement {
   }
 
   protected render() {
+    const isolatedElement = this.isolatedElementId
+      ? this.plan?.elements.find((element) => element.id === this.isolatedElementId)
+      : undefined;
+    const isolatedLight = isolatedElement && (isolatedElement.type === 'ceiling-light' || isolatedElement.type === 'light-bulb')
+      ? isolatedElement
+      : undefined;
+    const isolatedLightState = isolatedLight?.entityId ? this.hass?.states?.[isolatedLight.entityId] : undefined;
+    const isolatedLightColor = isolatedLightState ? resolveLightColor(isolatedLightState) : null;
+    const isolatedAccent = isolatedLightColor ? `rgb(${isolatedLightColor.r} ${isolatedLightColor.g} ${isolatedLightColor.b})` : '#a9d2d8';
     return html`${this.showRoomControls && this.zones.length ? html`<nav class="room-navigation" aria-label="Rooms">
       ${this.focusedZoneId !== null ? html`<button class="room-back" aria-label="Back to apartment overview" title="Overview"
         @pointerup=${(event: PointerEvent) => this._focusZoneFromPointer(event, null)}
@@ -2848,16 +2938,19 @@ export class SpatialPreview extends LitElement {
     </nav>` : ''}
     <div class="viewport">
       <canvas aria-label="Generated interactive 3D apartment preview"></canvas>
-      <div class="entity-layer" role="group" aria-label="Devices">
+      ${isolatedLight ? html`<div class="isolated-light-beacon" style=${`--isolated-accent:${isolatedAccent}`} aria-label=${isolatedLight.name ?? 'Light Element'}>
+        <ha-icon icon=${isolatedLight.type === 'ceiling-light' ? 'mdi:ceiling-light' : 'mdi:lightbulb-outline'}></ha-icon>
+      </div>` : nothing}
+      ${!this.isolatedElementId ? html`<div class="entity-layer" role="group" aria-label="Devices">
         ${this._beaconEntities().map((entity) => this._renderEntityBeacon(entity))}
-      </div>
-      ${!this.zones.length ? html`<div class="empty">Name the enclosed rooms to unlock room navigation and Home Assistant devices.</div>` : ''}
+      </div>` : nothing}
+      ${!this.isolatedElementId && !this.zones.length ? html`<div class="empty">Name the enclosed rooms to unlock room navigation and Home Assistant devices.</div>` : ''}
       ${this._loadingModel ? html`<div class="empty">Loading spatial model…</div>` : ''}
       ${this._error ? html`<div class="error">${this._error}</div>` : ''}
     </div>
-    <div class="entity-shortcuts" role="group" aria-label="Devices">
+    ${!this.isolatedElementId ? html`<div class="entity-shortcuts" role="group" aria-label="Devices">
       ${this._beaconEntities().filter((entity) => this._entityMarkerIsVisible(entity)).map((entity) => html`<button @click=${() => this._selectEntity(entity.entity)}>${entity.name ?? entity.entity}</button>`)}
-    </div>`;
+    </div>` : nothing}`;
   }
 }
 

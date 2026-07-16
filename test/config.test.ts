@@ -58,14 +58,14 @@ describe('normalizeConfig', () => {
           floor: [[0, 0], [8, 0], [8, 6], [0, 6]],
           rooms: [{ zoneId: 'living', floor: [[0, 0], [8, 0], [8, 6], [0, 6]], finish: 'wood' }],
           walls: [{ id: 'survey wall', points: [[0, 0], [8, 0]], thickness: 0.18, zoneIds: ['living'] }],
-          openings: [{ id: 'front door', kind: 'door', x: 4, z: 0, width: 0.9, depth: 0.18, rotation: 0, bottom: 0, height: 2.1, color: '#2F5962' }],
+          openings: [{ id: 'front door', name: 'Main entrance', kind: 'door', x: 4, z: 0, width: 0.9, depth: 0.18, rotation: 0, bottom: 0, height: 2.1, color: '#2F5962' }],
         },
       },
     });
     expect(cfg.images.base).toBe('');
     expect(cfg.spatial?.shell?.rooms?.[0].zoneId).toBe('living');
     expect(cfg.spatial?.shell?.walls?.[0].id).toBe('survey-wall');
-    expect(cfg.spatial?.shell?.openings[0]).toMatchObject({ id: 'front-door', kind: 'door', width: 0.9, color: '#2f5962' });
+    expect(cfg.spatial?.shell?.openings[0]).toMatchObject({ id: 'front-door', name: 'Main entrance', kind: 'door', width: 0.9, color: '#2f5962' });
   });
 
   it('accepts legacy top-level dayImage as images.base', () => {
@@ -327,7 +327,7 @@ describe('normalizeConfig', () => {
       }],
     });
     expect(cfg.spatial?.openings[0]).toEqual({
-      id: 'balcony', kind: 'door', wallId: 'south-wall', position: 0.5, width: 0.2,
+      id: 'balcony', kind: 'door', wallId: 'south-wall', position: 0.5, width: 0.184,
       widthMeters: 0.92, height: 2.15, bottom: 0, hinge: 'right', swing: 'in',
     });
     expect(cfg.entities[0].spatial).toEqual({

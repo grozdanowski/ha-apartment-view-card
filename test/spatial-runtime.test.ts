@@ -2,13 +2,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import '../src/apartment-view-card';
-import { rectangularSpatialPlan } from '../src/core/spatial-plan';
+import { addSpatialElement, rectangularSpatialPlan } from '../src/core/spatial-plan';
 import { elementPrimitivesForType } from '../src/core/spatial-elements';
+import { ELEMENT_INSPECTOR_EVENT, publishEditorPreviewElement } from '../src/editor/editor-preview-state';
 
 describe('3D spatial runtime', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
     if (!customElements.get('ha-card')) customElements.define('ha-card', class extends HTMLElement {});
+    if (!customElements.get('hui-card-preview')) customElements.define('hui-card-preview', class extends HTMLElement {});
+    publishEditorPreviewElement(null);
   });
 
   async function mount() {
@@ -47,6 +50,89 @@ describe('3D spatial runtime', () => {
     const currentPreview = card.shadowRoot.querySelector('spatial-preview') as any;
     await currentPreview.updateComplete;
     expect(currentPreview.focusedZoneId).toBe('living');
+  });
+
+  it('preserves the current camera pose while geometry and entity edits rebuild the model', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview._scene = new THREE.Scene();
+    preview._moveCameraTo = vi.fn();
+    preview.plan = rectangularSpatialPlan(8, 6);
+    preview.zones = [];
+    preview.entities = [];
+    preview.openings = [];
+    preview.walls = [];
+
+    preview._buildModel();
+
+    expect(preview._moveCameraTo).not.toHaveBeenCalled();
+  });
+
+  it('builds an Element inspection scene without apartment geometry or neighboring Elements', () => {
+    let plan = addSpatialElement(rectangularSpatialPlan(8, 6), 'custom', { x: 2, z: 2 }, {
+      name: 'Selected cabinet',
+      primitives: elementPrimitivesForType('custom'),
+    });
+    plan = addSpatialElement(plan, 'custom', { x: 6, z: 4 }, {
+      name: 'Other cabinet',
+      primitives: elementPrimitivesForType('custom'),
+    });
+    const preview = document.createElement('spatial-preview') as any;
+    preview._scene = new THREE.Scene();
+    preview.plan = plan;
+    preview.zones = [{ id: 'living', name: 'Living Room', x: 0, y: 0, width: 100, height: 100 }];
+    preview.entities = [];
+    preview.openings = [];
+    preview.walls = [];
+    preview.isolatedElementId = plan.elements[0].id;
+
+    preview._buildModel();
+
+    const renderedElementIds = new Set<string>();
+    preview._model.traverse((node: THREE.Object3D) => {
+      if (node.userData.spatialElementId) renderedElementIds.add(node.userData.spatialElementId);
+    });
+    expect(preview._model.children).toHaveLength(1);
+    expect(preview._model.children[0].userData.spatialElementId).toBe(plan.elements[0].id);
+    expect(renderedElementIds).toEqual(new Set([plan.elements[0].id]));
+    expect(preview._model.children.some((child: THREE.Object3D) => child.userData.zoneId === 'living')).toBe(false);
+  });
+
+  it('shows only the selected Element in Home Assistant card preview and restores the card afterward', async () => {
+    const plan = addSpatialElement(rectangularSpatialPlan(8, 6), 'custom', { x: 4, z: 3 }, {
+      name: 'Media cabinet',
+      primitives: elementPrimitivesForType('custom'),
+    });
+    const selected = plan.elements[0];
+    const wrapper = document.createElement('hui-card-preview');
+    const card = document.createElement('apartment-view-card') as any;
+    card.hass = { states: {}, callService: vi.fn(async () => undefined) };
+    card.setConfig({
+      type: 'custom:apartment-view-card',
+      zones: [{ id: 'living', name: 'Living Room', x: 0, y: 0, width: 100, height: 100 }],
+      entities: [],
+      spatial: { plan },
+    });
+    wrapper.append(card);
+    document.body.append(wrapper);
+    await card.updateComplete;
+
+    window.dispatchEvent(new CustomEvent(ELEMENT_INSPECTOR_EVENT, { detail: { elementId: selected.id } }));
+    await card.updateComplete;
+    expect(card.shadowRoot.querySelector('.spatial-room-navigation')).toBeNull();
+    expect((card.shadowRoot.querySelector('spatial-preview') as any).isolatedElementId).toBe(selected.id);
+
+    window.dispatchEvent(new CustomEvent(ELEMENT_INSPECTOR_EVENT, { detail: { elementId: null } }));
+    await card.updateComplete;
+    expect(card.shadowRoot.querySelector('.spatial-room-navigation')).toBeTruthy();
+    expect((card.shadowRoot.querySelector('spatial-preview') as any).isolatedElementId).toBe('');
+  });
+
+  it('never replaces normal dashboard card content with the editor Element inspector', async () => {
+    const { card } = await mount();
+    window.dispatchEvent(new CustomEvent(ELEMENT_INSPECTOR_EVENT, { detail: { elementId: 'anything' } }));
+    await card.updateComplete;
+    expect(card._editorElementPreviewId).toBeNull();
+    expect(card.shadowRoot.querySelector('.spatial-room-navigation')).toBeTruthy();
   });
 
   it('opens more-info from an accessible entity shortcut without calling a service', async () => {
@@ -769,6 +855,37 @@ describe('3D spatial runtime', () => {
     window.geometry.computeBoundingBox();
     const size = window.geometry.boundingBox.getSize(new THREE.Vector3());
     expect(Math.hypot(size.x, size.z)).toBeGreaterThan(0.72);
+  });
+
+  it('renders equal metre widths consistently on straight and smooth wall runs', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.dimensions = { width: 8, aspectRatio: 1, wallHeight: 2.7 };
+    const model = preview._createSurveyWalls({
+      outer: [[0, 0], [8, 0], [8, 3], [0, 3]],
+      holes: [],
+      floor: [[0, 0], [8, 0], [8, 3], [0, 3]],
+      walls: [
+        { id: 'straight', points: [[0, 0], [3, 0]], thickness: 0.3 },
+        { id: 'smooth', points: [[3, 0], [5, 0], [6.4, -0.1], [7.4, -0.5]], thickness: 0.4, smooth: true },
+      ],
+      openings: [
+        { id: 'straight-window', kind: 'window', x: 1.5, z: 0, width: 0.6, depth: 0.3, rotation: 0, bottom: 1.1, height: 1.1 },
+        { id: 'smooth-window', kind: 'window', x: 4, z: 0, width: 0.6, depth: 0.4, rotation: 0, bottom: 1.1, height: 1.1 },
+      ],
+    }, 4, 1.5);
+    const windows = new Map<string, THREE.Mesh>();
+    model.traverse((node: THREE.Object3D) => {
+      if (node instanceof THREE.Mesh && node.userData.openingId) windows.set(node.userData.openingId, node);
+    });
+
+    expect(windows.get('straight-window')?.userData.openingWidth).toBeCloseTo(0.6, 3);
+    expect(windows.get('smooth-window')?.userData.openingWidth).toBeCloseTo(0.6, 3);
+    const horizontalSpan = (mesh: THREE.Mesh): number => {
+      mesh.geometry.computeBoundingBox();
+      const size = mesh.geometry.boundingBox!.getSize(new THREE.Vector3());
+      return Math.hypot(size.x, size.z);
+    };
+    expect(horizontalSpan(windows.get('straight-window')!)).toBeCloseTo(horizontalSpan(windows.get('smooth-window')!), 1);
   });
 
   it('uses the configured solid color for a door panel', () => {

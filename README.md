@@ -1,6 +1,6 @@
 # Apartment View Card
 
-A spatial, state-aware 3D home for Home Assistant. Draw the apartment once in metres, place rooms, openings, furniture, and entities in the same model, then navigate the real home instead of a grid of cards.
+A spatial, state-aware 3D home for Home Assistant. Draw the apartment once in metres, place rooms, openings, Elements, and entities in the same model, then navigate the real home instead of a grid of cards.
 
 ## What It Does
 
@@ -8,7 +8,7 @@ A spatial, state-aware 3D home for Home Assistant. Draw the apartment once in me
 - Detects enclosed rooms automatically, including rooms divided by a shared wall.
 - Adds doors and windows directly to a wall with real width, height, sill, hinge, and swing data.
 - Supports straight and curved walls, per-wall thickness, and full-height walls.
-- Places built-in furniture or custom GLB/GLTF models in three-dimensional space.
+- Builds reusable Elements from solid primitives or imported GLB geometry in three-dimensional space.
 - Places Home Assistant entities on floors, walls, ceilings, surfaces, or freely in space.
 - Uses Home Assistant Areas to suggest and organize devices.
 - Renders live entity state, contextual room summaries, sunlight direction, and room camera transitions.
@@ -40,7 +40,7 @@ The visual editor is the recommended configuration surface.
 1. **Structure**: start with a dimensioned rectangle or draw walls from scratch. Drag shared corners to adjust the plan.
 2. **Rooms**: every enclosed wall face becomes a room. Give it a name or connect it to a Home Assistant Area.
 3. **Openings**: select a wall, then add and size doors or windows. Set the apartment's north direction.
-4. **Furniture**: add built-in objects, drag them into place, then adjust X/Y/Z, rotation, and scale.
+4. **Elements**: build objects from primitives or GLB geometry, drag them into place, then adjust X/Y/Z, rotation, scale, materials, luminosity, and state effects.
 5. **Devices**: import entities from linked Areas. The editor suggests an appropriate floor, wall, ceiling, surface, or free mount.
 6. **Review**: validate architecture, room links, object placement, and entity placement before daily use.
 
