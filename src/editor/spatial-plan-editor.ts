@@ -62,7 +62,20 @@ export class SpatialPlanEditor extends LitElement {
   private _pinchGesture: PinchGesture | null = null;
 
   static styles = css`
-    :host { display: block; color: #edf2f3; }
+    :host {
+      display: block;
+      color: #edf2f3;
+      outline: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    :host(:focus),
+    :host(:focus-visible),
+    .editor:focus,
+    .canvas:focus,
+    svg:focus,
+    svg:focus-visible {
+      outline: none !important;
+    }
     .editor {
       overflow: hidden;
       border: 1px solid rgba(229, 239, 241, 0.12);
@@ -99,7 +112,19 @@ export class SpatialPlanEditor extends LitElement {
     .delete-wall:hover { color: #ffe8e5; background: rgba(183, 67, 57, 0.24); }
     .delete-wall.confirm { color: #fff; background: #a73f36; }
     .canvas { position: relative; min-height: 420px; aspect-ratio: 16 / 10; }
-    svg { display: block; width: 100%; height: 100%; touch-action: none; cursor: default; }
+    svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+      outline: none;
+      touch-action: none;
+      cursor: default;
+      -webkit-tap-highlight-color: transparent;
+    }
+    svg [role='button'] {
+      outline: none;
+      -webkit-tap-highlight-color: transparent;
+    }
     svg.drawing { cursor: crosshair; }
     svg.pan { cursor: grab; }
     svg.panning { cursor: grabbing; }
@@ -132,8 +157,10 @@ export class SpatialPlanEditor extends LitElement {
     .viewport-controls .pan-control[aria-pressed='true'] { color: #101617; background: #c8d5d7; }
     .room { fill: #5f6d6d; fill-opacity: 0.18; stroke: transparent; stroke-width: 0.06; cursor: pointer; }
     .room.selected { fill: #8db8c1; fill-opacity: 0.28; stroke: #b8e1e6; }
+    .room:focus-visible { stroke: #d9e5e7; }
     .survey-room { fill: #657474; fill-opacity: 0.2; stroke: transparent; stroke-width: 0.06; cursor: pointer; }
     .survey-room.selected { fill: #8db8c1; fill-opacity: 0.28; stroke: #b8e1e6; }
+    .survey-room:focus-visible { stroke: #d9e5e7; }
     .survey-room.tile { fill: #6d7776; fill-opacity: 0.3; }
     .survey-wall { fill: none; stroke: #d8dfdf; stroke-linecap: square; stroke-linejoin: round; pointer-events: none; }
     .survey-wall.selected { stroke: #9dcbd2; }
@@ -146,12 +173,13 @@ export class SpatialPlanEditor extends LitElement {
       -webkit-tap-highlight-color: transparent;
     }
     .survey-wall:has(+ .survey-wall-hit:focus-visible) { stroke: #d9e5e7; }
-    .survey-vertex-hit { fill: transparent; stroke: none; cursor: grab; pointer-events: all; }
+    .survey-vertex-hit { fill: transparent; stroke: none; outline: none; cursor: grab; pointer-events: all; -webkit-tap-highlight-color: transparent; }
     .survey-vertex { fill: #101617; stroke: #d8dfdf; stroke-width: 0.035; pointer-events: none; }
     .survey-vertex.selected { fill: #b9dce1; stroke: #101617; }
+    .survey-vertex-hit:focus-visible + .survey-vertex { stroke: #edf6f7; stroke-width: 0.065; }
     .survey-opening { stroke: #0c1112; stroke-linecap: butt; pointer-events: none; }
     .survey-opening.selected { stroke: #8ed4df; }
-    .survey-opening-hit { stroke: transparent; cursor: pointer; }
+    .survey-opening-hit { stroke: transparent; outline: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
     .wall { fill: none; stroke: #d8dfdf; stroke-linecap: square; stroke-linejoin: round; }
     .wall.selected { stroke: #9dcbd2; }
     .wall-hit {
@@ -163,17 +191,20 @@ export class SpatialPlanEditor extends LitElement {
       -webkit-tap-highlight-color: transparent;
     }
     .wall:has(+ .wall-hit:focus-visible) { stroke: #d9e5e7; }
-    .vertex { fill: #101617; stroke: #d8dfdf; stroke-width: 0.035; cursor: grab; }
+    .vertex { fill: #101617; stroke: #d8dfdf; stroke-width: 0.035; outline: none; cursor: grab; -webkit-tap-highlight-color: transparent; }
     .vertex.selected, .vertex.draft { fill: #b9dce1; stroke: #101617; }
+    .vertex:focus-visible { stroke: #edf6f7; stroke-width: 0.065; }
     .opening { stroke: #0c1112; stroke-width: 0.16; stroke-linecap: butt; pointer-events: none; }
-    .opening-hit { stroke: transparent; cursor: pointer; }
-    .element { cursor: grab; }
+    .opening-hit { stroke: transparent; outline: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    .element { outline: none; cursor: grab; -webkit-tap-highlight-color: transparent; }
     .element-shape { fill: #879597; fill-opacity: 0.82; stroke: #c8d5d7; stroke-width: 0.025; }
     .element.selected .element-shape { fill: #a9cbd0; stroke: #edf6f7; stroke-width: 0.055; }
+    .element:focus-visible .element-shape { stroke: #edf6f7; stroke-width: 0.055; }
     .element-label { display: none; fill: #0b1011; font: 650 0.18px/1 -apple-system, BlinkMacSystemFont, sans-serif; text-anchor: middle; pointer-events: none; }
     .element.selected .element-label { display: block; }
-    .entity-marker { fill: #152326; stroke: #a8d9e1; stroke-width: 0.045; cursor: grab; }
+    .entity-marker { fill: #152326; stroke: #a8d9e1; stroke-width: 0.045; outline: none; cursor: grab; -webkit-tap-highlight-color: transparent; }
     .entity-marker.selected { fill: #b8dce2; stroke: #f2fbfc; }
+    .entity-marker:focus-visible { stroke: #edf6f7; stroke-width: 0.065; }
     .dimension {
       fill: #aab6b8;
       font: 600 0.2px/1 -apple-system, BlinkMacSystemFont, sans-serif;
@@ -447,7 +478,6 @@ export class SpatialPlanEditor extends LitElement {
   public async beginStructureEditing(): Promise<void> {
     this._setMode('select');
     await this.updateComplete;
-    this.renderRoot.querySelector<SVGSVGElement>('svg')?.focus();
   }
 
   private _finishWalls(): void {
@@ -484,6 +514,7 @@ export class SpatialPlanEditor extends LitElement {
   }
 
   private _onCanvasPointerDown(event: PointerEvent): void {
+    event.preventDefault();
     if (this._mode === 'pan' || event.button === 1) {
       this._startViewportGesture(event);
       return;
@@ -531,6 +562,7 @@ export class SpatialPlanEditor extends LitElement {
 
   private _selectWall(event: Event, wallId: string): void {
     if (this._mode !== 'select') return;
+    event.preventDefault();
     event.stopPropagation();
     this._deleteArmed = false;
     this.selectedWallId = wallId;
@@ -543,6 +575,7 @@ export class SpatialPlanEditor extends LitElement {
 
   private _selectShellWall(event: Event, wallId: string): void {
     if (this._mode !== 'select') return;
+    event.preventDefault();
     event.stopPropagation();
     this._deleteArmed = false;
     this.selectedWallId = wallId;
@@ -554,6 +587,7 @@ export class SpatialPlanEditor extends LitElement {
 
   private _selectShellOpening(event: Event, openingId: string, wallId: string): void {
     if (this._mode !== 'select') return;
+    event.preventDefault();
     event.stopPropagation();
     this.selectedOpeningId = openingId;
     this.selectedWallId = wallId;
@@ -566,6 +600,7 @@ export class SpatialPlanEditor extends LitElement {
 
   private _selectPlanOpening(event: Event, openingId: string, wallId: string): void {
     if (this._mode !== 'select') return;
+    event.preventDefault();
     event.stopPropagation();
     this.selectedOpeningId = openingId;
     this.selectedWallId = wallId;
@@ -585,6 +620,7 @@ export class SpatialPlanEditor extends LitElement {
 
   private _selectRoom(event: Event, roomId: string): void {
     if (this._mode !== 'select') return;
+    event.preventDefault();
     event.stopPropagation();
     this.selectedRoomId = roomId;
     this.selectedWallId = '';
@@ -653,6 +689,7 @@ export class SpatialPlanEditor extends LitElement {
 
   private _startVertexDrag(event: PointerEvent, vertexId: string): void {
     if (this._mode !== 'select' || event.button !== 0) return;
+    event.preventDefault();
     event.stopPropagation();
     this._dragVertexId = vertexId;
     this._dragMoved = false;
@@ -715,6 +752,7 @@ export class SpatialPlanEditor extends LitElement {
 
   private _startShellPointDrag(event: PointerEvent, point: [number, number]): void {
     if (this._mode !== 'select' || event.button !== 0) return;
+    event.preventDefault();
     event.stopPropagation();
     this._dragShellPoint = [point[0], point[1]];
     this._dragShellPointKey = `${point[0].toFixed(3)}:${point[1].toFixed(3)}`;
@@ -742,6 +780,7 @@ export class SpatialPlanEditor extends LitElement {
 
   private _startEntityDrag(event: PointerEvent, entityId: string): void {
     if (this._mode !== 'select' || event.button !== 0) return;
+    event.preventDefault();
     event.stopPropagation();
     this._dragEntityId = entityId;
     this._dragMoved = false;
@@ -756,6 +795,7 @@ export class SpatialPlanEditor extends LitElement {
 
   private _startElementDrag(event: PointerEvent, elementId: string): void {
     if (this._mode !== 'select' || event.button !== 0) return;
+    event.preventDefault();
     event.stopPropagation();
     this._dragElementId = elementId;
     this._dragMoved = false;

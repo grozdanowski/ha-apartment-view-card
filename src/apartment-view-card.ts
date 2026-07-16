@@ -200,6 +200,8 @@ export class ApartmentViewCard extends LitElement {
     :host {
       display: block;
       background: transparent;
+      outline: none !important;
+      -webkit-tap-highlight-color: transparent;
       /* Motion tokens (spec v2.5 §2) — every duration/easing in the card
          derives from these. Reduced motion zeroes the durations below
          (keyframes and the tilt transform don't read the vars, so they keep
@@ -212,6 +214,12 @@ export class ApartmentViewCard extends LitElement {
       --av-ease-spring: cubic-bezier(0.22, 1, 0.36, 1); /* crisp chips, checks, FAB; NEVER the camera */
       --av-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); /* cross-fades, exits */
       --av-ease-snap: cubic-bezier(0.22, 1, 0.36, 1); /* rubber-band return only */
+    }
+    :host(:focus),
+    :host(:focus-visible),
+    ha-card:focus,
+    ha-card:focus-visible {
+      outline: none !important;
     }
     /* The floorplan floats directly on the dashboard: no card chrome. */
     ha-card {
@@ -1055,7 +1063,9 @@ export class ApartmentViewCard extends LitElement {
     window.addEventListener('pointerup', this._onWindowPointerUp);
     window.addEventListener('pointercancel', this._onWindowPointerCancel);
     window.addEventListener('keydown', this._handleKeyDown);
-    if (!this.hasAttribute('tabindex')) this.setAttribute('tabindex', '0');
+    // The card listens for keyboard shortcuts on `window`; making the host
+    // focusable only leaves a persistent Safari tap outline around the card.
+    this.removeAttribute('tabindex');
     if (typeof ResizeObserver !== 'undefined') {
       this._ro = new ResizeObserver((entries) => {
         const w = entries[0]?.contentRect?.width;

@@ -43,6 +43,14 @@ afterEach(() => {
   document.body.querySelectorAll('apartment-view-card').forEach((el) => el.remove());
 });
 
+describe('card-component: focus behavior', () => {
+  it('does not make the whole dashboard card a tap-focus target', async () => {
+    const card = await mountCard();
+    expect(card.hasAttribute('tabindex')).toBe(false);
+    expect(getComputedStyle(card).outlineStyle).toBe('none');
+  });
+});
+
 /** happy-dom's WheelEvent drops the MouseEventInit leg (ctrlKey/metaKey/
  * clientX/clientY) — re-apply after construction so the P0-3 modifier gate
  * and the anchored-zoom math can be tested. */

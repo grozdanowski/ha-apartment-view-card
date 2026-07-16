@@ -176,8 +176,17 @@ export class SpatialPreview extends LitElement {
       display: block;
       color: #f1f4f4;
       container-type: inline-size;
+      outline: none;
+      -webkit-tap-highlight-color: transparent;
       --spatial-accent: #a9d2d8;
       --spatial-muted: rgba(241, 244, 244, 0.55);
+    }
+    :host(:focus),
+    :host(:focus-visible),
+    .viewport:focus,
+    canvas:focus,
+    canvas:focus-visible {
+      outline: none !important;
     }
     .viewport {
       position: relative;
@@ -189,7 +198,7 @@ export class SpatialPreview extends LitElement {
       border: 0;
       background: transparent;
     }
-    canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+    canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; -webkit-tap-highlight-color: transparent; }
     button {
       appearance: none;
       border: 0;

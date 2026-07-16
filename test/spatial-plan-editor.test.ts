@@ -93,6 +93,32 @@ describe('spatial-plan-editor precision viewport', () => {
     expect(style.outlineStyle).toBe('none');
   });
 
+  it('does not move focus into the plan when structure editing starts', async () => {
+    const editor = await mount();
+    const outside = document.createElement('button');
+    document.body.prepend(outside);
+    outside.focus();
+
+    await editor.beginStructureEditing();
+
+    expect(document.activeElement).toBe(outside);
+    expect(editor.shadowRoot.activeElement).toBeNull();
+  });
+
+  it('prevents pointer taps from applying native SVG focus paint', async () => {
+    const editor = await mount();
+    const room = editor.shadowRoot.querySelector('.room') as SVGPolygonElement;
+    const pointer = new PointerEvent('pointerdown', {
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    expect(room.dispatchEvent(pointer)).toBe(false);
+    expect(pointer.defaultPrevented).toBe(true);
+    expect(editor.shadowRoot.activeElement).toBeNull();
+  });
+
   it('offers wall drawing for surveyed homes too', async () => {
     const editor = await mount();
     const shell: SpatialShellConfig = {
@@ -123,13 +149,15 @@ describe('spatial-plan-editor precision viewport', () => {
     const changed = vi.fn();
     editor.addEventListener('spatial-shell-changed', changed);
 
-    editor._onCanvasPointerDown({ button: 0 } as PointerEvent);
-    editor._onCanvasPointerDown({ button: 0 } as PointerEvent);
+    const pointer = { button: 0, preventDefault: vi.fn() } as unknown as PointerEvent;
+    editor._onCanvasPointerDown(pointer);
+    editor._onCanvasPointerDown(pointer);
 
     expect(editor.shell.walls).toHaveLength(2);
     expect(editor.shell.walls.at(-1).points).toEqual([[0, 0], [2, 2]]);
     expect(editor.selectedWallId).toBe('shell:wall-1:0');
     expect(changed).toHaveBeenCalledOnce();
+    expect(pointer.preventDefault).toHaveBeenCalledTimes(2);
   });
 
   it('requires confirmation before requesting deletion of a selected wall', async () => {
