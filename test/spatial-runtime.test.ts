@@ -200,6 +200,27 @@ describe('3D spatial runtime', () => {
     expect(card.shadowRoot.querySelector('.spatial-room-back')).toBeNull();
   });
 
+  it('shows the top Back control when the 3D room itself is selected', async () => {
+    const { card } = await mount();
+    const preview = card.shadowRoot.querySelector('spatial-preview') as any;
+
+    preview.dispatchEvent(new CustomEvent('spatial-room-selected', {
+      detail: { zoneId: 'living' },
+      bubbles: true,
+      composed: true,
+    }));
+    await card.updateComplete;
+
+    expect(card._spatialFocusedZoneId).toBe('living');
+    expect(card.shadowRoot.querySelector('.spatial-room-back')).toBeTruthy();
+    expect((card.shadowRoot.querySelector('.spatial-room-rail button') as HTMLButtonElement).getAttribute('aria-pressed')).toBe('true');
+
+    (card.shadowRoot.querySelector('.spatial-room-back') as HTMLButtonElement).click();
+    await card.updateComplete;
+    expect(card._spatialFocusedZoneId).toBeNull();
+    expect(card.shadowRoot.querySelector('.spatial-room-back')).toBeNull();
+  });
+
   it('keeps standalone preview room controls usable in the editor', async () => {
     const { preview } = await mount();
     preview.showRoomControls = true;

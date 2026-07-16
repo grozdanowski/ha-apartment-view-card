@@ -67,6 +67,25 @@ describe('apartment-view-card-editor', () => {
     expect(editorPreviewElementId()).toBeNull();
   });
 
+  it('clears stale editor selections when changing setup sections', async () => {
+    const element = await mount();
+    element._addSpatialElement('custom');
+    await element.updateComplete;
+
+    expect(element._selectedElementId).toBeTruthy();
+    expect(editorPreviewElementId()).toBe(element._selectedElementId);
+
+    const rooms = [...element.shadowRoot.querySelectorAll('.setup-step')]
+      .find((button: Element) => button.textContent?.includes('Rooms')) as HTMLButtonElement;
+    rooms.click();
+    await element.updateComplete;
+
+    expect(element._setupStep).toBe('rooms');
+    expect(element._selectedElementId).toBe('');
+    expect(element._selectedPrimitiveId).toBe('');
+    expect(editorPreviewElementId()).toBeNull();
+  });
+
   it('pins the live preview while settings scroll and remembers the choice', async () => {
     const element = await mount();
     const toggle = element.shadowRoot.querySelector('input[aria-label="Pin preview while scrolling"]') as HTMLInputElement | null;

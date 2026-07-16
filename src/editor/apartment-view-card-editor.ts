@@ -1169,6 +1169,27 @@ export class ApartmentViewCardEditor extends LitElement {
 
   private _setMode(mode: EditorMode): void {
     this._mode = mode;
+    if (mode === 'advanced') this._clearSelectionsOutsideStep('review');
+  }
+
+  private _clearSelectionsOutsideStep(step: SetupStep): void {
+    if (step !== 'rooms') this._selectedRoomId = '';
+    if (step !== 'architecture' && step !== 'floorplan') this._selectedWallId = '';
+    if (step !== 'architecture') this._selectedOpeningId = '';
+    if (step !== 'elements') {
+      this._selectedElementId = '';
+      this._selectedPrimitiveId = '';
+      this._selectedGlbSurfaceId = '';
+    }
+    if (step !== 'devices') this._selectedEntity = -1;
+    if (step !== 'actions') this._selectedAction = -1;
+  }
+
+  private _setSetupStep(step: SetupStep): void {
+    this._mode = 'setup';
+    this._setupStep = step;
+    this._clearSelectionsOutsideStep(step);
+    if (step === 'architecture' || step === 'elements') this._previewMode = 'edit';
   }
 
   private _onOptionsChanged(event: CustomEvent): void {
@@ -1609,10 +1630,8 @@ export class ApartmentViewCardEditor extends LitElement {
 
   private _onPreviewWallSelected(ev: CustomEvent): void {
     this._selectedWallId = (ev.detail as { wallId: string }).wallId;
-    this._selectedOpeningId = '';
-    this._selectedRoomId = '';
-    this._selectedElementId = '';
-    if (this._mode !== 'setup' || this._setupStep !== 'floorplan') this._setupStep = 'architecture';
+    if (this._mode !== 'setup' || this._setupStep !== 'floorplan') this._setSetupStep('architecture');
+    else this._clearSelectionsOutsideStep('floorplan');
     this._previewMode = 'edit';
   }
 
@@ -1627,10 +1646,7 @@ export class ApartmentViewCardEditor extends LitElement {
 
   private _selectRoom(roomId: string): void {
     this._selectedRoomId = roomId;
-    this._selectedWallId = '';
-    this._selectedOpeningId = '';
-    this._selectedElementId = '';
-    this._setupStep = 'rooms';
+    this._setSetupStep('rooms');
     this._previewMode = 'edit';
   }
 
@@ -1641,9 +1657,7 @@ export class ApartmentViewCardEditor extends LitElement {
     const opening = this._spatial().openings.find((candidate) => candidate.id === openingId);
     this._selectedOpeningId = openingId;
     this._selectedWallId = wallId ?? shellAssignment?.segment.id ?? opening?.wallId ?? '';
-    this._selectedRoomId = '';
-    this._selectedElementId = '';
-    this._setupStep = 'architecture';
+    this._setSetupStep('architecture');
     this._previewMode = 'edit';
   }
 
@@ -1809,8 +1823,7 @@ export class ApartmentViewCardEditor extends LitElement {
   }
 
   private async _editStructure(): Promise<void> {
-    this._mode = 'setup';
-    this._setupStep = 'floorplan';
+    this._setSetupStep('floorplan');
     this._previewMode = 'edit';
     this._previewCollapsed = false;
     await this.updateComplete;
@@ -2208,13 +2221,10 @@ export class ApartmentViewCardEditor extends LitElement {
 
   private _selectElement(elementId: string): void {
     this._selectedElementId = elementId;
-    this._selectedWallId = '';
-    this._selectedOpeningId = '';
-    this._selectedRoomId = '';
     const element = this._spatial().plan?.elements.find((candidate) => candidate.id === this._selectedElementId);
     this._selectedPrimitiveId = element?.primitives[0]?.id ?? '';
     this._selectedGlbSurfaceId = element?.glb?.surfaces[0]?.id ?? '';
-    this._setupStep = 'elements';
+    this._setSetupStep('elements');
     this._previewMode = 'edit';
   }
 
@@ -2223,12 +2233,8 @@ export class ApartmentViewCardEditor extends LitElement {
   }
 
   private _selectEntity(entityId: string): void {
-    this._selectedWallId = '';
-    this._selectedOpeningId = '';
-    this._selectedRoomId = '';
-    this._selectedElementId = '';
     this._selectedEntity = this._config.entities.findIndex((entity) => entity.entity === entityId);
-    this._setupStep = 'devices';
+    this._setSetupStep('devices');
     this._previewMode = 'edit';
   }
 
@@ -2604,10 +2610,7 @@ export class ApartmentViewCardEditor extends LitElement {
             aria-selected=${this._setupStep === step.id}
             @click=${() => {
               if (step.id === 'floorplan') void this._editStructure();
-              else {
-                this._setupStep = step.id;
-                if (step.id === 'architecture' || step.id === 'elements') this._previewMode = 'edit';
-              }
+              else this._setSetupStep(step.id);
             }}>
             <ha-icon icon=${step.icon}></ha-icon><span>${step.label}</span>
           </button>
@@ -2624,8 +2627,7 @@ export class ApartmentViewCardEditor extends LitElement {
       void this._editStructure();
       return;
     }
-    this._setupStep = next.id;
-    if (next.id === 'architecture' || next.id === 'elements') this._previewMode = 'edit';
+    this._setSetupStep(next.id);
   }
 
   private _renderSetupFloorplan() {
@@ -2646,7 +2648,7 @@ export class ApartmentViewCardEditor extends LitElement {
           <div class="setup-actions">
             <ha-button @click=${this._editStructure}>Edit structure</ha-button>
             <ha-button @click=${this._inspectIn3d}>Inspect in 3D</ha-button>
-            <ha-button @click=${() => { this._setupStep = 'rooms'; }}>Continue to rooms</ha-button>
+            <ha-button @click=${() => this._setSetupStep('rooms')}>Continue to rooms</ha-button>
           </div>
         </div>
         ${selectedShellSegment || selectedPlanWall ? html`
@@ -2774,7 +2776,7 @@ export class ApartmentViewCardEditor extends LitElement {
             </div>`;
           })}
         </div>
-        <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'architecture'; }}>Continue to openings</ha-button></div>
+        <div class="setup-actions"><ha-button @click=${() => this._setSetupStep('architecture')}>Continue to openings</ha-button></div>
       </div>
     `;
     if (!plan || !plan.rooms.length) return html`
@@ -2846,7 +2848,7 @@ export class ApartmentViewCardEditor extends LitElement {
         </div>
         <div class="setup-actions">
           <ha-button @click=${this._editStructure}>Adjust walls</ha-button>
-          <ha-button @click=${() => { this._setupStep = 'architecture'; this._previewMode = 'edit'; }}>Add doors &amp; windows</ha-button>
+          <ha-button @click=${() => this._setSetupStep('architecture')}>Add doors &amp; windows</ha-button>
         </div>
       </div>
     `;
@@ -2950,7 +2952,7 @@ export class ApartmentViewCardEditor extends LitElement {
         <ha-button @click=${() => this._addOpening('window')}><ha-icon icon="mdi:window-closed-variant"></ha-icon>&nbsp; Add window</ha-button>
         <ha-button @click=${this._inspectIn3d}>View in 3D</ha-button>
       </div>` : html`<p>Select a wall in the plan to add a new opening.</p>`}
-      <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'elements'; this._previewMode = 'edit'; }}>Continue to Elements</ha-button></div>
+      <div class="setup-actions"><ha-button @click=${() => this._setSetupStep('elements')}>Continue to Elements</ha-button></div>
     `;
     if (!plan?.rooms.length && !this._config.zones.length) return html`
       <p class="studio-intro">Doors and windows are attached directly to room walls.</p>
@@ -3083,7 +3085,7 @@ export class ApartmentViewCardEditor extends LitElement {
         </div>
         ${!plan ? html`<div class="setup-actions"><ha-button @click=${this._useImageAspect}>Read ratio from floorplan</ha-button></div>` : nothing}
       </div>
-      <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'elements'; this._previewMode = 'edit'; }}>Continue to Elements</ha-button></div>
+      <div class="setup-actions"><ha-button @click=${() => this._setSetupStep('elements')}>Continue to Elements</ha-button></div>
     `;
   }
 
@@ -3300,7 +3302,7 @@ export class ApartmentViewCardEditor extends LitElement {
         </div>` : html`<div class="architecture-empty">This model has no discovered material surfaces.</div>`}
       </div>` : nothing}
       ` : html`<div class="architecture-empty">Add an Element or select one on the plan to adjust it.</div>`}
-      <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'devices'; }}>Continue to devices</ha-button></div>
+      <div class="setup-actions"><ha-button @click=${() => this._setSetupStep('devices')}>Continue to devices</ha-button></div>
     `;
   }
 
@@ -3385,9 +3387,9 @@ export class ApartmentViewCardEditor extends LitElement {
           </div>
         </div>
       ` : html`
-        <div class="setup-card"><h3>Map a room first</h3><p>Once a drawn room matches a Home Assistant Area, we can suggest its devices and place them inside it.</p><div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'rooms'; }}>Map rooms</ha-button></div></div>
+        <div class="setup-card"><h3>Map a room first</h3><p>Once a drawn room matches a Home Assistant Area, we can suggest its devices and place them inside it.</p><div class="setup-actions"><ha-button @click=${() => this._setSetupStep('rooms')}>Map rooms</ha-button></div></div>
       `}
-      <div class="setup-actions"><ha-button @click=${() => { this._setupStep = 'actions'; }}>Continue to Actions</ha-button><ha-button @click=${() => { this._setupStep = 'review'; }}>Review setup</ha-button></div>
+      <div class="setup-actions"><ha-button @click=${() => this._setSetupStep('actions')}>Continue to Actions</ha-button><ha-button @click=${() => this._setSetupStep('review')}>Review setup</ha-button></div>
     `;
   }
 
@@ -3425,9 +3427,9 @@ export class ApartmentViewCardEditor extends LitElement {
           ${plan ? html`<div class="health-item ready"><ha-icon icon="mdi:shape-outline"></ha-icon><span>${plan.elements.length} Element${plan.elements.length === 1 ? '' : 's'} placed.</span></div>` : nothing}
         </div>
         <div class="setup-actions">
-          ${unplaced.length || !this._config.entities.length ? html`<ha-button @click=${() => { this._setupStep = 'devices'; }}>Place devices</ha-button>` : nothing}
-          ${!this._config.zones.length || overlaps.length ? html`<ha-button @click=${() => { this._setupStep = 'rooms'; }}>Review rooms</ha-button>` : nothing}
-          <ha-button @click=${() => { this._setupStep = 'elements'; }}>Review Elements</ha-button>
+          ${unplaced.length || !this._config.entities.length ? html`<ha-button @click=${() => this._setSetupStep('devices')}>Place devices</ha-button>` : nothing}
+          ${!this._config.zones.length || overlaps.length ? html`<ha-button @click=${() => this._setSetupStep('rooms')}>Review rooms</ha-button>` : nothing}
+          <ha-button @click=${() => this._setSetupStep('elements')}>Review Elements</ha-button>
         </div>
       </div>
     `;

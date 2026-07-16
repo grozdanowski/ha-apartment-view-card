@@ -1035,6 +1035,11 @@ export class ApartmentViewCard extends LitElement {
     fireEvent(this, 'hass-more-info', { entityId: event.detail.entityId });
   }
 
+  private _onSpatialRoomSelected(event: CustomEvent<{ zoneId: string | null }>): void {
+    event.stopPropagation();
+    this._setSpatialRoomFocus(event.detail.zoneId);
+  }
+
   private _setSpatialRoomFocus = (zoneId: string | null): void => {
     if (this._spatialFocusedZoneId === zoneId) return;
     this._spatialFocusedZoneId = zoneId;
@@ -2435,6 +2440,7 @@ export class ApartmentViewCard extends LitElement {
         .focusedZoneId=${this._spatialFocusedZoneId}
         .showRoomControls=${false}
         @spatial-entity-selected=${this._onSpatialEntitySelected}
+        @spatial-room-selected=${this._onSpatialRoomSelected}
       ></spatial-preview></ha-card>`;
     }
     if (!this.config?.images?.base) {
