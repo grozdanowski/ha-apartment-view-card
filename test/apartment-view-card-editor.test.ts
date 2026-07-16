@@ -86,6 +86,29 @@ describe('apartment-view-card-editor', () => {
     expect(editorPreviewElementId()).toBeNull();
   });
 
+  it('assigns every Element to a searchable room and reports unassigned Elements in Review', async () => {
+    const element = await mount();
+    element._addSpatialElement('custom');
+    await element.updateComplete;
+
+    const roomPicker = element.shadowRoot.querySelector('studio-searchable-select[label="Room"]') as any;
+    expect(roomPicker).toBeTruthy();
+    expect(roomPicker.value).toBe('living');
+    expect(roomPicker.options.map((option: any) => option.label)).toEqual(['Living Room']);
+
+    roomPicker.dispatchEvent(new CustomEvent('value-changed', {
+      detail: { value: '' },
+      bubbles: true,
+      composed: true,
+    }));
+    await element.updateComplete;
+    expect(element.config.spatial.plan.elements[0].zoneId).toBeUndefined();
+
+    element._setSetupStep('review');
+    await element.updateComplete;
+    expect(element.shadowRoot.textContent).toContain('1 Element needs a room.');
+  });
+
   it('pins the live preview while settings scroll and remembers the choice', async () => {
     const element = await mount();
     const toggle = element.shadowRoot.querySelector('input[aria-label="Pin preview while scrolling"]') as HTMLInputElement | null;
@@ -357,7 +380,7 @@ describe('apartment-view-card-editor', () => {
     element._setupStep = 'elements';
     await element.updateComplete;
     const elementPickers = Array.from(element.shadowRoot.querySelectorAll('studio-searchable-select')) as any[];
-    expect(elementPickers.map((picker) => picker.label)).toEqual(['Element to edit', 'Part to edit']);
+    expect(elementPickers.map((picker) => picker.label)).toEqual(['Element to edit', 'Room', 'Part to edit']);
     expect(element.shadowRoot.querySelector('.primitive-list')).toBeNull();
 
     element._setupStep = 'devices';

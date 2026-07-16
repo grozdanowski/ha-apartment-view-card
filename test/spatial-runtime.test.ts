@@ -702,6 +702,33 @@ describe('3D spatial runtime', () => {
     expect(officeMarker.visible).toBe(true);
   });
 
+  it('hides complete Elements assigned to other rooms during room focus', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    const livingElement = new THREE.Group();
+    livingElement.userData.spatialElementRoot = true;
+    livingElement.userData.zoneId = 'living';
+    livingElement.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial()));
+    const officeElement = livingElement.clone();
+    officeElement.userData.spatialElementRoot = true;
+    officeElement.userData.zoneId = 'office';
+    const unassignedElement = livingElement.clone();
+    unassignedElement.userData.spatialElementRoot = true;
+    delete unassignedElement.userData.zoneId;
+    preview._model = new THREE.Group();
+    preview._model.add(livingElement, officeElement, unassignedElement);
+
+    preview.focusedZoneId = 'living';
+    preview._applyFocus();
+    expect(livingElement.visible).toBe(true);
+    expect(officeElement.visible).toBe(false);
+    expect(unassignedElement.visible).toBe(false);
+
+    preview.focusedZoneId = null;
+    preview._applyFocus();
+    expect(officeElement.visible).toBe(true);
+    expect(unassignedElement.visible).toBe(true);
+  });
+
   it('fits every apartment corner inside a narrow mobile overview', () => {
     const preview = document.createElement('spatial-preview') as any;
     Object.defineProperty(preview, 'clientWidth', { value: 390 });

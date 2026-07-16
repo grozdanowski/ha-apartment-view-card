@@ -1938,7 +1938,8 @@ export class ApartmentViewCardEditor extends LitElement {
       x: polygon.reduce((sum, point) => sum + point.x, 0) / polygon.length,
       z: polygon.reduce((sum, point) => sum + point.z, 0) / polygon.length,
     } : shellCenter ?? { x: bounds.centerX, z: bounds.centerZ };
-    return { position, ...(room?.zoneId ? { zoneId: room.zoneId } : {}) };
+    const zoneId = room?.zoneId ?? this._config.zones[0]?.id;
+    return { position, ...(zoneId ? { zoneId } : {}) };
   }
 
   private _addSpatialElement(type: SpatialElementType): void {
@@ -1954,6 +1955,7 @@ export class ApartmentViewCardEditor extends LitElement {
     this._selectedPrimitiveId = added.primitives[0]?.id ?? '';
     this._selectedGlbSurfaceId = '';
     this._commitSpatial({ ...this._spatial(), plan: next });
+    this._setSetupStep('elements');
     this._previewMode = 'edit';
   }
 
@@ -3166,8 +3168,18 @@ export class ApartmentViewCardEditor extends LitElement {
     const glbScopeCount = this._glbSurfaceScope === 'material' ? glbMaterialCount : this._glbSurfaceScope === 'color' ? glbColorCount : 1;
     const elementOptions: SearchableSelectOption[] = plan.elements.map((element, index) => ({
       value: element.id, label: element.name || `Element ${index + 1}`,
-      description: `${element.type.replace('-', ' ')}${element.entityId ? ` · ${element.entityId}` : ''}`,
+      description: [
+        element.type.replace('-', ' '),
+        this._config.zones.find((zone) => zone.id === element.zoneId)?.name ?? 'No room',
+        element.entityId,
+      ].filter(Boolean).join(' · '),
       icon: element.type === 'glb' ? 'mdi:cube-scan' : element.type === 'custom' ? 'mdi:shape-outline' : 'mdi:lightbulb-outline',
+    }));
+    const roomOptions: SearchableSelectOption[] = this._config.zones.filter((zone): zone is ZoneConfig & { id: string } => Boolean(zone.id)).map((zone) => ({
+      value: zone.id,
+      label: zone.name,
+      description: zone.areaId ? `Home Assistant Area · ${zone.areaId}` : 'Spatial room',
+      icon: zone.icon ?? 'mdi:floor-plan',
     }));
     const primitiveOptions: SearchableSelectOption[] = selected?.primitives.map((part, index) => ({
       value: part.id, label: part.name ?? `Part ${index + 1}`,
@@ -3217,6 +3229,8 @@ export class ApartmentViewCardEditor extends LitElement {
         <div class="asset-fields">
           <label><span>Name</span><input type="text" .value=${selected.name ?? ''} placeholder="Optional label"
             @change=${(event: Event) => this._updateSpatialElement({ name: (event.target as HTMLInputElement).value.trim() || undefined })} /></label>
+          <studio-searchable-select label="Room" placeholder="Choose a room" .options=${roomOptions} .value=${selected.zoneId ?? ''}
+            @value-changed=${(event: CustomEvent<{ value: string }>) => this._updateSpatialElement({ zoneId: event.detail.value || undefined })}></studio-searchable-select>
           <label><span>Element type</span><select .value=${selected.type} @change=${(event: Event) => {
             const type = (event.target as HTMLSelectElement).value as SpatialElementType;
             const primitives = elementPrimitivesForType(type);
@@ -3401,7 +3415,9 @@ export class ApartmentViewCardEditor extends LitElement {
     const needsRevealImage = !plan && this._config.options.lightStyle === 'reveal' && !this._config.images.allLights;
     const spatialIssues = plan ? validateSpatialPlan(plan, this._spatial().openings) : [];
     const shellIssues = shell ? validateSpatialShell(shell, new Set(this._config.zones.flatMap((zone) => zone.id ? [zone.id] : []))) : [];
-    const ready = Boolean(plan?.rooms.length || shell?.rooms?.length || this._config.zones.length) && this._config.zones.length > 0 && this._config.entities.length > 0 && !unplaced.length && !overlaps.length && !needsRevealImage && !spatialIssues.some((issue) => issue.severity === 'error') && !shellIssues.some((issue) => issue.severity === 'error');
+    const roomIds = new Set(this._config.zones.flatMap((zone) => zone.id ? [zone.id] : []));
+    const unassignedElements = plan?.elements.filter((element) => !element.zoneId || !roomIds.has(element.zoneId)) ?? [];
+    const ready = Boolean(plan?.rooms.length || shell?.rooms?.length || this._config.zones.length) && this._config.zones.length > 0 && this._config.entities.length > 0 && !unplaced.length && !unassignedElements.length && !overlaps.length && !needsRevealImage && !spatialIssues.some((issue) => issue.severity === 'error') && !shellIssues.some((issue) => issue.severity === 'error');
     const changes = this._homeChanges();
     return html`
       <p class="studio-intro">A final spatial check before the card goes into daily use. Nothing here can trigger a device.</p>
@@ -3424,7 +3440,7 @@ export class ApartmentViewCardEditor extends LitElement {
           <div class="health-item ${unplaced.length ? 'warning' : 'ready'}"><ha-icon icon=${unplaced.length ? 'mdi:map-marker-alert-outline' : 'mdi:check-circle-outline'}></ha-icon><span>${unplaced.length ? `${unplaced.length} device${unplaced.length === 1 ? ' needs' : 's need'} a room.` : 'Every device belongs to a room.'}</span></div>
           <div class="health-item ${overlaps.length ? 'warning' : 'ready'}"><ha-icon icon=${overlaps.length ? 'mdi:vector-intersection' : 'mdi:check-circle-outline'}></ha-icon><span>${overlaps.length ? `${overlaps.length} overlapping room ${overlaps.length === 1 ? 'boundary' : 'boundaries'} found.` : 'Room boundaries are clean.'}</span></div>
           ${needsRevealImage ? html`<div class="health-item warning"><ha-icon icon="mdi:image-alert-outline"></ha-icon><span>Reveal lighting needs an all-lights render, or switch back to render-free lighting.</span></div>` : nothing}
-          ${plan ? html`<div class="health-item ready"><ha-icon icon="mdi:shape-outline"></ha-icon><span>${plan.elements.length} Element${plan.elements.length === 1 ? '' : 's'} placed.</span></div>` : nothing}
+          ${plan ? html`<div class="health-item ${unassignedElements.length ? 'warning' : 'ready'}"><ha-icon icon=${unassignedElements.length ? 'mdi:shape-outline' : 'mdi:check-circle-outline'}></ha-icon><span>${unassignedElements.length ? `${unassignedElements.length} Element${unassignedElements.length === 1 ? ' needs' : 's need'} a room.` : `Every Element belongs to a room.`}</span></div>` : nothing}
         </div>
         <div class="setup-actions">
           ${unplaced.length || !this._config.entities.length ? html`<ha-button @click=${() => this._setSetupStep('devices')}>Place devices</ha-button>` : nothing}

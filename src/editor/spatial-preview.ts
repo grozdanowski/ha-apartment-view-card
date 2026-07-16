@@ -1277,6 +1277,7 @@ export class SpatialPreview extends LitElement {
         );
         element.scale.set(item.scale.x, item.scale.y, item.scale.z);
         element.userData.spatialElementId = item.id;
+        element.userData.spatialElementRoot = true;
         element.userData.entityId = item.entityId;
         element.traverse((node) => {
           node.userData.zoneId = item.zoneId;
@@ -2602,7 +2603,17 @@ export class SpatialPreview extends LitElement {
       });
     });
     this._applyWallCutaway();
+    this._applyElementFocus();
     this._applyEntityMarkerFocus();
+  }
+
+  private _applyElementFocus(): void {
+    if (!this._model) return;
+    this._model.traverse((node) => {
+      if (!node.userData.spatialElementRoot) return;
+      const zoneId = node.userData.zoneId as string | undefined;
+      node.visible = this.focusedZoneId === null || zoneId === this.focusedZoneId;
+    });
   }
 
   private _applyEntityMarkerFocus(): void {
@@ -2798,8 +2809,12 @@ export class SpatialPreview extends LitElement {
   private _beaconEntities(): EntityConfig[] {
     const entities = new Map(this.entities.map((entity) => [entity.entity, entity]));
     this.plan?.elements.forEach((element) => {
-      if (element.entityId && !entities.has(element.entityId)) {
-        entities.set(element.entityId, {
+      if (element.entityId) {
+        const existing = entities.get(element.entityId);
+        entities.set(element.entityId, existing ? {
+          ...existing,
+          zoneId: element.zoneId ?? existing.zoneId,
+        } : {
           entity: element.entityId,
           name: element.name,
           icon: element.type === 'ceiling-light' ? 'mdi:ceiling-light' : element.type === 'light-bulb' ? 'mdi:lightbulb-outline' : undefined,
@@ -2812,8 +2827,12 @@ export class SpatialPreview extends LitElement {
         });
       }
       element.glb?.surfaces.forEach((surface) => {
-        if (!surface.entityId || entities.has(surface.entityId)) return;
-        entities.set(surface.entityId, {
+        if (!surface.entityId) return;
+        const existing = entities.get(surface.entityId);
+        entities.set(surface.entityId, existing ? {
+          ...existing,
+          zoneId: element.zoneId ?? existing.zoneId,
+        } : {
           entity: surface.entityId,
           name: surface.name,
           x: 50,
