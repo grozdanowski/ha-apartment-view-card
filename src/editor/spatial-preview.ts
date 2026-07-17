@@ -583,9 +583,6 @@ export class SpatialPreview extends LitElement {
     [...zoneIds].slice(0, 31).forEach((zoneId, index) => {
       const layer = index + 1;
       this._zoneLightLayers.set(zoneId, layer);
-      // The camera must collect room-scoped lights before Three.js can match them
-      // against receiving geometry. Every visible mesh also retains layer 0.
-      this._camera?.layers.enable(layer);
     });
   }
 
@@ -607,10 +604,9 @@ export class SpatialPreview extends LitElement {
     light.shadow.camera.near = 0.08;
     light.shadow.camera.far = Math.max(4.5, light.distance || 4.5);
     const roomLayer = zoneId ? this._zoneLightLayers.get(zoneId) : undefined;
-    const layer = roomLayer ?? 0;
-    light.layers.set(layer);
-    light.shadow.camera.layers.set(layer);
-    light.userData.spatialLightLayer = layer;
+    light.layers.set(0);
+    light.shadow.camera.layers.set(roomLayer ?? 0);
+    light.userData.spatialShadowLayer = roomLayer ?? 0;
   }
 
   private _isConfiguredGroupWithPlacedChildren(entityId: string): boolean {

@@ -413,7 +413,7 @@ describe('3D spatial runtime', () => {
     expect(practical.shadow.camera.far).toBeGreaterThanOrEqual(4.5);
   });
 
-  it('confines practical light to its room while shared walls receive adjacent room light', () => {
+  it('keeps practical lights visible to the main camera while scoping their shadow casters by room', () => {
     const preview = document.createElement('spatial-preview') as any;
     preview._camera = new THREE.PerspectiveCamera();
     preview.zones = [
@@ -433,18 +433,21 @@ describe('3D spatial runtime', () => {
     preview._configurePracticalLight(livingLight, 'living');
     const daylight = new THREE.DirectionalLight(0xffffff, 1);
 
-    expect(livingLight.layers.test(livingFloor.layers)).toBe(true);
-    expect(livingLight.layers.test(hallwayFloor.layers)).toBe(false);
-    expect(livingLight.layers.test(sharedWall.layers)).toBe(true);
+    expect(livingLight.layers.mask).toBe(1);
+    expect(preview._camera.layers.mask).toBe(1);
+    expect(livingLight.shadow.camera.layers.test(livingFloor.layers)).toBe(true);
+    expect(livingLight.shadow.camera.layers.test(hallwayFloor.layers)).toBe(false);
+    expect(livingLight.shadow.camera.layers.test(sharedWall.layers)).toBe(true);
     expect(daylight.layers.test(livingFloor.layers)).toBe(true);
     expect(daylight.layers.test(hallwayFloor.layers)).toBe(true);
     expect(livingLight.layers.test(preview._camera.layers)).toBe(true);
-    expect(livingLight.shadow.camera.layers.mask).toBe(livingLight.layers.mask);
+    expect(livingLight.shadow.camera.layers.mask).not.toBe(livingLight.layers.mask);
   });
 
-  it('wires generated room floors, shared architecture, and entity lights to room layers', () => {
+  it('wires generated room floors and shared architecture into room shadow layers', () => {
     const preview = document.createElement('spatial-preview') as any;
     preview._scene = new THREE.Scene();
+    preview._camera = new THREE.PerspectiveCamera();
     preview.dimensions = { width: 4, aspectRatio: 2, wallHeight: 2.6 };
     preview.zones = [
       { id: 'living', name: 'Living Room', x: 0, y: 0, width: 50, height: 100 },
@@ -483,9 +486,11 @@ describe('3D spatial runtime', () => {
     expect(hallwayFloor).toBeDefined();
     expect(sharedWall).toBeDefined();
     expect(practical).toBeDefined();
-    expect(practical!.layers.test(livingFloor!.layers)).toBe(true);
-    expect(practical!.layers.test(hallwayFloor!.layers)).toBe(false);
-    expect(practical!.layers.test(sharedWall!.layers)).toBe(true);
+    expect(practical!.layers.mask).toBe(1);
+    expect(preview._camera.layers.mask).toBe(1);
+    expect(practical!.shadow.camera.layers.test(livingFloor!.layers)).toBe(true);
+    expect(practical!.shadow.camera.layers.test(hallwayFloor!.layers)).toBe(false);
+    expect(practical!.shadow.camera.layers.test(sharedWall!.layers)).toBe(true);
   });
 
   it('represents both light Element types as beacon anchors with practical light and no solid mesh', () => {
