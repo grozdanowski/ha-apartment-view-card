@@ -1071,6 +1071,14 @@ export class ApartmentViewCard extends LitElement {
         height: min(780px, 86vh);
         min-height: 0;
       }
+      @media (min-width: 769px) {
+        .immersive-card.fixed-position {
+          inset: 40px;
+          width: calc(100vw - 80px);
+          height: calc(100dvh - 80px);
+          min-height: calc(100dvh - 80px);
+        }
+      }
       .sr-only {
         position: absolute;
         width: 1px;
