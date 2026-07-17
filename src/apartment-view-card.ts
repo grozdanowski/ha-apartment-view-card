@@ -150,7 +150,6 @@ export class ApartmentViewCard extends LitElement {
   @state() private _isGesturing = false;
   @state() private _focusedZone: ZoneConfig | null = null;
   @state() private _spatialFocusedZoneId: string | null = null;
-  @state() private _immersiveCompact = false;
   /** Entities currently driven by the control surface (empty = closed). */
   @state() private _controlled: string[] = [];
   /** "Lights control" multi-select mode. */
@@ -184,7 +183,6 @@ export class ApartmentViewCard extends LitElement {
 
   private _ro?: ResizeObserver;
   private _editModeObserver?: MutationObserver;
-  private _immersiveScrollRaf = 0;
   private _mql?: MediaQueryList;
   /** The .wrapper currently carrying the non-passive multi-touch guards. */
   private _wrapperTouchTarget: HTMLElement | null = null;
@@ -1208,7 +1206,6 @@ export class ApartmentViewCard extends LitElement {
         background: transparent;
         transition: height 320ms cubic-bezier(0.22, 1, 0.36, 1);
       }
-      .immersive-spatial-cluster.compact .immersive-stage { height: var(--immersive-compact-height, 240px); }
       .immersive-stage spatial-preview {
         display: block;
         width: 100%;
@@ -1337,8 +1334,7 @@ export class ApartmentViewCard extends LitElement {
           grid-template-rows: minmax(0, 1fr) auto;
           background: transparent;
         }
-        .immersive-stage,
-        .immersive-spatial-cluster.compact .immersive-stage { height: 100%; }
+        .immersive-stage { height: 100%; }
         .immersive-navigation { background: transparent; }
         .immersive-responsive-content {
           display: grid;
@@ -1556,8 +1552,6 @@ export class ApartmentViewCard extends LitElement {
     window.removeEventListener('keydown', this._handleKeyDown);
     clearTimeout(this._pulseTimer);
     clearTimeout(this._floorFadeTimer);
-    cancelAnimationFrame(this._immersiveScrollRaf);
-    this._immersiveScrollRaf = 0;
     this._wheelHintTimers.forEach(clearTimeout);
     this._wheelHintTimers = [];
     this._clearAnimating();
@@ -2641,17 +2635,6 @@ export class ApartmentViewCard extends LitElement {
     return configured.length ? configured : this._defaultImmersiveBlocks(zoneId);
   }
 
-  private _onImmersiveScroll = (event: Event): void => {
-    const scroller = event.currentTarget as HTMLElement;
-    if (this._immersiveScrollRaf) cancelAnimationFrame(this._immersiveScrollRaf);
-    this._immersiveScrollRaf = requestAnimationFrame(() => {
-      this._immersiveScrollRaf = 0;
-      const intro = scroller.querySelector<HTMLElement>('.immersive-intro');
-      const next = scroller.scrollTop > Math.max(24, (intro?.offsetHeight ?? 0) - 24);
-      if (next !== this._immersiveCompact) this._immersiveCompact = next;
-    });
-  };
-
   private _renderImmersiveSpatialCard(spatial: SpatialConfig, inspectingElement?: { id: string }): TemplateResult {
     const experience = this.config.experience!;
     const title = experience.intro.title || 'Home';
@@ -2661,21 +2644,20 @@ export class ApartmentViewCard extends LitElement {
     const fixedPosition = this._immersiveUsesFixedPosition(experience);
     const style = [
       `--immersive-expanded-height:${experience.mobile.expandedHeight}px`,
-      `--immersive-compact-height:${experience.mobile.compactHeight}px`,
       `--immersive-bottom-inset:${experience.mobile.bottomInset}px`,
       `--immersive-spatial-ratio:${Math.round(experience.landscape.spatialRatio * 100)}%`,
     ].join(';');
     return html`<ha-card class="immersive-card ${preview ? 'editor-preview' : ''} ${fixedPosition ? 'fixed-position' : 'in-flow'} ${this._dashboardEditing ? 'dashboard-editing' : ''}" style=${style}>
       ${!preview ? html`<button type="button" class="immersive-edit-dashboard" aria-label="Edit dashboard" title="Edit dashboard"
         @click=${this._requestDashboardEdit}><ha-icon icon="mdi:pencil-outline"></ha-icon></button>` : nothing}
-      <div class="immersive-shell" @scroll=${this._onImmersiveScroll}>
+      <div class="immersive-shell">
         <section class="immersive-spatial-column" aria-label="Spatial home">
           <header class="immersive-intro">
             <h1>${this._renderInlineEmphasis(title.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_match: string, token: string) => this._templateValue(token)))}</h1>
             ${subtitle ? html`<div class="immersive-intro-copy">${this._renderTemplateParagraphs(subtitle)}</div>` : nothing}
             ${this._renderPresenceChips(experience.intro.presenceEntities ?? [])}
           </header>
-          <div class="immersive-spatial-cluster ${this._immersiveCompact ? 'compact' : ''}">
+          <div class="immersive-spatial-cluster">
             <div class="immersive-stage">
               ${this._spatialFocusedZoneId !== null ? html`<button type="button" class="immersive-back spatial-room-back"
                 aria-label="Back to apartment overview" @click=${() => this._setSpatialRoomFocus(null)}>

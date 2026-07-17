@@ -3927,8 +3927,6 @@ export class ApartmentViewCardEditor extends LitElement {
         <div class="settings-grid">
           <label><span>Mobile expanded height (px)</span><input type="number" min="240" max="1000" step="10" .value=${String(experience.mobile.expandedHeight)}
             @change=${(event: Event) => this._updateExperience({ mobile: { ...experience.mobile, expandedHeight: Number((event.target as HTMLInputElement).value) } })} /></label>
-          <label><span>Mobile compact height (px)</span><input type="number" min="120" max="600" step="10" .value=${String(experience.mobile.compactHeight)}
-            @change=${(event: Event) => this._updateExperience({ mobile: { ...experience.mobile, compactHeight: Number((event.target as HTMLInputElement).value) } })} /></label>
           <label><span>Mobile bottom inset (px)</span><input type="number" min="0" max="400" step="10" .value=${String(experience.mobile.bottomInset)}
             @change=${(event: Event) => this._updateExperience({ mobile: { ...experience.mobile, bottomInset: Number((event.target as HTMLInputElement).value) } })} /></label>
           <label class="checkbox-field"><input type="checkbox" aria-label="Fixed position on mobile"

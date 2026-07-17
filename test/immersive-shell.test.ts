@@ -76,32 +76,14 @@ describe('immersive spatial shell', () => {
     expect((card.shadowRoot.querySelector('spatial-preview') as any).focusedZoneId).toBeNull();
   });
 
-  it('compacts the mobile spatial stage after the intro scrolls away', async () => {
+  it('keeps the spatial stage stable while the shell scrolls', async () => {
     const card = await mount();
     const shell = card.shadowRoot.querySelector('.immersive-shell') as HTMLElement;
-    const intro = card.shadowRoot.querySelector('.immersive-intro') as HTMLElement;
-    Object.defineProperty(intro, 'offsetHeight', { configurable: true, value: 180 });
     shell.scrollTop = 200;
     shell.dispatchEvent(new Event('scroll'));
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     await card.updateComplete;
-    expect(card.shadowRoot.querySelector('.immersive-spatial-cluster')?.classList.contains('compact')).toBe(true);
-  });
-
-  it('keeps the compact spatial stage when changing rooms after scrolling', async () => {
-    const card = await mount();
-    const shell = card.shadowRoot.querySelector('.immersive-shell') as HTMLElement;
-    const intro = card.shadowRoot.querySelector('.immersive-intro') as HTMLElement;
-    Object.defineProperty(intro, 'offsetHeight', { configurable: true, value: 180 });
-    shell.scrollTop = 200;
-    shell.dispatchEvent(new Event('scroll'));
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    await card.updateComplete;
-    expect(card._immersiveCompact).toBe(true);
-
-    (card.shadowRoot.querySelector('.immersive-room-nav button') as HTMLButtonElement).click();
-    await card.updateComplete;
-    expect(card._immersiveCompact).toBe(true);
+    expect(card.shadowRoot.querySelector('.immersive-spatial-cluster')?.classList.contains('compact')).toBe(false);
   });
 
   it('falls back into dashboard flow while Lovelace edit mode is active', async () => {
