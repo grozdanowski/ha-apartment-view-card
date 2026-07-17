@@ -1186,9 +1186,9 @@ export class ApartmentViewCard extends LitElement {
       .immersive-edit-dashboard:focus-visible { outline: 2px solid #9fd8df; outline-offset: 3px; }
       .immersive-edit-dashboard ha-icon { --mdc-icon-size: 18px; }
       .immersive-spatial-cluster {
-        position: sticky;
+        position: relative;
         top: 0;
-        z-index: 5;
+        z-index: 0;
         box-sizing: border-box;
         width: 100%;
         min-width: 0;
