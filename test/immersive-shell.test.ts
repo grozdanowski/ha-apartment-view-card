@@ -60,6 +60,8 @@ describe('immersive spatial shell', () => {
     expect(content.shadowRoot?.querySelector('av-lovelace-card-host')).toBeTruthy();
     expect((card.shadowRoot.querySelector('spatial-preview') as any).fill).toBe(true);
     expect((card.shadowRoot.querySelector('spatial-preview') as any).cameraTransitionMs).toBe(880);
+    expect(card.shadowRoot.querySelector('.immersive-content-column .immersive-navigation-desktop')).toBeTruthy();
+    expect(card.shadowRoot.querySelector('.immersive-spatial-column .immersive-navigation-mobile')).toBeTruthy();
   });
 
   it('moves into a room and exposes one canvas-level Back control', async () => {

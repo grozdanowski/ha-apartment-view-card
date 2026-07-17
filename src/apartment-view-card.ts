@@ -1222,6 +1222,7 @@ export class ApartmentViewCard extends LitElement {
         align-items: stretch;
         background: transparent;
       }
+      .immersive-navigation-desktop { display: none; }
       .immersive-navigation .immersive-room-nav { flex: 1 1 auto; }
       .immersive-floor-select {
         display: inline-flex;
@@ -1280,8 +1281,16 @@ export class ApartmentViewCard extends LitElement {
         .immersive-stage,
         .immersive-spatial-cluster.compact .immersive-stage { height: 100%; }
         .immersive-navigation { background: transparent; }
-        .immersive-room-nav { padding: 0 34px; background: transparent; }
-        .immersive-floor-select { padding-left: 34px; }
+        .immersive-navigation-mobile { display: none; }
+        .immersive-navigation-desktop {
+          display: flex;
+          margin: 0 0 22px;
+        }
+        .immersive-navigation-mobile .immersive-room-nav { padding: 0 34px; }
+        .immersive-navigation-desktop .immersive-room-nav { padding: 0; }
+        .immersive-navigation-mobile .immersive-floor-select { padding-left: 34px; }
+        .immersive-navigation-desktop .immersive-floor-select { padding-left: 0; }
+        .immersive-room-nav { background: transparent; }
         .immersive-content-column {
           min-height: 0;
           padding: 48px 42px calc(var(--immersive-bottom-inset, 100px) + env(safe-area-inset-bottom));
@@ -2583,23 +2592,11 @@ export class ApartmentViewCard extends LitElement {
                 @spatial-room-selected=${this._onSpatialRoomSelected}
               ></spatial-preview>
             </div>
-            ${!inspectingElement && this._floorData.zones.length ? html`<div class="immersive-navigation">
-              ${this.config.floors && this.config.floors.length > 1 ? html`<label class="immersive-floor-select">
-                <ha-icon icon="mdi:layers-outline"></ha-icon><span class="sr-only">Floor</span>
-                <select aria-label="Floor" .value=${String(this._floor)}
-                  @change=${(event: Event) => this._switchFloor(Number((event.target as HTMLSelectElement).value))}>
-                  ${this.config.floors.map((floor, index) => html`<option value=${String(index)}>${floor.name}</option>`)}
-                </select>
-              </label>` : nothing}
-              <nav class="immersive-room-nav spatial-room-navigation spatial-room-rail" aria-label="Rooms">
-                ${this._floorData.zones.map((zone) => html`<button type="button"
-                  aria-pressed=${this._spatialFocusedZoneId === zone.id}
-                  @click=${() => this._setSpatialRoomFocus(zone.id ?? null)}>${zone.name}</button>`)}
-              </nav>
-            </div>` : nothing}
+            ${!inspectingElement && this._floorData.zones.length ? this._renderImmersiveRoomNavigation('mobile') : nothing}
           </div>
         </section>
         <main class="immersive-content-column" aria-label=${focusedZone ? `${focusedZone.name} controls` : 'Home controls'}>
+          ${!inspectingElement && this._floorData.zones.length ? this._renderImmersiveRoomNavigation('desktop') : nothing}
           <av-immersive-content
             .hass=${this.hass}
             .blocks=${this._immersiveBlocks(this._spatialFocusedZoneId)}
@@ -2609,6 +2606,23 @@ export class ApartmentViewCard extends LitElement {
         </main>
       </div>
     </ha-card>`;
+  }
+
+  private _renderImmersiveRoomNavigation(placement: 'mobile' | 'desktop'): TemplateResult {
+    return html`<div class="immersive-navigation immersive-navigation-${placement}">
+      ${this.config.floors && this.config.floors.length > 1 ? html`<label class="immersive-floor-select">
+        <ha-icon icon="mdi:layers-outline"></ha-icon><span class="sr-only">Floor</span>
+        <select aria-label="Floor" .value=${String(this._floor)}
+          @change=${(event: Event) => this._switchFloor(Number((event.target as HTMLSelectElement).value))}>
+          ${this.config.floors.map((floor, index) => html`<option value=${String(index)}>${floor.name}</option>`)}
+        </select>
+      </label>` : nothing}
+      <nav class="immersive-room-nav spatial-room-navigation spatial-room-rail" aria-label="Rooms">
+        ${this._floorData.zones.map((zone) => html`<button type="button"
+          aria-pressed=${this._spatialFocusedZoneId === zone.id}
+          @click=${() => this._setSpatialRoomFocus(zone.id ?? null)}>${zone.name}</button>`)}
+      </nav>
+    </div>`;
   }
 
   private _runQuickAction(qa: QuickAction): void {
