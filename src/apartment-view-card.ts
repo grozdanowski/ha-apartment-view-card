@@ -1031,11 +1031,11 @@ export class ApartmentViewCard extends LitElement {
         --ha-card-border-color: transparent;
         --ha-card-box-shadow: none;
         box-sizing: border-box;
-        position: fixed;
-        inset: 0;
+        position: relative;
+        inset: auto;
         z-index: 0;
         display: block;
-        width: 100vw;
+        width: 100%;
         height: 100dvh;
         min-height: 100dvh;
         overflow: hidden;
@@ -1060,8 +1060,8 @@ export class ApartmentViewCard extends LitElement {
         inset: auto;
         z-index: auto;
         width: 100%;
-        height: auto;
-        min-height: 0;
+        height: 100dvh;
+        min-height: 100dvh;
       }
       .immersive-card.in-flow .immersive-shell {
         height: auto;
@@ -1070,6 +1070,13 @@ export class ApartmentViewCard extends LitElement {
       .immersive-card.editor-preview.in-flow {
         height: min(780px, 86vh);
         min-height: 0;
+      }
+      .immersive-card.fixed-position {
+        position: fixed;
+        inset: 0;
+        width: 100vw;
+        height: 100dvh;
+        min-height: 100dvh;
       }
       @media (min-width: 769px) {
         .immersive-card.fixed-position {
@@ -1222,7 +1229,7 @@ export class ApartmentViewCard extends LitElement {
         align-items: stretch;
         background: transparent;
       }
-      .immersive-navigation-desktop { display: none; }
+      .immersive-responsive-content { display: contents; }
       .immersive-navigation .immersive-room-nav { flex: 1 1 auto; }
       .immersive-floor-select {
         display: inline-flex;
@@ -1281,15 +1288,19 @@ export class ApartmentViewCard extends LitElement {
         .immersive-stage,
         .immersive-spatial-cluster.compact .immersive-stage { height: 100%; }
         .immersive-navigation { background: transparent; }
-        .immersive-navigation-mobile { display: none; }
-        .immersive-navigation-desktop {
+        .immersive-responsive-content {
+          display: grid;
+          min-width: 0;
+          min-height: 0;
+          grid-template-rows: auto minmax(0, 1fr);
+          overflow: hidden;
+        }
+        .immersive-navigation {
           display: flex;
           margin: 0 0 22px;
         }
-        .immersive-navigation-mobile .immersive-room-nav { padding: 0 34px; }
-        .immersive-navigation-desktop .immersive-room-nav { padding: 0; }
-        .immersive-navigation-mobile .immersive-floor-select { padding-left: 34px; }
-        .immersive-navigation-desktop .immersive-floor-select { padding-left: 0; }
+        .immersive-room-nav { padding: 0; }
+        .immersive-floor-select { padding-left: 0; }
         .immersive-room-nav { background: transparent; }
         .immersive-content-column {
           min-height: 0;
@@ -2592,24 +2603,25 @@ export class ApartmentViewCard extends LitElement {
                 @spatial-room-selected=${this._onSpatialRoomSelected}
               ></spatial-preview>
             </div>
-            ${!inspectingElement && this._floorData.zones.length ? this._renderImmersiveRoomNavigation('mobile') : nothing}
           </div>
         </section>
-        <main class="immersive-content-column" aria-label=${focusedZone ? `${focusedZone.name} controls` : 'Home controls'}>
-          ${!inspectingElement && this._floorData.zones.length ? this._renderImmersiveRoomNavigation('desktop') : nothing}
-          <av-immersive-content
-            .hass=${this.hass}
-            .blocks=${this._immersiveBlocks(this._spatialFocusedZoneId)}
-            .entities=${this._floorData.entities}
-            .preview=${preview}
-          ></av-immersive-content>
-        </main>
+        <div class="immersive-responsive-content">
+          ${!inspectingElement && this._floorData.zones.length ? this._renderImmersiveRoomNavigation() : nothing}
+          <main class="immersive-content-column" aria-label=${focusedZone ? `${focusedZone.name} controls` : 'Home controls'}>
+            <av-immersive-content
+              .hass=${this.hass}
+              .blocks=${this._immersiveBlocks(this._spatialFocusedZoneId)}
+              .entities=${this._floorData.entities}
+              .preview=${preview}
+            ></av-immersive-content>
+          </main>
+        </div>
       </div>
     </ha-card>`;
   }
 
-  private _renderImmersiveRoomNavigation(placement: 'mobile' | 'desktop'): TemplateResult {
-    return html`<div class="immersive-navigation immersive-navigation-${placement}">
+  private _renderImmersiveRoomNavigation(): TemplateResult {
+    return html`<div class="immersive-navigation">
       ${this.config.floors && this.config.floors.length > 1 ? html`<label class="immersive-floor-select">
         <ha-icon icon="mdi:layers-outline"></ha-icon><span class="sr-only">Floor</span>
         <select aria-label="Floor" .value=${String(this._floor)}

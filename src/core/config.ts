@@ -1270,8 +1270,8 @@ export function normalizeExperienceConfig(
     },
     fixedPosition: {
       ...fixedPosition,
-      mobile: typeof fixedPosition.mobile === 'boolean' ? fixedPosition.mobile : true,
-      desktop: typeof fixedPosition.desktop === 'boolean' ? fixedPosition.desktop : true,
+      mobile: typeof fixedPosition.mobile === 'boolean' ? fixedPosition.mobile : false,
+      desktop: typeof fixedPosition.desktop === 'boolean' ? fixedPosition.desktop : false,
     },
     landscape: {
       ...landscape,

@@ -22,7 +22,7 @@ describe('immersive experience config', () => {
         compactHeight: 240,
         bottomInset: 100,
       },
-      fixedPosition: { mobile: true, desktop: true },
+      fixedPosition: { mobile: false, desktop: false },
       landscape: { spatialRatio: 0.45 },
       motion: { resetSeconds: 10, transitionMs: 900, orbitSeconds: 90 },
       quality: 'auto',
@@ -103,7 +103,7 @@ describe('immersive experience config', () => {
     expect(config.experience.landscape.spatialRatio).toBe(0.45);
     expect(config.experience.motion.transitionMs).toBe(900);
     expect(config.experience.quality).toBe('auto');
-    expect(config.experience.fixedPosition).toEqual({ mobile: true, desktop: true });
+    expect(config.experience.fixedPosition).toEqual({ mobile: false, desktop: false });
   });
 });
 

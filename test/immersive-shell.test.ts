@@ -17,7 +17,7 @@ function config() {
     experience: {
       intro: { title: 'Hello, {{ user }}.', subtitle: '**Everything is calm.**\n\nChoose a room.' },
       mobile: { expandedHeight: 510, compactHeight: 220, bottomInset: 112 },
-      fixedPosition: { mobile: true, desktop: true },
+      fixedPosition: { mobile: false, desktop: false },
       landscape: { spatialRatio: 0.48 },
       motion: { resetSeconds: 10, transitionMs: 880, orbitSeconds: 120 },
       quality: 'balanced',
@@ -60,8 +60,8 @@ describe('immersive spatial shell', () => {
     expect(content.shadowRoot?.querySelector('av-lovelace-card-host')).toBeTruthy();
     expect((card.shadowRoot.querySelector('spatial-preview') as any).fill).toBe(true);
     expect((card.shadowRoot.querySelector('spatial-preview') as any).cameraTransitionMs).toBe(880);
-    expect(card.shadowRoot.querySelector('.immersive-content-column .immersive-navigation-desktop')).toBeTruthy();
-    expect(card.shadowRoot.querySelector('.immersive-spatial-column .immersive-navigation-mobile')).toBeTruthy();
+    expect(card.shadowRoot.querySelectorAll('.immersive-room-nav')).toHaveLength(1);
+    expect(card.shadowRoot.querySelector('.immersive-responsive-content .immersive-navigation')).toBeTruthy();
   });
 
   it('moves into a room and exposes one canvas-level Back control', async () => {
