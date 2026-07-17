@@ -408,6 +408,12 @@ export interface ImmersiveExperienceConfig {
     bottomInset: number;
     [key: string]: unknown;
   };
+  /** Pin the live shell to the viewport independently per screen class. */
+  fixedPosition: {
+    mobile: boolean;
+    desktop: boolean;
+    [key: string]: unknown;
+  };
   landscape: {
     /** Fraction of the viewport reserved for the spatial column. */
     spatialRatio: number;
@@ -1237,6 +1243,7 @@ export function normalizeExperienceConfig(
   const source = objectConfig(raw) ?? {};
   const intro = objectConfig(source.intro) ?? {};
   const mobile = objectConfig(source.mobile) ?? {};
+  const fixedPosition = objectConfig(source.fixedPosition) ?? {};
   const landscape = objectConfig(source.landscape) ?? {};
   const motion = objectConfig(source.motion) ?? {};
   const expandedHeight = clamp(mobile.expandedHeight, 240, 1_000, 480);
@@ -1260,6 +1267,11 @@ export function normalizeExperienceConfig(
       expandedHeight,
       compactHeight,
       bottomInset: clamp(mobile.bottomInset, 0, 400, 100),
+    },
+    fixedPosition: {
+      ...fixedPosition,
+      mobile: typeof fixedPosition.mobile === 'boolean' ? fixedPosition.mobile : true,
+      desktop: typeof fixedPosition.desktop === 'boolean' ? fixedPosition.desktop : true,
     },
     landscape: {
       ...landscape,

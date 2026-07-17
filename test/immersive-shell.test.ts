@@ -17,6 +17,7 @@ function config() {
     experience: {
       intro: { title: 'Hello, {{ user }}.', subtitle: '**Everything is calm.**\n\nChoose a room.' },
       mobile: { expandedHeight: 510, compactHeight: 220, bottomInset: 112 },
+      fixedPosition: { mobile: true, desktop: true },
       landscape: { spatialRatio: 0.48 },
       motion: { resetSeconds: 10, transitionMs: 880, orbitSeconds: 120 },
       quality: 'balanced',
@@ -99,6 +100,17 @@ describe('immersive spatial shell', () => {
     (card.shadowRoot.querySelector('.immersive-room-nav button') as HTMLButtonElement).click();
     await card.updateComplete;
     expect(card._immersiveCompact).toBe(true);
+  });
+
+  it('falls back into dashboard flow while Lovelace edit mode is active', async () => {
+    const card = await mount();
+    document.body.classList.add('edit-mode');
+    (card as any)._syncDashboardEditing();
+    await card.updateComplete;
+    expect((card as any)._dashboardEditing).toBe(true);
+    expect(card.shadowRoot.querySelector('.immersive-card')?.classList.contains('in-flow')).toBe(true);
+    document.body.classList.remove('edit-mode');
+    (card as any)._syncDashboardEditing();
   });
 
   it('forwards unrelated HA state ticks to immersive children without rebuilding the host', async () => {

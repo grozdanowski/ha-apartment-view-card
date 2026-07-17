@@ -824,6 +824,8 @@ export class ApartmentViewCardEditor extends LitElement {
     .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; margin-top: 18px; }
     .settings-grid label,
     .content-field { display: grid; gap: 5px; min-width: 0; color: var(--secondary-text-color); font-size: 12px; }
+    .settings-grid label.checkbox-field { display: flex; align-items: center; gap: 9px; min-height: 44px; }
+    .settings-grid label.checkbox-field input { width: 18px; min-height: 18px; accent-color: var(--studio-accent); }
     .settings-grid .wide { grid-column: 1 / -1; }
     .settings-grid input,
     .settings-grid select,
@@ -3894,6 +3896,7 @@ export class ApartmentViewCardEditor extends LitElement {
       version: 1,
       intro: { title: 'Home', subtitle: '' },
       mobile: { expandedHeight: 480, compactHeight: 240, bottomInset: 100 },
+      fixedPosition: { mobile: true, desktop: true },
       landscape: { spatialRatio: 0.45 },
       motion: { resetSeconds: 10, transitionMs: 900, orbitSeconds: 90 },
       quality: 'auto',
@@ -3920,7 +3923,7 @@ export class ApartmentViewCardEditor extends LitElement {
       </div>
       <div class="setup-card">
         <h3>Responsive layout</h3>
-        <p>Use stable pixel heights on mobile and reserve a deliberate share of landscape width for the spatial stage.</p>
+        <p>Use stable pixel heights on mobile and reserve a deliberate share of landscape width for the spatial stage. Dashboard edit mode always disables fixed positioning so the card stays inside the layout.</p>
         <div class="settings-grid">
           <label><span>Mobile expanded height (px)</span><input type="number" min="240" max="1000" step="10" .value=${String(experience.mobile.expandedHeight)}
             @change=${(event: Event) => this._updateExperience({ mobile: { ...experience.mobile, expandedHeight: Number((event.target as HTMLInputElement).value) } })} /></label>
@@ -3928,6 +3931,12 @@ export class ApartmentViewCardEditor extends LitElement {
             @change=${(event: Event) => this._updateExperience({ mobile: { ...experience.mobile, compactHeight: Number((event.target as HTMLInputElement).value) } })} /></label>
           <label><span>Mobile bottom inset (px)</span><input type="number" min="0" max="400" step="10" .value=${String(experience.mobile.bottomInset)}
             @change=${(event: Event) => this._updateExperience({ mobile: { ...experience.mobile, bottomInset: Number((event.target as HTMLInputElement).value) } })} /></label>
+          <label class="checkbox-field"><input type="checkbox" aria-label="Fixed position on mobile"
+            .checked=${experience.fixedPosition.mobile}
+            @change=${(event: Event) => this._updateExperience({ fixedPosition: { ...experience.fixedPosition, mobile: (event.target as HTMLInputElement).checked } })} /><span>Fixed position on mobile</span></label>
+          <label class="checkbox-field"><input type="checkbox" aria-label="Fixed position on desktop"
+            .checked=${experience.fixedPosition.desktop}
+            @change=${(event: Event) => this._updateExperience({ fixedPosition: { ...experience.fixedPosition, desktop: (event.target as HTMLInputElement).checked } })} /><span>Fixed position on desktop</span></label>
           <label><span>Landscape spatial ratio</span><input type="range" min="0.25" max="0.75" step="0.01" .value=${String(experience.landscape.spatialRatio)}
             @change=${(event: Event) => this._updateExperience({ landscape: { ...experience.landscape, spatialRatio: Number((event.target as HTMLInputElement).value) } })} /><output>${Math.round(experience.landscape.spatialRatio * 100)}%</output></label>
         </div>

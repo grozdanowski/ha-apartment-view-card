@@ -4,7 +4,7 @@ import { repeat } from 'lit/directives/repeat.js';
 import { guard } from 'lit/directives/guard.js';
 import { fireEvent } from 'custom-card-helpers';
 import type { HassLike } from './core/ha-types';
-import { normalizeConfig, zoneForEntity, zoneForPoint, type ApartmentViewConfig, type ContentBlock, type EntityConfig, type ZoneConfig, type QuickAction, type ImagesConfig, type SpatialConfig } from './core/config';
+import { normalizeConfig, zoneForEntity, zoneForPoint, type ApartmentViewConfig, type ContentBlock, type EntityConfig, type ZoneConfig, type QuickAction, type ImagesConfig, type SpatialConfig, type ImmersiveExperienceConfig } from './core/config';
 import './editor/apartment-view-card-editor';
 import './editor/spatial-preview';
 import './runtime/immersive-content';
@@ -115,6 +115,7 @@ export class ApartmentViewCard extends LitElement {
   @state() private _editorElementPreviewId: string | null = null;
   /** True when the viewport is a mobile screen (drives the icon-size override). */
   @state() private _isMobileScreen = false;
+  @state() private _dashboardEditing = false;
   /**
    * Base image aspect (naturalHeight / naturalWidth); null until the image
    * loads. The overlay viewport height is DERIVED from this (width × aspect)
@@ -182,6 +183,7 @@ export class ApartmentViewCard extends LitElement {
   private _inPreview: boolean | null = null;
 
   private _ro?: ResizeObserver;
+  private _editModeObserver?: MutationObserver;
   private _immersiveScrollRaf = 0;
   private _mql?: MediaQueryList;
   /** The .wrapper currently carrying the non-passive multi-touch guards. */
@@ -1053,6 +1055,22 @@ export class ApartmentViewCard extends LitElement {
         height: min(780px, 86vh);
         min-height: 0;
       }
+      .immersive-card.in-flow {
+        position: relative;
+        inset: auto;
+        z-index: auto;
+        width: 100%;
+        height: auto;
+        min-height: 0;
+      }
+      .immersive-card.in-flow .immersive-shell {
+        height: auto;
+        min-height: min(560px, 100dvh);
+      }
+      .immersive-card.editor-preview.in-flow {
+        height: min(780px, 86vh);
+        min-height: 0;
+      }
       .sr-only {
         position: absolute;
         width: 1px;
@@ -1340,6 +1358,15 @@ export class ApartmentViewCard extends LitElement {
 
   public connectedCallback(): void {
     super.connectedCallback();
+    this._syncDashboardEditing();
+    if (typeof MutationObserver !== 'undefined' && document.body) {
+      this._editModeObserver = new MutationObserver(() => this._syncDashboardEditing());
+      this._editModeObserver.observe(document.body, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'edit-mode', 'mode'],
+      });
+    }
     window.addEventListener(ELEMENT_INSPECTOR_EVENT, this._onEditorElementPreview as EventListener);
     if (this._isCardEditorPreview()) this._editorElementPreviewId = editorPreviewElementId();
     this.addEventListener('wheel', this._onWheel, { passive: false });
@@ -1437,6 +1464,8 @@ export class ApartmentViewCard extends LitElement {
 
   public disconnectedCallback(): void {
     super.disconnectedCallback();
+    this._editModeObserver?.disconnect();
+    this._editModeObserver = undefined;
     window.removeEventListener(ELEMENT_INSPECTOR_EVENT, this._onEditorElementPreview as EventListener);
     this.removeEventListener('wheel', this._onWheel);
     this.removeEventListener('gesturestart', this._onGestureStart);
@@ -1483,6 +1512,46 @@ export class ApartmentViewCard extends LitElement {
       node = node.parentNode ?? (root instanceof ShadowRoot ? root.host : null);
     }
     return false;
+  }
+
+  private _isDashboardEditing(): boolean {
+    let node: Node | null = this.parentNode
+      ?? ((this.getRootNode() instanceof ShadowRoot) ? (this.getRootNode() as ShadowRoot).host : null);
+    const visited = new Set<Node>();
+    while (node && !visited.has(node)) {
+      visited.add(node);
+      if (node instanceof HTMLElement) {
+        const candidate = node as HTMLElement & {
+          editMode?: boolean;
+          editing?: boolean;
+          isEditing?: boolean;
+        };
+        if (
+          node.matches('hui-view.edit-mode, hui-view[edit-mode], ha-panel-lovelace.edit-mode, ha-panel-lovelace[edit-mode]') ||
+          node.classList.contains('edit-mode') ||
+          node.hasAttribute('edit-mode') ||
+          candidate.editMode === true ||
+          candidate.editing === true ||
+          candidate.isEditing === true
+        ) return true;
+      }
+      const root = node.getRootNode();
+      node = node.parentNode ?? (root instanceof ShadowRoot ? root.host : null);
+    }
+    return Boolean(
+      document.body?.classList.contains('edit-mode') ||
+      document.documentElement?.classList.contains('edit-mode'),
+    );
+  }
+
+  private _syncDashboardEditing = (): void => {
+    const next = this._isDashboardEditing();
+    if (next !== this._dashboardEditing) this._dashboardEditing = next;
+  };
+
+  private _immersiveUsesFixedPosition(experience: ImmersiveExperienceConfig): boolean {
+    if (this._isCardEditorPreview() || this._dashboardEditing) return false;
+    return this._isMobileScreen ? experience.fixedPosition.mobile : experience.fixedPosition.desktop;
   }
 
   private _onEditorElementPreview = (event: CustomEvent<{ elementId: string | null }>): void => {
@@ -2457,13 +2526,14 @@ export class ApartmentViewCard extends LitElement {
     const subtitle = experience.intro.subtitle;
     const focusedZone = this._floorData.zones.find((zone) => zone.id === this._spatialFocusedZoneId);
     const preview = this._isCardEditorPreview();
+    const fixedPosition = this._immersiveUsesFixedPosition(experience);
     const style = [
       `--immersive-expanded-height:${experience.mobile.expandedHeight}px`,
       `--immersive-compact-height:${experience.mobile.compactHeight}px`,
       `--immersive-bottom-inset:${experience.mobile.bottomInset}px`,
       `--immersive-spatial-ratio:${Math.round(experience.landscape.spatialRatio * 100)}%`,
     ].join(';');
-    return html`<ha-card class="immersive-card ${preview ? 'editor-preview' : ''}" style=${style}>
+    return html`<ha-card class="immersive-card ${preview ? 'editor-preview' : ''} ${fixedPosition ? 'fixed-position' : 'in-flow'} ${this._dashboardEditing ? 'dashboard-editing' : ''}" style=${style}>
       <div class="immersive-shell" @scroll=${this._onImmersiveScroll}>
         <section class="immersive-spatial-column" aria-label="Spatial home">
           <header class="immersive-intro">

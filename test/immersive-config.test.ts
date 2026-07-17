@@ -22,6 +22,7 @@ describe('immersive experience config', () => {
         compactHeight: 240,
         bottomInset: 100,
       },
+      fixedPosition: { mobile: true, desktop: true },
       landscape: { spatialRatio: 0.45 },
       motion: { resetSeconds: 10, transitionMs: 900, orbitSeconds: 90 },
       quality: 'auto',
@@ -45,6 +46,7 @@ describe('immersive experience config', () => {
             bottomInset: 24,
             snap: true,
           },
+          fixedPosition: { mobile: false, desktop: true, future: 'keep' },
           landscape: { spatialRatio: 0.9, placement: 'start' },
           motion: {
             resetSeconds: -1,
@@ -71,6 +73,7 @@ describe('immersive experience config', () => {
         bottomInset: 24,
         snap: true,
       },
+      fixedPosition: { mobile: false, desktop: true, future: 'keep' },
       landscape: { spatialRatio: 0.75, placement: 'start' },
       motion: {
         resetSeconds: 0,
@@ -100,6 +103,7 @@ describe('immersive experience config', () => {
     expect(config.experience.landscape.spatialRatio).toBe(0.45);
     expect(config.experience.motion.transitionMs).toBe(900);
     expect(config.experience.quality).toBe('auto');
+    expect(config.experience.fixedPosition).toEqual({ mobile: true, desktop: true });
   });
 });
 
