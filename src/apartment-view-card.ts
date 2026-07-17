@@ -1029,10 +1029,13 @@ export class ApartmentViewCard extends LitElement {
         --ha-card-border-color: transparent;
         --ha-card-box-shadow: none;
         box-sizing: border-box;
+        position: fixed;
+        inset: 0;
+        z-index: 0;
         display: block;
-        width: 100%;
-        height: calc(100dvh - var(--header-height, 0px));
-        min-height: min(560px, calc(100dvh - var(--header-height, 0px)));
+        width: 100vw;
+        height: 100dvh;
+        min-height: 100dvh;
         overflow: hidden;
         border: 0;
         border-radius: 0;
@@ -1040,7 +1043,16 @@ export class ApartmentViewCard extends LitElement {
         box-shadow: none;
         outline: none;
       }
-      .immersive-card.editor-preview { height: min(780px, 86vh); }
+      /* The card editor owns its own layout; never let the live fullscreen
+         shell escape the editor dialog. */
+      .immersive-card.editor-preview {
+        position: relative;
+        inset: auto;
+        z-index: auto;
+        width: 100%;
+        height: min(780px, 86vh);
+        min-height: 0;
+      }
       .sr-only {
         position: absolute;
         width: 1px;
@@ -1098,7 +1110,7 @@ export class ApartmentViewCard extends LitElement {
         width: 100%;
         min-width: 0;
         padding: 0 0 2px;
-        background: var(--lovelace-background, #080b0d);
+        background: transparent;
         contain: layout paint;
       }
       .immersive-stage {
@@ -1108,6 +1120,7 @@ export class ApartmentViewCard extends LitElement {
         height: var(--immersive-expanded-height, 480px);
         min-height: 0;
         overflow: hidden;
+        background: transparent;
         transition: height 320ms cubic-bezier(0.22, 1, 0.36, 1);
       }
       .immersive-spatial-cluster.compact .immersive-stage { height: var(--immersive-compact-height, 240px); }
@@ -1150,7 +1163,7 @@ export class ApartmentViewCard extends LitElement {
         gap: 26px;
         padding: 0 20px;
         overflow-x: auto;
-        background: var(--lovelace-background, #080b0d);
+        background: transparent;
         scrollbar-width: none;
         scroll-snap-type: x proximity;
       }
@@ -1181,7 +1194,7 @@ export class ApartmentViewCard extends LitElement {
         display: flex;
         min-width: 0;
         align-items: stretch;
-        background: var(--lovelace-background, #080b0d);
+        background: transparent;
       }
       .immersive-navigation .immersive-room-nav { flex: 1 1 auto; }
       .immersive-floor-select {
@@ -1297,15 +1310,9 @@ export class ApartmentViewCard extends LitElement {
     this._spatialFocusedZoneId = zoneId;
     void this.updateComplete.then(() => {
       const content = this.renderRoot.querySelector<HTMLElement>('.immersive-content-column');
-      const shell = this.renderRoot.querySelector<HTMLElement>('.immersive-shell');
-      if (!content || !shell) return;
+      if (!content) return;
       if (getComputedStyle(content).overflowY !== 'visible') {
         content.scrollTo({ top: 0, behavior: this._reducedMotion() ? 'auto' : 'smooth' });
-        return;
-      }
-      const intro = shell.querySelector<HTMLElement>('.immersive-intro');
-      if (shell.scrollTop > (intro?.offsetHeight ?? 0)) {
-        shell.scrollTo({ top: intro?.offsetHeight ?? 0, behavior: this._reducedMotion() ? 'auto' : 'smooth' });
       }
     });
   };
