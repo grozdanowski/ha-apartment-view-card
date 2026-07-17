@@ -1064,8 +1064,8 @@ export class ApartmentViewCard extends LitElement {
         min-height: 100dvh;
       }
       .immersive-card.in-flow .immersive-shell {
-        height: auto;
-        min-height: min(560px, 100dvh);
+        height: 100%;
+        min-height: 0;
       }
       .immersive-card.editor-preview.in-flow {
         height: min(780px, 86vh);
