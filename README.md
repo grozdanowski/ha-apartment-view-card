@@ -44,6 +44,8 @@ The visual editor is the recommended configuration surface. Version 4 adds dedic
 5. **Devices**: import entities from linked Areas. The editor suggests an appropriate floor, wall, ceiling, surface, or free mount.
 6. **Review**: validate architecture, room links, object placement, and entity placement before daily use.
 
+Plan view stays focused on the active setup step: walls are always visible, while Structure shows wall points, Rooms shows floor points, Openings shows doors and windows, Elements shows Elements, and Devices shows entity markers. Rooms can be derived from enclosed walls or drawn as independent floor zones with **Draw room zone**; no walls are required. Dragging updates the Plan locally and commits once on release, so the 3D preview and Lovelace config do not rebuild during every pointer movement. With a selected point, opening, Element, or device, arrow keys move it by **1 cm**; hold **Shift** for 10 cm or **Option/Alt** for 1 mm.
+
 Elements are shown as a compact inventory. **Edit** opens a large transactional workspace with an isolated 3D preview; **Apply** commits the draft and **Cancel** restores the saved Element. On phones this workspace becomes full-screen.
 
 ## Immersive Experience

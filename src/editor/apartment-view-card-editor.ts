@@ -54,6 +54,7 @@ import {
   withDerivedSpatialRooms,
 } from '../core/spatial-plan';
 import { roomPolygon, spatialBounds, validateSpatialPlan, wallLength } from '../core/spatial-geometry';
+import { isValidSimplePolygon } from '../core/polygon';
 import { assignShellOpenings, removeShellWallSegment, shellSegmentById, validateSpatialShell } from '../core/spatial-shell';
 import { resolveSpatialEntityState } from '../core/spatial-state';
 import { createSpatialPrimitive, elementPrimitivesForType } from '../core/spatial-elements';
@@ -1432,7 +1433,7 @@ export class ApartmentViewCardEditor extends LitElement {
     this._mode = 'setup';
     this._setupStep = step;
     this._clearSelectionsOutsideStep(step);
-    if (step === 'architecture' || step === 'elements') this._previewMode = 'edit';
+    this._previewMode = 'edit';
   }
 
   private _onOptionsChanged(event: CustomEvent): void {
@@ -1836,14 +1837,23 @@ export class ApartmentViewCardEditor extends LitElement {
     ev.stopPropagation();
     const { plan, record = true } = ev.detail as { plan: SpatialConfig['plan']; record?: boolean };
     if (!plan) return;
-    this._applyConfig({ ...this._config, spatial: { ...this._spatial(), plan: withDerivedSpatialRooms(plan) } }, record);
+    const nextPlan = withDerivedSpatialRooms(plan);
+    this._applyConfig({
+      ...this._config,
+      zones: this._syncPlanRoomZones(nextPlan, this._config.zones),
+      spatial: { ...this._spatial(), plan: nextPlan },
+    }, record);
   }
 
   private _onSpatialShellChanged(ev: CustomEvent): void {
     ev.stopPropagation();
     const { shell, record = true } = ev.detail as { shell: SpatialConfig['shell']; record?: boolean };
     if (!shell) return;
-    this._applyConfig({ ...this._config, spatial: { ...this._spatial(), shell } }, record);
+    this._applyConfig({
+      ...this._config,
+      zones: this._syncShellRoomZones(shell, this._config.zones),
+      spatial: { ...this._spatial(), shell },
+    }, record);
   }
 
   private _onSpatialWallDeleteRequested(ev: CustomEvent): void {
@@ -1878,6 +1888,65 @@ export class ApartmentViewCardEditor extends LitElement {
 
   private _onSpatialRoomSelected(ev: CustomEvent): void {
     this._selectRoom((ev.detail as { roomId: string }).roomId);
+  }
+
+  private _onSpatialRoomCreated(ev: CustomEvent): void {
+    ev.stopPropagation();
+    const floor = (ev.detail as { floor: [number, number][] }).floor;
+    if (!isValidSimplePolygon(floor)) return;
+    const spatial = this._spatial();
+    const name = `Room ${this._config.zones.length + 1}`;
+    const zoneId = roomIdFor(name, this._config.zones);
+    const reference = spatial.shell?.outer.length
+      ? spatial.shell.outer
+      : spatial.shell
+      ? [spatial.shell.floor, ...(spatial.shell.floors ?? []), ...(spatial.shell.rooms ?? []).flatMap((room) => [room.floor, ...(room.floors ?? [])]), floor].flat()
+      : [
+        ...(spatial.plan?.vertices.map((vertex): [number, number] => [vertex.x, vertex.z]) ?? []),
+        ...(spatial.plan?.rooms.flatMap((room) => room.floor ?? []) ?? []),
+        ...floor,
+      ];
+    const all = reference.length ? reference : floor;
+    const minX = Math.min(...all.map(([x]) => x));
+    const maxX = Math.max(...all.map(([x]) => x));
+    const minZ = Math.min(...all.map(([, z]) => z));
+    const maxZ = Math.max(...all.map(([, z]) => z));
+    const width = Math.max(0.01, maxX - minX);
+    const depth = Math.max(0.01, maxZ - minZ);
+    const roomMinX = Math.min(...floor.map(([x]) => x));
+    const roomMaxX = Math.max(...floor.map(([x]) => x));
+    const roomMinZ = Math.min(...floor.map(([, z]) => z));
+    const roomMaxZ = Math.max(...floor.map(([, z]) => z));
+    const zone: ZoneConfig = {
+      ...defaultZone(), id: zoneId, name,
+      x: (roomMinX - minX) / width * 100,
+      y: (roomMinZ - minZ) / depth * 100,
+      width: (roomMaxX - roomMinX) / width * 100,
+      height: (roomMaxZ - roomMinZ) / depth * 100,
+    };
+    if (spatial.shell) {
+      const shell = { ...spatial.shell, rooms: [...(spatial.shell.rooms ?? []), { zoneId, floor, finish: 'wood' as const }] };
+      this._selectedRoomId = `survey:${zoneId}`;
+      this._applyConfig({
+        ...this._config,
+        zones: this._syncShellRoomZones(shell, [...this._config.zones, zone]),
+        spatial: { ...spatial, shell },
+      });
+      return;
+    }
+    const plan = spatial.plan ?? emptySpatialPlan();
+    let index = 1;
+    const ids = new Set(plan.rooms.map((room) => room.id));
+    while (ids.has(`room-${index}`)) index += 1;
+    const roomId = `room-${index}`;
+    const room: SpatialRoom = { id: roomId, zoneId, boundary: [], floor, floorFinish: 'wood' };
+    const nextPlan = { ...plan, rooms: [...plan.rooms, room] };
+    this._selectedRoomId = roomId;
+    this._applyConfig({
+      ...this._config,
+      zones: this._syncPlanRoomZones(nextPlan, [...this._config.zones, zone]),
+      spatial: { ...spatial, plan: nextPlan },
+    });
   }
 
   private _selectRoom(roomId: string): void {
@@ -2348,7 +2417,7 @@ export class ApartmentViewCardEditor extends LitElement {
         this._selectedGlbSurfaceId = surfaces[0].id;
         this._commitSpatial({ ...this._spatial(), plan: next });
       }
-      this._previewMode = '3d';
+      this._previewMode = 'edit';
       this._glbStatus = { kind: 'ready', message: `${surfaces.length} ${surfaces.length === 1 ? 'surface' : 'surfaces'} ready to map.` };
     } catch (error) {
       this._glbStatus = { kind: 'error', message: error instanceof Error ? error.message : 'The GLB could not be imported.' };
@@ -2507,6 +2576,12 @@ export class ApartmentViewCardEditor extends LitElement {
     } : entity), record);
   }
 
+  private _onSpatialOpeningMoved(ev: CustomEvent): void {
+    ev.stopPropagation();
+    const { openingId, position, record = true } = ev.detail as { openingId: string; position: number; record?: boolean };
+    this._updateOpening(openingId, { position }, record);
+  }
+
   private _updateSelectedEntitySpatial(patch: Partial<NonNullable<EntityConfig['spatial']>>): void {
     const selected = this._config.entities[this._selectedEntity];
     if (!selected) return;
@@ -2591,18 +2666,55 @@ export class ApartmentViewCardEditor extends LitElement {
 
   private _zoneBoundsForRoom(plan: SpatialPlan, room: SpatialRoom): Pick<ZoneConfig, 'x' | 'y' | 'width' | 'height'> {
     const polygon = roomPolygon(plan, room) ?? [];
-    const bounds = spatialBounds(plan);
-    if (!polygon.length || bounds.width <= 0 || bounds.depth <= 0) return { x: 0, y: 0, width: 100, height: 100 };
-    const minX = Math.min(...polygon.map((point) => point.x));
-    const maxX = Math.max(...polygon.map((point) => point.x));
-    const minZ = Math.min(...polygon.map((point) => point.z));
-    const maxZ = Math.max(...polygon.map((point) => point.z));
+    const reference = [
+      ...plan.vertices.map((vertex): [number, number] => [vertex.x, vertex.z]),
+      ...plan.rooms.flatMap((candidate) => candidate.floor ?? []),
+    ];
+    return this._zoneBoundsForFloor(polygon.map((point): [number, number] => [point.x, point.z]), reference);
+  }
+
+  private _zoneBoundsForFloor(
+    floor: [number, number][],
+    reference: [number, number][],
+  ): Pick<ZoneConfig, 'x' | 'y' | 'width' | 'height'> {
+    if (floor.length < 3) return { x: 0, y: 0, width: 100, height: 100 };
+    const all = reference.length ? reference : floor;
+    const referenceMinX = Math.min(...all.map(([x]) => x));
+    const referenceMaxX = Math.max(...all.map(([x]) => x));
+    const referenceMinZ = Math.min(...all.map(([, z]) => z));
+    const referenceMaxZ = Math.max(...all.map(([, z]) => z));
+    const referenceWidth = Math.max(0.01, referenceMaxX - referenceMinX);
+    const referenceDepth = Math.max(0.01, referenceMaxZ - referenceMinZ);
+    const minX = Math.min(...floor.map(([x]) => x));
+    const maxX = Math.max(...floor.map(([x]) => x));
+    const minZ = Math.min(...floor.map(([, z]) => z));
+    const maxZ = Math.max(...floor.map(([, z]) => z));
     return {
-      x: (minX - bounds.minX) / bounds.width * 100,
-      y: (minZ - bounds.minZ) / bounds.depth * 100,
-      width: (maxX - minX) / bounds.width * 100,
-      height: (maxZ - minZ) / bounds.depth * 100,
+      x: (minX - referenceMinX) / referenceWidth * 100,
+      y: (minZ - referenceMinZ) / referenceDepth * 100,
+      width: (maxX - minX) / referenceWidth * 100,
+      height: (maxZ - minZ) / referenceDepth * 100,
     };
+  }
+
+  private _syncPlanRoomZones(plan: SpatialPlan, zones: ZoneConfig[]): ZoneConfig[] {
+    const rooms = new Map(plan.rooms.flatMap((room) => room.zoneId ? [[room.zoneId, room] as const] : []));
+    return zones.map((zone) => {
+      const room = zone.id ? rooms.get(zone.id) : undefined;
+      return room ? { ...zone, ...this._zoneBoundsForRoom(plan, room) } : zone;
+    });
+  }
+
+  private _syncShellRoomZones(shell: NonNullable<SpatialConfig['shell']>, zones: ZoneConfig[]): ZoneConfig[] {
+    const rooms = new Map((shell.rooms ?? []).map((room) => [room.zoneId, room] as const));
+    const reference = shell.outer.length
+      ? shell.outer
+      : [shell.floor, ...(shell.floors ?? []), ...(shell.rooms ?? []).flatMap((room) => [room.floor, ...(room.floors ?? [])])].flat();
+    return zones.map((zone) => {
+      const room = zone.id ? rooms.get(zone.id) : undefined;
+      const floor = room ? [room.floor, ...(room.floors ?? [])].flat() : [];
+      return room ? { ...zone, ...this._zoneBoundsForFloor(floor, reference) } : zone;
+    });
   }
 
   private _linkSpatialRoom(roomId: string, areaId: string, customName?: string): void {
@@ -3044,10 +3156,10 @@ export class ApartmentViewCardEditor extends LitElement {
       </div>
     `;
     if (!plan || !plan.rooms.length) return html`
-      <p class="studio-intro">Rooms appear automatically whenever walls form an enclosed space.</p>
+      <p class="studio-intro">Rooms can follow enclosed walls or exist as independent floor zones.</p>
       <div class="setup-card">
-        <h3>No enclosed rooms yet</h3>
-        <p>Close the wall outline in Plan view. Shared walls can divide a larger outline into multiple rooms.</p>
+        <h3>No rooms yet</h3>
+        <p>Choose <strong>Draw room zone</strong> in Plan view and tap at least three floor corners. Walls are optional.</p>
         <div class="setup-actions"><ha-button @click=${this._editStructure}>Edit structure</ha-button></div>
       </div>
     `;
@@ -3536,7 +3648,7 @@ export class ApartmentViewCardEditor extends LitElement {
           </select></label>
         </div>
         <div class="transform-grid">
-          ${(['x', 'y', 'z'] as const).map((axis) => html`<label><span>${axis.toUpperCase()} position</span><input type="number" step="0.05" .value=${String(selected.position[axis])}
+          ${(['x', 'y', 'z'] as const).map((axis) => html`<label><span>${axis.toUpperCase()} position</span><input type="number" step="0.01" .value=${String(selected.position[axis])}
             @change=${(event: Event) => this._updateSpatialElement({ position: { ...selected.position, [axis]: Number((event.target as HTMLInputElement).value) } })} /></label>`)}
           <label><span>Rotation</span><input type="number" step="5" .value=${String(selected.rotation.y)}
             @change=${(event: Event) => this._updateSpatialElement({ rotation: { ...selected.rotation, y: Number((event.target as HTMLInputElement).value) } })} /></label>
@@ -3649,9 +3761,9 @@ export class ApartmentViewCardEditor extends LitElement {
   private _renderSelectedDeviceEditor(selected: EntityConfig, selectedSpatial: EntityConfig['spatial']) {
     return html`<div class="selection-editor">
       <h3>${selected.name || selected.entity || 'Device position'}</h3>
-      <p>Drag the marker in Plan view. Use Y and mount type to place it correctly in three-dimensional space.</p>
+      <p>Drag the marker in Plan view, or use arrow keys for 1 cm adjustments. Use Y and mount type to place it correctly in three-dimensional space.</p>
       <div class="transform-grid">
-        ${(['x', 'y', 'z'] as const).map((axis) => html`<label><span>${axis.toUpperCase()} position</span><input type="number" step="0.05" .value=${String(selectedSpatial?.position[axis] ?? 0)}
+        ${(['x', 'y', 'z'] as const).map((axis) => html`<label><span>${axis.toUpperCase()} position</span><input type="number" step="0.01" .value=${String(selectedSpatial?.position[axis] ?? 0)}
           @change=${(event: Event) => this._updateSelectedEntitySpatial({ position: { ...(selectedSpatial?.position ?? { x: 0, y: 0.18, z: 0 }), [axis]: Number((event.target as HTMLInputElement).value) } })} /></label>`)}
         <label><span>Mount</span><select .value=${selectedSpatial?.mount ?? 'free'}
           @change=${(event: Event) => this._updateSelectedEntitySpatial({ mount: (event.target as HTMLSelectElement).value as NonNullable<EntityConfig['spatial']>['mount'] })}>
@@ -4130,6 +4242,14 @@ export class ApartmentViewCardEditor extends LitElement {
         .selectedOpeningId=${this._selectedOpeningId}
         .selectedElementId=${this._selectedElementId}
         .selectedRoomId=${this._selectedRoomId}
+        .selectedEntityId=${this._config.entities[this._selectedEntity]?.entity ?? ''}
+        .editScope=${this._setupStep === 'floorplan'
+          ? 'structure'
+          : this._setupStep === 'architecture'
+          ? 'openings'
+          : this._setupStep === 'review' || this._setupStep === 'actions'
+          ? 'none'
+          : this._setupStep}
         @spatial-plan-changed=${this._onSpatialPlanChanged}
         @spatial-shell-changed=${this._onSpatialShellChanged}
         @spatial-edit-start=${this._onPreviewEditStart}
@@ -4139,8 +4259,10 @@ export class ApartmentViewCardEditor extends LitElement {
         @spatial-opening-selected=${this._onPreviewOpeningSelected}
         @spatial-element-selected=${this._onSpatialElementSelected}
         @spatial-room-selected=${this._onSpatialRoomSelected}
+        @spatial-room-created=${this._onSpatialRoomCreated}
         @spatial-entity-selected=${this._onSpatialEntitySelected}
         @spatial-entity-moved=${this._onSpatialEntityMoved}
+        @spatial-opening-moved=${this._onSpatialOpeningMoved}
       ></spatial-plan-editor>` : html`<div class="spatial-empty-preview">
         <ha-icon icon="mdi:vector-square"></ha-icon><strong>Your 3D home starts here</strong><span>Choose a structure below to begin.</span>
       </div>`}

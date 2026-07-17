@@ -1,4 +1,5 @@
 import type { SpatialShellConfig, SpatialShellOpening, SpatialShellWall } from './config';
+import { isValidSimplePolygon } from './polygon';
 
 export interface SpatialShellSegment {
   id: string;
@@ -97,7 +98,7 @@ export function reconcileShellWallZones(shell: SpatialShellConfig): SpatialShell
 export function validateSpatialShell(shell: SpatialShellConfig, knownZoneIds?: Set<string>): SpatialShellIssue[] {
   const issues: SpatialShellIssue[] = [];
   const validatePolygon = (points: [number, number][], label: string, code: SpatialShellIssue['code']): void => {
-    if (points.length < 3 || polygonArea(points) < 0.005) {
+    if (!isValidSimplePolygon(points) || polygonArea(points) < 0.005) {
       issues.push({ code, severity: 'error', message: `${label} does not form a valid surface.` });
     }
   };
@@ -132,7 +133,7 @@ export function validateSpatialShell(shell: SpatialShellConfig, knownZoneIds?: S
     roomIds.add(room.zoneId);
     const polygons = [room.floor, ...(room.floors ?? [])];
     polygons.forEach((floor, index) => {
-      if (floor.length < 3 || polygonArea(floor) < 0.005) {
+      if (!isValidSimplePolygon(floor) || polygonArea(floor) < 0.005) {
         issues.push({ code: 'invalid-shell-room-floor', severity: 'error', zoneId: room.zoneId, message: `${room.zoneId} floor ${index + 1} is not a valid surface.` });
         return;
       }

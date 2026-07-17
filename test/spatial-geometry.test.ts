@@ -60,4 +60,20 @@ describe('spatial geometry', () => {
       'open-room-boundary', 'oversized-opening', 'missing-opening-wall',
     ]);
   });
+
+  it('rejects crossed or collapsed independent room floors', () => {
+    const crossed = plan();
+    crossed.rooms = [{
+      id: 'crossed', boundary: [], floorFinish: 'wood',
+      floor: [[0, 0], [3, 3], [0, 3], [3, 0]],
+    }];
+    expect(validateSpatialPlan(crossed).map((issue) => issue.code)).toEqual(['invalid-room-floor']);
+
+    const collapsed = plan();
+    collapsed.rooms = [{
+      id: 'collapsed', boundary: [], floorFinish: 'wood',
+      floor: [[0, 0], [1, 0], [2, 0]],
+    }];
+    expect(validateSpatialPlan(collapsed).map((issue) => issue.code)).toEqual(['invalid-room-floor']);
+  });
 });

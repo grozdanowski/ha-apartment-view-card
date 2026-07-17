@@ -101,6 +101,17 @@ describe('spatial plan mutations', () => {
     expect(deriveSpatialRooms({ ...plan, walls: plan.walls.slice(0, 3), rooms: [] })).toEqual([]);
   });
 
+  it('preserves an independent room floor zone when walls change', () => {
+    const plan = rectangularSpatialPlan(8, 6);
+    const room = {
+      id: 'reading-zone', zoneId: 'reading', boundary: [],
+      floor: [[1, 1], [3, 1], [3, 2.5], [1, 2.5]] as [number, number][],
+      floorFinish: 'wood' as const,
+    };
+    const rooms = deriveSpatialRooms({ ...plan, walls: plan.walls.slice(0, 3), rooms: [room] });
+    expect(rooms).toEqual([room]);
+  });
+
   it('adds, transforms, duplicates, and removes an Element', () => {
     let plan = addSpatialElement(rectangularSpatialPlan(), 'custom', { x: 2, z: 3 }, {
       name: 'Sofa',

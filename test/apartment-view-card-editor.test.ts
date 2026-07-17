@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import '../src/editor/apartment-view-card-editor';
 import type { ApartmentViewConfig } from '../src/core/config';
-import { addSpatialElement, rectangularSpatialPlan } from '../src/core/spatial-plan';
+import { addSpatialElement, emptySpatialPlan, rectangularSpatialPlan } from '../src/core/spatial-plan';
 import { editorPreviewElementId, publishEditorPreviewElement } from '../src/editor/editor-preview-state';
 
 function config(): ApartmentViewConfig {
@@ -85,6 +85,42 @@ describe('apartment-view-card-editor', () => {
     expect(element._selectedElementId).toBe('');
     expect(element._selectedPrimitiveId).toBe('');
     expect(editorPreviewElementId()).toBeNull();
+  });
+
+  it('keeps setup work in Plan and scopes the canvas to the active tab', async () => {
+    const element = await mount();
+    const steps = [
+      ['Structure', 'structure'],
+      ['Rooms', 'rooms'],
+      ['Openings', 'openings'],
+      ['Elements', 'elements'],
+      ['Devices', 'devices'],
+      ['Actions', 'none'],
+      ['Review', 'none'],
+    ] as const;
+
+    for (const [label, scope] of steps) {
+      element._previewMode = '3d';
+      await element.updateComplete;
+      const button = [...element.shadowRoot.querySelectorAll('.setup-step')]
+        .find((candidate: Element) => candidate.textContent?.includes(label)) as HTMLButtonElement;
+      button.click();
+      await element.updateComplete;
+      const planEditor = element.shadowRoot.querySelector('spatial-plan-editor') as any;
+      expect(element._previewMode, `${label} preview`).toBe('edit');
+      expect(planEditor.editScope, `${label} scope`).toBe(scope);
+    }
+  });
+
+  it('does not jump to 3D when an Element is added from Plan', async () => {
+    const element = await mount();
+    element._previewMode = 'edit';
+
+    element._addSpatialElement('custom');
+    await element.updateComplete;
+
+    expect(element._previewMode).toBe('edit');
+    expect((element.shadowRoot.querySelector('spatial-plan-editor') as any).editScope).toBe('elements');
   });
 
   it('assigns every Element to a searchable room and reports unassigned Elements in Review', async () => {
@@ -350,6 +386,77 @@ describe('apartment-view-card-editor', () => {
     name.dispatchEvent(new Event('change', { bubbles: true }));
     expect(element.config.zones[0].name).toBe('Lounge');
     expect(fields.querySelector('select')).toBeTruthy();
+  });
+
+  it('creates a named room zone from an independent floor polygon', async () => {
+    const element = await mount();
+    const before = element.config.zones.length;
+
+    element._onSpatialRoomCreated(new CustomEvent('spatial-room-created', {
+      detail: { floor: [[1, 1], [3, 1], [3, 2.5], [1, 2.5]] },
+    }));
+
+    expect(element.config.zones).toHaveLength(before + 1);
+    expect(element.config.zones.at(-1).name).toBe(`Room ${before + 1}`);
+    expect(element.config.spatial.plan.rooms.at(-1)).toMatchObject({
+      zoneId: element.config.zones.at(-1).id,
+      boundary: [],
+      floor: [[1, 1], [3, 1], [3, 2.5], [1, 2.5]],
+    });
+  });
+
+  it('keeps legacy zone bounds synchronized while an independent room is reshaped', async () => {
+    const element = await mount();
+    element._onSpatialRoomCreated(new CustomEvent('spatial-room-created', {
+      detail: { floor: [[1, 1], [3, 1], [3, 2.5], [1, 2.5]] },
+    }));
+    const room = element.config.spatial.plan.rooms.at(-1);
+    const zone = element.config.zones.at(-1);
+    const floor = [[2, 1], [6, 1], [6, 4], [2, 4]];
+
+    element._onSpatialPlanChanged(new CustomEvent('spatial-plan-changed', {
+      detail: { plan: {
+        ...element.config.spatial.plan,
+        rooms: element.config.spatial.plan.rooms.map((candidate: any) => candidate.id === room.id ? { ...candidate, floor } : candidate),
+      } },
+    }));
+
+    const synced = element.config.zones.find((candidate: any) => candidate.id === zone.id);
+    expect(synced).toMatchObject({ x: 25, width: 50, height: 50 });
+    expect(synced.y).toBeCloseTo(100 / 6);
+  });
+
+  it('uses one shared reference frame for multiple rooms in a wall-free plan', async () => {
+    const element = await mount({
+      zones: [],
+      spatial: {
+        plan: emptySpatialPlan(), openings: [], walls: [],
+        site: { north: 0 }, dimensions: { width: 10, aspectRatio: 1, wallHeight: 2.6 },
+      },
+    });
+    element._onSpatialRoomCreated(new CustomEvent('spatial-room-created', {
+      detail: { floor: [[0, 0], [2, 0], [2, 2], [0, 2]] },
+    }));
+    element._onSpatialRoomCreated(new CustomEvent('spatial-room-created', {
+      detail: { floor: [[4, 0], [6, 0], [6, 2], [4, 2]] },
+    }));
+
+    expect(element.config.zones).toHaveLength(2);
+    expect(element.config.zones[0].x).toBe(0);
+    expect(element.config.zones[0].width).toBeCloseTo(100 / 3);
+    expect(element.config.zones[1].x).toBeCloseTo(200 / 3);
+    expect(element.config.zones[1].width).toBeCloseTo(100 / 3);
+  });
+
+  it('includes every surveyed room floor region when synchronizing bounds', async () => {
+    const element = await mount();
+    const shell = {
+      outer: [], holes: [], floor: [], walls: [], openings: [],
+      rooms: [{ zoneId: 'living', floor: [[0, 0], [2, 0], [2, 2], [0, 2]], floors: [[[4, 0], [6, 0], [6, 2], [4, 2]]] }],
+    };
+    const [zone] = element._syncShellRoomZones(shell, [{ id: 'living', name: 'Living', x: 0, y: 0, width: 1, height: 1 }]);
+
+    expect(zone).toMatchObject({ x: 0, y: 0, width: 100, height: 100 });
   });
 
   it('shows one room editor directly beneath the searchable room picker', async () => {

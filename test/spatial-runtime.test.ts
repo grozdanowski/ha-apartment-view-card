@@ -67,6 +67,58 @@ describe('3D spatial runtime', () => {
     expect(preview._moveCameraTo).not.toHaveBeenCalled();
   });
 
+  it('renders a floor-only room zone without inventing perimeter walls', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.dimensions = { width: 6, aspectRatio: 1, wallHeight: 2.7 };
+    preview.zones = [{ id: 'reading', name: 'Reading', x: 0, y: 0, width: 100, height: 100 }];
+    const plan = {
+      version: 1, vertices: [], walls: [], elements: [],
+      rooms: [{
+        id: 'reading-room', zoneId: 'reading', boundary: [],
+        floor: [[1, 1], [4, 1], [4, 3], [1, 3]], floorFinish: 'wood',
+      }],
+    };
+
+    const shell = preview._shellFromPlan(plan);
+    const group = preview._createSurveyShell(shell);
+    const meshes: THREE.Mesh[] = [];
+    group.traverse((node: THREE.Object3D) => { if (node instanceof THREE.Mesh) meshes.push(node); });
+
+    expect(shell.outer).toEqual([[1, 1], [4, 1], [4, 3], [1, 3]]);
+    expect(shell.walls).toEqual([]);
+    expect(meshes.filter((mesh) => mesh.userData.architecturalRoomFloor)).toHaveLength(1);
+    expect(meshes.every((mesh) => mesh.userData.architecturalRoomFloor)).toBe(true);
+  });
+
+  it('uses wall-free room floors to center placed 3D content', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    const plan = {
+      version: 1, vertices: [], walls: [], elements: [],
+      rooms: [{
+        id: 'reading-room', zoneId: 'reading', boundary: [],
+        floor: [[10, 4], [14, 4], [14, 8], [10, 8]], floorFinish: 'wood',
+      }],
+    };
+
+    expect(preview._planCenter(plan)).toMatchObject({ x: 12, y: 6 });
+  });
+
+  it('derives wall lighting metadata from independent room floors', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    const plan = {
+      version: 1,
+      vertices: [{ id: 'a', x: 0, z: 0 }, { id: 'b', x: 4, z: 0 }],
+      walls: [{ id: 'north', start: 'a', end: 'b', thickness: 0.12, curve: 0 }],
+      elements: [],
+      rooms: [{
+        id: 'reading-room', zoneId: 'reading', boundary: [],
+        floor: [[0, 0], [4, 0], [4, 3], [0, 3]], floorFinish: 'wood',
+      }],
+    };
+
+    expect(preview._shellFromPlan(plan).walls[0].zoneIds).toContain('reading');
+  });
+
   it('builds an Element inspection scene without apartment geometry or neighboring Elements', () => {
     let plan = addSpatialElement(rectangularSpatialPlan(8, 6), 'custom', { x: 2, z: 2 }, {
       name: 'Selected cabinet',

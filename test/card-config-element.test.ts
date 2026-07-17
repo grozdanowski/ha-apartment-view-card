@@ -41,4 +41,35 @@ describe('apartment-view-card config element + stub', () => {
     expect(stub.options.duskDawnOffsetMinutes).toBe(60);
     expect(stub.options.freePanZoom).toBe(true);
   });
+
+  it('drops malformed independent room polygons during normalization', () => {
+    const Card = customElements.get('apartment-view-card') as any;
+    const stub = Card.getStubConfig();
+    stub.spatial.plan = {
+      ...stub.spatial.plan,
+      vertices: [], walls: [],
+      rooms: [{
+        id: 'crossed', boundary: [], floorFinish: 'wood',
+        floor: [[0, 0], [3, 3], [0, 3], [3, 0]],
+      }],
+    };
+
+    expect(normalizeConfig(stub).spatial?.plan?.rooms).toEqual([]);
+  });
+
+  it('drops malformed surveyed room polygons and preserves explicit wall-free shells', () => {
+    const Card = customElements.get('apartment-view-card') as any;
+    const stub = Card.getStubConfig();
+    stub.zones = [{ id: 'reading', name: 'Reading', x: 0, y: 0, width: 100, height: 100 }];
+    stub.spatial.shell = {
+      outer: [[0, 0], [6, 0], [6, 4], [0, 4]],
+      floor: [[0, 0], [6, 0], [6, 4], [0, 4]],
+      holes: [], openings: [], walls: [],
+      rooms: [{ zoneId: 'reading', floor: [[0, 0], [3, 3], [0, 3], [3, 0]] }],
+    };
+
+    const normalized = normalizeConfig(stub);
+    expect(normalized.spatial?.shell?.rooms).toBeUndefined();
+    expect(normalized.spatial?.shell?.walls).toEqual([]);
+  });
 });

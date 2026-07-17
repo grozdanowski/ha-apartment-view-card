@@ -6,6 +6,7 @@ import type {
   SpatialVertex,
   SpatialWallSegment,
 } from './config';
+import { isValidSimplePolygon } from './polygon';
 
 export interface SpatialBounds {
   minX: number;
@@ -23,6 +24,7 @@ export type SpatialIssueCode =
   | 'zero-length-wall'
   | 'broken-room-edge'
   | 'open-room-boundary'
+  | 'invalid-room-floor'
   | 'missing-opening-wall'
   | 'oversized-opening';
 
@@ -69,6 +71,7 @@ export function wallLength(wall: SpatialWallSegment, vertices: Map<string, Spati
 }
 
 export function roomPolygon(plan: SpatialPlan, room: SpatialRoom): SpatialPoint2D[] | null {
+  if (room.floor && room.floor.length >= 3) return room.floor.map(([x, z]) => ({ x, z }));
   const vertices = new Map(plan.vertices.map((vertex) => [vertex.id, vertex]));
   const walls = new Map(plan.walls.map((wall) => [wall.id, wall]));
   const polygon: SpatialPoint2D[] = [];
@@ -129,6 +132,12 @@ export function validateSpatialPlan(plan: SpatialPlan, openings: OpeningConfig[]
     }
   });
   plan.rooms.forEach((room) => {
+    if (room.floor) {
+      if (!isValidSimplePolygon(room.floor)) {
+        issues.push({ code: 'invalid-room-floor', severity: 'error', roomId: room.id, message: `Room ${room.id} has an invalid floor polygon.` });
+      }
+      return;
+    }
     const oriented = room.boundary.map((edge) => {
       const wall = walls.get(edge.wallId);
       return wall ? {

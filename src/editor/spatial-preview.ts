@@ -18,7 +18,7 @@ import { resolveLightColor } from '../core/light-color';
 import { suggestedOverviewVisibility, suggestedRoomVisibility } from '../core/entity-policy';
 import { elementPrimitivesForType, resolveSpatialValue } from '../core/spatial-elements';
 import { objectAtGlbNodePath } from '../core/spatial-glb';
-import { assignShellOpenings, shellSegments } from '../core/spatial-shell';
+import { assignShellOpenings, reconcileShellWallZones, shellSegments } from '../core/spatial-shell';
 import { resolveDirectSpatialEntityState, resolveSpatialEnvironment, spatialEntityPresentation, type SpatialEffectKind, type SpatialEnvironment, type SpatialLightingMode } from '../core/spatial-state';
 
 export interface SpatialPoint {
@@ -1040,7 +1040,7 @@ export class SpatialPreview extends LitElement {
       }];
     });
     const rooms = plan.rooms.flatMap((room) => {
-      const floor = room.boundary.flatMap(({ wallId, reversed }) => {
+      const floor = room.floor?.length ? room.floor : room.boundary.flatMap(({ wallId, reversed }) => {
         const wall = plan.walls.find((candidate) => candidate.id === wallId);
         if (!wall) return [];
         const vertex = vertices.get(reversed ? wall.end : wall.start);
@@ -1053,27 +1053,35 @@ export class SpatialPreview extends LitElement {
         color: room.floorColor,
       }] : [];
     });
-    const all = plan.vertices.length ? plan.vertices : [{ id: 'origin', x: 0, z: 0 }];
-    const minX = Math.min(...all.map((vertex) => vertex.x));
-    const maxX = Math.max(...all.map((vertex) => vertex.x));
-    const minZ = Math.min(...all.map((vertex) => vertex.z));
-    const maxZ = Math.max(...all.map((vertex) => vertex.z));
-    return {
+    const all = [
+      ...plan.vertices.map((vertex) => ({ x: vertex.x, z: vertex.z })),
+      ...plan.rooms.flatMap((room) => room.floor?.map(([x, z]) => ({ x, z })) ?? []),
+    ];
+    if (!all.length) all.push({ x: 0, z: 0 });
+    const minX = Math.min(...all.map((point) => point.x));
+    const maxX = Math.max(...all.map((point) => point.x));
+    const minZ = Math.min(...all.map((point) => point.z));
+    const maxZ = Math.max(...all.map((point) => point.z));
+    return reconcileShellWallZones({
       outer: [[minX, minZ], [maxX, minZ], [maxX, maxZ], [minX, maxZ]],
       holes: [],
       floor: [],
       rooms,
       walls,
       openings,
-    };
+    });
   }
 
   private _planCenter(plan: SpatialPlan): THREE.Vector2 {
-    if (!plan.vertices.length) return new THREE.Vector2();
-    const minX = Math.min(...plan.vertices.map((vertex) => vertex.x));
-    const maxX = Math.max(...plan.vertices.map((vertex) => vertex.x));
-    const minZ = Math.min(...plan.vertices.map((vertex) => vertex.z));
-    const maxZ = Math.max(...plan.vertices.map((vertex) => vertex.z));
+    const points = [
+      ...plan.vertices.map((vertex) => [vertex.x, vertex.z] as [number, number]),
+      ...plan.rooms.flatMap((room) => room.floor ?? []),
+    ];
+    if (!points.length) return new THREE.Vector2();
+    const minX = Math.min(...points.map(([x]) => x));
+    const maxX = Math.max(...points.map(([x]) => x));
+    const minZ = Math.min(...points.map(([, z]) => z));
+    const maxZ = Math.max(...points.map(([, z]) => z));
     return new THREE.Vector2((minX + maxX) / 2, (minZ + maxZ) / 2);
   }
 
@@ -1560,8 +1568,8 @@ export class SpatialPreview extends LitElement {
       path.closePath();
       return path;
     };
-    if (shell.walls?.length) {
-      result.add(this._createSurveyWalls(shell, centerX, centerZ));
+    if (shell.walls) {
+      if (shell.walls.length) result.add(this._createSurveyWalls(shell, centerX, centerZ));
     } else {
       const wallShape = new THREE.Shape();
       const outer = project(shell.outer[0]);

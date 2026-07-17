@@ -1,5 +1,6 @@
 import type { LabelConfig, LabelDefaults, LabelSource } from './label';
 import { DEFAULT_LABELS, VALID_LABEL_SOURCES, VALID_LABEL_VISIBILITIES } from './label';
+import { isValidSimplePolygon } from './polygon';
 
 export type LightStyle = 'lit' | 'reveal' | 'glow';
 export type SizeTier = 'tiny' | 'small' | 'medium' | 'large' | 'huge';
@@ -78,6 +79,8 @@ export interface SpatialRoom {
   id: string;
   /** Existing card zone / Home Assistant room relationship. */
   zoneId?: string;
+  /** Optional independent floor polygon for semantic zones that do not follow walls. */
+  floor?: [number, number][];
   boundary: SpatialRoomBoundary[];
   floorFinish: SpatialFloorFinish;
   floorColor?: string;
@@ -785,13 +788,17 @@ function normalizeSpatialPlan(raw: any, zoneIds: Set<string>): SpatialPlan | und
         .map((edge: any) => ({ ...edge, wallId: wallIdMap.get(edge?.wallId) ?? edge?.wallId }))
         .filter((edge: any) => wallIds.has(edge?.wallId))
         .map((edge: any): SpatialRoomBoundary => ({ wallId: edge.wallId, reversed: Boolean(edge.reversed) }));
-      if (boundary.length < 3) return null;
+      const floor = (Array.isArray(item?.floor) ? item.floor : [])
+        .filter((point: unknown): point is [number, number] => Array.isArray(point) && Number.isFinite(point[0]) && Number.isFinite(point[1]))
+        .map((point: [number, number]): [number, number] => [clamp(point[0], -1000, 1000, 0), clamp(point[1], -1000, 1000, 0)]);
+      if (boundary.length < 3 && !isValidSimplePolygon(floor)) return null;
       const id = uniqueId(slugId(typeof item.id === 'string' ? item.id : `room-${index + 1}`, `room-${index + 1}`), usedRooms);
       const room: SpatialRoom = {
         id,
         boundary,
         floorFinish: VALID_FLOOR_FINISHES.includes(item.floorFinish) ? item.floorFinish : 'wood',
       };
+      if (isValidSimplePolygon(floor)) room.floor = floor;
       if (typeof item.zoneId === 'string' && zoneIds.has(item.zoneId)) room.zoneId = item.zoneId;
       if (typeof item.floorColor === 'string' && item.floorColor.length) room.floorColor = item.floorColor;
       return room;
@@ -853,11 +860,11 @@ function normalizeSpatialShell(raw: any, zoneIds: Set<string>): SpatialShellConf
     .map((item: any): SpatialShellRoom | null => {
       if (typeof item?.zoneId !== 'string' || !zoneIds.has(item.zoneId)) return null;
       const roomFloor = normalizeShellPolygon(item.floor);
-      if (roomFloor.length < 3) return null;
+      if (!isValidSimplePolygon(roomFloor)) return null;
       const room: SpatialShellRoom = { zoneId: item.zoneId, floor: roomFloor };
       const roomFloors = (Array.isArray(item.floors) ? item.floors : [])
         .map(normalizeShellPolygon)
-        .filter((polygon: [number, number][]) => polygon.length >= 3);
+        .filter((polygon: [number, number][]) => isValidSimplePolygon(polygon));
       if (roomFloors.length) room.floors = roomFloors;
       if (VALID_FLOOR_FINISHES.includes(item.finish)) room.finish = item.finish;
       if (typeof item.color === 'string' && item.color.length) room.color = item.color;
@@ -908,7 +915,7 @@ function normalizeSpatialShell(raw: any, zoneIds: Set<string>): SpatialShellConf
     openings,
     ...(floors.length ? { floors } : {}),
     ...(rooms.length ? { rooms } : {}),
-    ...(walls.length ? { walls } : {}),
+    ...(Array.isArray(raw.walls) ? { walls } : walls.length ? { walls } : {}),
   };
 }
 

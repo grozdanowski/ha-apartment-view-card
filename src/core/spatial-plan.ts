@@ -94,9 +94,10 @@ export function deriveSpatialRooms(plan: SpatialPlan): SpatialRoom[] {
     if (signedArea > 0.0001) detected.push(boundary);
   });
 
-  const existing = new Map(plan.rooms.map((room) => [boundaryKey(room.boundary), room]));
+  const manualRooms = plan.rooms.filter((room) => (room.floor?.length ?? 0) >= 3);
+  const existing = new Map(plan.rooms.filter((room) => !room.floor?.length).map((room) => [boundaryKey(room.boundary), room]));
   const usedIds = new Set<string>();
-  return detected.map((boundary) => {
+  const derived = detected.map((boundary) => {
     const match = existing.get(boundaryKey(boundary));
     let id = match?.id ?? nextId('room', [...plan.rooms.map((room) => room.id), ...usedIds]);
     if (usedIds.has(id)) id = nextId('room', [...plan.rooms.map((room) => room.id), ...usedIds]);
@@ -109,6 +110,7 @@ export function deriveSpatialRooms(plan: SpatialPlan): SpatialRoom[] {
       ...(match?.floorColor ? { floorColor: match.floorColor } : {}),
     };
   });
+  return [...derived, ...manualRooms.filter((room) => !usedIds.has(room.id))];
 }
 
 export function withDerivedSpatialRooms(plan: SpatialPlan): SpatialPlan {
