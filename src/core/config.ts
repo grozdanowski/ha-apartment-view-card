@@ -1248,12 +1248,12 @@ export function normalizeExperienceConfig(
   const fixedPosition = objectConfig(source.fixedPosition) ?? {};
   const landscape = objectConfig(source.landscape) ?? {};
   const motion = objectConfig(source.motion) ?? {};
-  const expandedHeight = clamp(mobile.expandedHeight, 240, 1_000, 480);
+  const expandedHeight = clamp(mobile.expandedHeight, 240, 1_000, 340);
   const compactHeight = clamp(
     mobile.compactHeight,
     120,
     Math.min(600, expandedHeight),
-    Math.min(240, expandedHeight),
+    Math.min(200, expandedHeight),
   );
 
   return {

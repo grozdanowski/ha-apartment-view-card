@@ -300,8 +300,10 @@ export function resolveSpatialEnvironment(args: {
   }));
   const activeLightCount = activeLightSources.size;
   const mode = args.mode ?? 'realistic';
-  const floor = mode === 'presentation' ? 0.2 : mode === 'balanced' ? 0.1 : 0.045;
-  const nightExposure = mode === 'presentation' ? 0.94 : mode === 'balanced' ? 0.86 : 0.78;
+  // Keep an unlit night visibly legible without inventing practical light.
+  // The sun remains at zero; this is only the soft ambient floor of the room.
+  const floor = mode === 'presentation' ? 0.2 : mode === 'balanced' ? 0.12 : 0.09;
+  const nightExposure = mode === 'presentation' ? 0.94 : mode === 'balanced' ? 0.9 : 0.88;
   const activeLift = mode === 'realistic' ? 0 : Math.min(mode === 'balanced' ? 0.045 : 0.08, activeLightCount * 0.012);
   const bounceIntensity = mode === 'realistic'
     ? 0

@@ -18,8 +18,8 @@ describe('immersive experience config', () => {
       version: CURRENT_EXPERIENCE_VERSION,
       intro: { title: 'Home', subtitle: '', presenceEntities: [] },
       mobile: {
-        expandedHeight: 480,
-        compactHeight: 240,
+        expandedHeight: 340,
+        compactHeight: 200,
         bottomInset: 100,
       },
       fixedPosition: { mobile: false, desktop: false },
@@ -99,7 +99,7 @@ describe('immersive experience config', () => {
     );
 
     expect(config.experience.intro).toEqual({ title: 'Home', subtitle: '', presenceEntities: [] });
-    expect(config.experience.mobile.expandedHeight).toBe(480);
+    expect(config.experience.mobile.expandedHeight).toBe(340);
     expect(config.experience.landscape.spatialRatio).toBe(0.45);
     expect(config.experience.motion.transitionMs).toBe(900);
     expect(config.experience.quality).toBe('auto');

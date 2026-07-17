@@ -3895,7 +3895,7 @@ export class ApartmentViewCardEditor extends LitElement {
     return this._config.experience ?? {
       version: 1,
       intro: { title: 'Home', subtitle: '' },
-      mobile: { expandedHeight: 480, compactHeight: 240, bottomInset: 100 },
+      mobile: { expandedHeight: 340, compactHeight: 200, bottomInset: 100 },
       fixedPosition: { mobile: false, desktop: false },
       landscape: { spatialRatio: 0.45 },
       motion: { resetSeconds: 10, transitionMs: 900, orbitSeconds: 90 },

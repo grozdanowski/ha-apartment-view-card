@@ -1113,24 +1113,24 @@ export class ApartmentViewCard extends LitElement {
       .immersive-intro {
         box-sizing: border-box;
         display: grid;
-        gap: 14px;
-        padding: max(28px, env(safe-area-inset-top)) 20px 20px;
+        gap: 10px;
+        padding: max(24px, env(safe-area-inset-top)) 20px 14px;
       }
       .immersive-intro h1 {
         max-width: 18ch;
         margin: 0;
         color: var(--primary-text-color, #f1f4f4);
-        font-size: 32px;
+        font-size: 28px;
         font-weight: 700;
-        line-height: 1.12;
+        line-height: 1.08;
         letter-spacing: 0;
       }
       .immersive-intro-copy {
         display: grid;
         max-width: 65ch;
-        gap: 10px;
+        gap: 8px;
         color: var(--secondary-text-color, #a7b0b3);
-        font-size: 17px;
+        font-size: 16px;
         line-height: 1.4;
       }
       .immersive-intro-copy p { margin: 0; }
@@ -1328,7 +1328,7 @@ export class ApartmentViewCard extends LitElement {
           grid-template-rows: auto minmax(0, 1fr);
           overflow: hidden;
         }
-        .immersive-intro { padding: 38px 34px 18px; }
+        .immersive-intro { padding: 32px 34px 16px; }
         .immersive-intro h1 { font-size: 38px; }
         .immersive-spatial-cluster {
           position: relative;

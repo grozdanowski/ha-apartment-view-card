@@ -44,10 +44,10 @@ describe('spatial Home Assistant state', () => {
     });
     expect(environment.daylight).toBe(0);
     expect(environment.sunIntensity).toBe(0);
-    expect(environment.skyIntensity).toBeLessThan(0.16);
-    expect(environment.fillIntensity).toBeLessThan(0.1);
+    expect(environment.skyIntensity).toBeLessThan(0.2);
+    expect(environment.fillIntensity).toBeLessThan(0.12);
     expect(environment.bounceIntensity).toBe(0);
-    expect(environment.exposure).toBeLessThan(0.9);
+    expect(environment.exposure).toBeLessThan(0.92);
     expect(environment.activeLightCount).toBe(0);
   });
 
@@ -67,8 +67,8 @@ describe('spatial Home Assistant state', () => {
     expect(environment.daylight).toBe(0);
     expect(environment.activeLightCount).toBe(2);
     expect(environment.bounceIntensity).toBe(0);
-    expect(environment.exposure).toBe(0.78);
-    expect(environment.skyIntensity).toBe(0.045);
+    expect(environment.exposure).toBe(0.88);
+    expect(environment.skyIntensity).toBe(0.09);
   });
 
   it('does not turn unavailable child fixtures into emitters from a parent group', () => {
