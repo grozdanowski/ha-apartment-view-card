@@ -15,6 +15,7 @@ export interface HassEntity {
  */
 export interface HassLike {
   states: Record<string, HassEntity>;
+  user?: { id?: string; name?: string };
   callService(
     domain: string,
     service: string,

@@ -16,9 +16,12 @@ export type SpatialFloorFinish = 'wood' | 'tile' | 'stone' | 'carpet' | 'custom'
 export type SpatialElementType = 'ceiling-light' | 'light-bulb' | 'custom' | 'glb';
 export type SpatialPrimitiveKind = 'cube' | 'sphere' | 'cylinder';
 export type SpatialConditionOperator = 'equals' | 'not-equals' | 'above' | 'below';
+export type ExperienceQuality = 'auto' | 'mobile' | 'balanced' | 'high';
 
 export const CURRENT_MODEL_VERSION = 7;
 export const CURRENT_SPATIAL_VERSION = 1;
+export const CURRENT_EXPERIENCE_VERSION = 1;
+export const CURRENT_CONTENT_VERSION = 1;
 
 export interface SpatialVector3 {
   /** Horizontal position in metres along the plan's x-axis. */
@@ -244,6 +247,10 @@ export interface EntityConfig {
   tooltipContentInOverview?: TooltipContent;
   /** Optional persistent marker detail while its room is focused. Defaults to none. */
   tooltipContentInRoom?: TooltipContent;
+  /** Optional visual marker size override in the apartment overview. */
+  overviewSize?: SizeTier;
+  /** Optional visual marker size override while its room is focused. */
+  roomSize?: SizeTier;
   /** Optional physical placement used by the 3D renderer. */
   spatial?: SpatialPlacement;
 }
@@ -381,6 +388,116 @@ export interface QuickAction {
   data?: Record<string, unknown>;
 }
 
+/** Responsive presentation settings for the immersive spatial runtime. */
+export interface ImmersiveExperienceConfig {
+  version: number;
+  intro: {
+    title: string;
+    subtitle: string;
+    [key: string]: unknown;
+  };
+  mobile: {
+    /** Expanded spatial stage height in CSS pixels. */
+    expandedHeight: number;
+    /** Sticky stage height after supporting content starts scrolling, in CSS pixels. */
+    compactHeight: number;
+    /** End padding before the platform safe-area inset, in CSS pixels. */
+    bottomInset: number;
+    [key: string]: unknown;
+  };
+  landscape: {
+    /** Fraction of the viewport reserved for the spatial column. */
+    spatialRatio: number;
+    [key: string]: unknown;
+  };
+  motion: {
+    /** Idle time before restoring the canonical camera pose. */
+    resetSeconds: number;
+    /** Architectural camera transition duration. */
+    transitionMs: number;
+    /** Duration of one automatic 360-degree orbit; zero disables orbiting. */
+    orbitSeconds: number;
+    [key: string]: unknown;
+  };
+  quality: ExperienceQuality;
+  [key: string]: unknown;
+}
+
+export interface ContentBlockBase {
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface HeadingContentBlock extends ContentBlockBase {
+  type: 'heading';
+  title: string;
+  subtitle?: string;
+}
+
+export interface SpatialControlsContentBlock extends ContentBlockBase {
+  type: 'spatial-controls';
+  entities: string[];
+}
+
+export interface ActionContentBlock extends ContentBlockBase {
+  type: 'action';
+  title: string;
+  subtitle?: string;
+  icon?: string;
+  /** Native Home Assistant action config, intentionally open for future actions. */
+  action: ContentActionConfig;
+}
+
+export interface ContentActionConfig {
+  action: string;
+  [key: string]: unknown;
+}
+
+export interface NestedLovelaceCardConfig {
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface LovelaceCardContentBlock extends ContentBlockBase {
+  type: 'lovelace-card';
+  /** The unmodified config passed to Home Assistant's card helpers. */
+  card: NestedLovelaceCardConfig;
+}
+
+export interface ConditionContentBlock extends ContentBlockBase {
+  type: 'condition';
+  /** Native Lovelace condition configs, evaluated by the immersive runtime. */
+  conditions: Record<string, unknown>[];
+  blocks: ContentBlock[];
+}
+
+export interface SpacerContentBlock extends ContentBlockBase {
+  type: 'spacer';
+  /** Vertical space in CSS pixels. */
+  size: number;
+}
+
+/** Unknown block types survive normalization for forward-compatible editing. */
+export interface UnknownContentBlock extends ContentBlockBase {
+  type: string & { readonly __unknownContentBlockType: true };
+}
+
+export type ContentBlock =
+  | HeadingContentBlock
+  | SpatialControlsContentBlock
+  | ActionContentBlock
+  | LovelaceCardContentBlock
+  | ConditionContentBlock
+  | SpacerContentBlock;
+
+export interface ImmersiveContentConfig {
+  version: number;
+  overview: ContentBlock[];
+  /** Ordered supporting content keyed by stable room / zone id. */
+  rooms: Record<string, ContentBlock[]>;
+  [key: string]: unknown;
+}
+
 export interface FloorConfig {
   name: string;
   icon?: string;
@@ -399,9 +516,19 @@ export interface ApartmentViewConfig {
   options: CardOptions;
   quickActions: QuickAction[];
   spatial?: SpatialConfig;
+  /** Optional on raw/legacy configs; normalizeConfig always supplies it. */
+  experience?: ImmersiveExperienceConfig;
+  /** Optional on raw/legacy configs; normalizeConfig always supplies it. */
+  content?: ImmersiveContentConfig;
   /** Optional multi-floor. When non-empty, each floor has its own images/entities/zones;
    *  the top-level images/entities/zones mirror floor 0 for backward-compatible reads. */
   floors?: FloorConfig[];
+  [key: string]: unknown;
+}
+
+export interface NormalizedApartmentViewConfig extends ApartmentViewConfig {
+  experience: ImmersiveExperienceConfig;
+  content: ImmersiveContentConfig;
 }
 
 const CARD_TYPE = 'custom:apartment-view-card';
@@ -439,6 +566,12 @@ const VALID_FLOOR_FINISHES: readonly SpatialFloorFinish[] = ['wood', 'tile', 'st
 const VALID_ELEMENT_TYPES: readonly SpatialElementType[] = ['ceiling-light', 'light-bulb', 'custom', 'glb'];
 const VALID_PRIMITIVE_KINDS: readonly SpatialPrimitiveKind[] = ['cube', 'sphere', 'cylinder'];
 const VALID_CONDITION_OPERATORS: readonly SpatialConditionOperator[] = ['equals', 'not-equals', 'above', 'below'];
+const VALID_EXPERIENCE_QUALITIES: readonly ExperienceQuality[] = [
+  'auto',
+  'mobile',
+  'balanced',
+  'high',
+];
 
 function slugId(value: string, fallback: string): string {
   const slug = value
@@ -963,6 +1096,8 @@ function normalizeEntity(raw: any): EntityConfig {
   if (VALID_TOOLTIP_CONTENT.includes(raw?.tooltipContentInRoom)) {
     entity.tooltipContentInRoom = raw.tooltipContentInRoom;
   }
+  if (VALID_SIZES.includes(raw?.overviewSize)) entity.overviewSize = raw.overviewSize;
+  if (VALID_SIZES.includes(raw?.roomSize)) entity.roomSize = raw.roomSize;
   const spatial = normalizeSpatialPlacement(raw?.spatial);
   if (spatial) entity.spatial = spatial;
   const label = normalizeLabel(raw?.label);
@@ -1082,6 +1217,165 @@ function normalizeOptions(raw: any): CardOptions {
   };
 }
 
+function objectConfig(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** Normalize responsive immersive settings without discarding future keys. */
+export function normalizeExperienceConfig(
+  raw: unknown,
+): ImmersiveExperienceConfig {
+  const source = objectConfig(raw) ?? {};
+  const intro = objectConfig(source.intro) ?? {};
+  const mobile = objectConfig(source.mobile) ?? {};
+  const landscape = objectConfig(source.landscape) ?? {};
+  const motion = objectConfig(source.motion) ?? {};
+  const expandedHeight = clamp(mobile.expandedHeight, 240, 1_000, 480);
+  const compactHeight = clamp(
+    mobile.compactHeight,
+    120,
+    Math.min(600, expandedHeight),
+    Math.min(240, expandedHeight),
+  );
+
+  return {
+    ...source,
+    version: CURRENT_EXPERIENCE_VERSION,
+    intro: {
+      ...intro,
+      title: typeof intro.title === 'string' ? intro.title : 'Home',
+      subtitle: typeof intro.subtitle === 'string' ? intro.subtitle : '',
+    },
+    mobile: {
+      ...mobile,
+      expandedHeight,
+      compactHeight,
+      bottomInset: clamp(mobile.bottomInset, 0, 400, 100),
+    },
+    landscape: {
+      ...landscape,
+      spatialRatio: clamp(landscape.spatialRatio, 0.25, 0.75, 0.45),
+    },
+    motion: {
+      ...motion,
+      resetSeconds: clamp(motion.resetSeconds, 0, 300, 10),
+      transitionMs: clamp(motion.transitionMs, 0, 5_000, 900),
+      orbitSeconds: clamp(motion.orbitSeconds, 0, 600, 90),
+    },
+    quality: VALID_EXPERIENCE_QUALITIES.includes(
+      source.quality as ExperienceQuality,
+    )
+      ? (source.quality as ExperienceQuality)
+      : 'auto',
+  };
+}
+
+function normalizeContentBlocks(raw: unknown, depth = 0): ContentBlock[] {
+  if (!Array.isArray(raw) || depth > 12) return [];
+  return raw
+    .slice(0, 200)
+    .map((value): ContentBlock | null => {
+      const block = objectConfig(value);
+      if (!block || typeof block.type !== 'string' || !block.type) return null;
+
+      switch (block.type) {
+        case 'heading':
+          return {
+            ...block,
+            type: 'heading',
+            title: typeof block.title === 'string' ? block.title : '',
+            ...(typeof block.subtitle === 'string'
+              ? { subtitle: block.subtitle }
+              : { subtitle: undefined }),
+          };
+        case 'spatial-controls':
+          return {
+            ...block,
+            type: 'spatial-controls',
+            entities: Array.isArray(block.entities)
+              ? block.entities.filter(
+                  (entity): entity is string =>
+                    typeof entity === 'string' && entity.length > 0,
+                )
+              : [],
+          };
+        case 'action': {
+          const action = objectConfig(block.action);
+          return {
+            ...block,
+            type: 'action',
+            title: typeof block.title === 'string' ? block.title : '',
+            ...(typeof block.subtitle === 'string'
+              ? { subtitle: block.subtitle }
+              : { subtitle: undefined }),
+            ...(typeof block.icon === 'string'
+              ? { icon: block.icon }
+              : { icon: undefined }),
+            action:
+              action && typeof action.action === 'string'
+                ? ({ ...action } as ContentActionConfig)
+                : { action: 'none' },
+          };
+        }
+        case 'lovelace-card': {
+          const card = objectConfig(block.card);
+          return {
+            ...block,
+            type: 'lovelace-card',
+            card:
+              card && typeof card.type === 'string' && card.type.length > 0
+                ? ({ ...card } as NestedLovelaceCardConfig)
+                : { type: 'markdown', content: '' },
+          };
+        }
+        case 'condition':
+          return {
+            ...block,
+            type: 'condition',
+            conditions: Array.isArray(block.conditions)
+              ? block.conditions
+                  .map(objectConfig)
+                  .filter(
+                    (condition): condition is Record<string, unknown> =>
+                      condition !== undefined,
+                  )
+                  .map((condition) => ({ ...condition }))
+              : [],
+            blocks: normalizeContentBlocks(block.blocks, depth + 1),
+          };
+        case 'spacer':
+          return {
+            ...block,
+            type: 'spacer',
+            size: clamp(block.size, 0, 320, 24),
+          };
+        default:
+          return { ...block } as unknown as ContentBlock;
+      }
+    })
+    .filter((block): block is ContentBlock => block !== null);
+}
+
+/** Normalize ordered overview and per-room content while retaining extensions. */
+export function normalizeContentConfig(raw: unknown): ImmersiveContentConfig {
+  const source = objectConfig(raw) ?? {};
+  const sourceRooms = objectConfig(source.rooms) ?? {};
+  const rooms = Object.fromEntries(
+    Object.entries(sourceRooms).map(([roomId, blocks]) => [
+      roomId,
+      normalizeContentBlocks(blocks),
+    ]),
+  );
+  return {
+    ...source,
+    version: CURRENT_CONTENT_VERSION,
+    overview: normalizeContentBlocks(source.overview),
+    rooms,
+  };
+}
+
 function normalizeFloor(raw: any): FloorConfig {
   const rawZones = Array.isArray(raw?.zones) ? raw.zones : [];
   const zones = normalizeZones(rawZones);
@@ -1105,7 +1399,7 @@ function normalizeFloor(raw: any): FloorConfig {
  * Legacy image configs still require images.base. A spatial-plan config is a
  * complete 3D source of truth and therefore needs no raster floorplan.
  */
-export function normalizeConfig(raw: any): ApartmentViewConfig {
+export function normalizeConfig(raw: any): NormalizedApartmentViewConfig {
   const source = raw ?? {};
   const rawEntities: any[] = Array.isArray(source.entities)
     ? source.entities
@@ -1144,6 +1438,8 @@ export function normalizeConfig(raw: any): ApartmentViewConfig {
     quickActions: (Array.isArray(source.quickActions) ? source.quickActions : [])
       .map(normalizeQuickAction)
       .filter((q: QuickAction | null): q is QuickAction => q !== null),
+    experience: normalizeExperienceConfig(source.experience),
+    content: normalizeContentConfig(source.content),
     spatial: normalizeSpatial(source, base.zones),
     floors,
   };

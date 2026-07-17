@@ -219,7 +219,7 @@ describe('3D spatial runtime', () => {
     expect(roomButton?.getAttribute('aria-pressed')).toBe('true');
     const back = card.shadowRoot.querySelector('.spatial-room-back') as HTMLButtonElement;
     expect(back).toBeTruthy();
-    expect(card.shadowRoot.querySelector('.spatial-room-divider')).toBeTruthy();
+    expect(card.shadowRoot.querySelector('.spatial-room-divider')).toBeNull();
     expect([...card.shadowRoot.querySelectorAll('.spatial-room-rail button')].map((button) => button.textContent)).toEqual(['Living Room']);
     back.click();
     await card.updateComplete;

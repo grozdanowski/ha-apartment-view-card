@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spatial Home Runtime</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --ha-card-background: #0b1011;
+        --card-background-color: #0b1011;
+        --primary-text-color: #eef2f3;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #070a0b; }
+      main { width: 100%; }
+      ha-card { display: block; overflow: hidden; background: transparent; }
+    </style>
+  </head>
+  <body>
+    <main><apartment-view-card id="card"></apartment-view-card></main>
+    <script type="module">
+      import '@/apartment-view-card.ts';
+      import { elementPrimitivesForType } from '@/core/spatial-elements.ts';
+      if (!customElements.get('ha-card')) customElements.define('ha-card', class extends HTMLElement {});
+      if (!customElements.get('ha-icon')) customElements.define('ha-icon', class extends HTMLElement {});
+      window.loadCardHelpers = async () => ({
+        createCardElement(config) {
+          const element = document.createElement('section');
+          element.style.cssText = 'padding:18px;border:1px solid #253033;border-radius:6px;background:#0c1112;color:#eef2f3';
+          element.innerHTML = `<strong>${config.title ?? 'Native Lovelace card'}</strong><p style="color:#98a3a6">${config.content ?? 'Rendered through Home Assistant card helpers.'}</p>`;
+          return element;
+        },
+      });
+      const zones = [
+        { id: 'living', name: 'Living Room', x: 0, y: 0, width: 67.5, height: 100 },
+        { id: 'study', name: 'Study', x: 67.5, y: 0, width: 32.5, height: 100 },
+      ];
+      const plan = {
+        version: 1,
+        vertices: [
+          { id: 'a', x: 0, z: 0 }, { id: 'b', x: 5.4, z: 0 }, { id: 'c', x: 8, z: 0 },
+          { id: 'd', x: 8, z: 5 }, { id: 'e', x: 5.4, z: 5 }, { id: 'f', x: 0, z: 5 },
+        ],
+        walls: [
+          { id: 'south', start: 'a', end: 'b', thickness: 0.22, curve: -0.12 },
+          { id: 'south-study', start: 'b', end: 'c', thickness: 0.22, curve: 0 },
+          { id: 'east', start: 'c', end: 'd', thickness: 0.22, curve: 0 },
+          { id: 'north-study', start: 'd', end: 'e', thickness: 0.22, curve: 0 },
+          { id: 'north', start: 'e', end: 'f', thickness: 0.22, curve: 0 },
+          { id: 'west', start: 'f', end: 'a', thickness: 0.22, curve: 0 },
+          { id: 'divider', start: 'b', end: 'e', thickness: 0.12, curve: 0 },
+        ],
+        rooms: [
+          { id: 'living-room', zoneId: 'living', floorFinish: 'wood', boundary: [
+            { wallId: 'south', reversed: false }, { wallId: 'divider', reversed: false },
+            { wallId: 'north', reversed: false }, { wallId: 'west', reversed: false },
+          ] },
+          { id: 'study-room', zoneId: 'study', floorFinish: 'carpet', floorColor: '#626d6c', boundary: [
+            { wallId: 'south-study', reversed: false }, { wallId: 'east', reversed: false },
+            { wallId: 'north-study', reversed: false }, { wallId: 'divider', reversed: true },
+          ] },
+        ],
+        elements: [
+          {
+            id: 'living-pendant', type: 'ceiling-light', name: 'Pendant', zoneId: 'living', entityId: 'light.living_pendant',
+            position: { x: 2.7, y: 2.35, z: 2.5 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 },
+            primitives: elementPrimitivesForType('ceiling-light'),
+          },
+          {
+            id: 'study-bulb', type: 'light-bulb', name: 'Desk Light', zoneId: 'study', entityId: 'light.study',
+            position: { x: 6.7, y: 1.2, z: 3.7 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 },
+            primitives: elementPrimitivesForType('light-bulb'),
+          },
+        ],
+      };
+      const entities = [
+        { entity: 'light.living_pendant', name: 'Pendant', x: 34, y: 50, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'living', spatial: { position: { x: 2.7, y: 2.35, z: 2.5 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'ceiling', visible: true } },
+        { entity: 'media_player.naim', name: 'Naim', x: 28, y: 15, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'living', spatial: { position: { x: 2.2, y: 0.62, z: 0.35 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'surface', visible: true } },
+        { entity: 'light.study', name: 'Desk Light', x: 82, y: 48, size: 'medium', tap: 'more-info', orientation: null, zoneId: 'study', spatial: { position: { x: 6.7, y: 1.2, z: 3.7 }, rotation: { x: 0, y: 0, z: 0 }, mount: 'surface', visible: true } },
+      ];
+      const card = document.querySelector('#card');
+      card.hass = {
+        user: { name: 'Matej' },
+        states: {
+          'light.living_pendant': { entity_id: 'light.living_pendant', state: 'on', attributes: { friendly_name: 'Pendant', brightness: 205, rgb_color: [255, 178, 112] } },
+          'media_player.naim': { entity_id: 'media_player.naim', state: 'playing', attributes: { friendly_name: 'Naim', media_title: 'All The Stars' } },
+          'media_player.tv': { entity_id: 'media_player.tv', state: 'on', attributes: { friendly_name: 'TV' } },
+          'light.study': { entity_id: 'light.study', state: 'off', attributes: { friendly_name: 'Desk Light' } },
+        },
+        callService: async () => { throw new Error('Runtime QA must not call services'); },
+      };
+      card.setConfig({
+        type: 'custom:apartment-view-card', zones, entities,
+        experience: {
+          intro: {
+            title: '**Good evening, {{ user.name }}.**',
+            subtitle: 'The apartment is settled. **Two lights are on** and Naim is playing in the living room.\n\nNo rain is expected tonight.',
+          },
+          mobile: { expandedHeight: 480, compactHeight: 220, bottomInset: 100 },
+          landscape: { spatialRatio: 0.46 },
+          motion: { resetSeconds: 10, transitionMs: 900, orbitSeconds: 90 },
+          quality: 'auto',
+        },
+        content: {
+          overview: [
+            { type: 'heading', title: 'At a glance', subtitle: 'The controls you use most, kept close.' },
+            { type: 'spatial-controls', entities: ['light.living_pendant', 'media_player.naim'] },
+            { type: 'lovelace-card', card: { type: 'markdown', title: 'Household context', content: 'This is a nested Lovelace card.' } },
+            { type: 'spacer', size: 120 },
+          ],
+          rooms: {
+            living: [
+              { type: 'heading', title: 'Living Room', subtitle: 'Lighting and listening.' },
+              { type: 'spatial-controls', entities: ['light.living_pendant', 'media_player.naim'] },
+              { type: 'action', title: 'Settle in for the evening', subtitle: 'Use the configured Home Assistant action', icon: 'mdi:weather-sunset', action: { action: 'none' } },
+              { type: 'spacer', size: 120 },
+            ],
+            study: [
+              { type: 'heading', title: 'Study', subtitle: 'Focused and quiet.' },
+              { type: 'spatial-controls', entities: ['light.study'] },
+              { type: 'spacer', size: 120 },
+            ],
+          },
+        },
+        spatial: {
+          plan,
+          openings: [
+            { id: 'entry', kind: 'door', wallId: 'west', position: 0.55, width: 0.2, widthMeters: 0.92, height: 2.12, bottom: 0 },
+            { id: 'window', kind: 'window', wallId: 'south', position: 0.5, width: 0.34, widthMeters: 2.1, height: 1.25, bottom: 0.85 },
+            { id: 'study-door', kind: 'door', wallId: 'divider', position: 0.5, width: 0.25, widthMeters: 0.86, height: 2.12, bottom: 0 },
+          ],
+          walls: [], site: { north: 18 }, dimensions: { width: 8, aspectRatio: 1.6, wallHeight: 2.7 },
+        },
+      });
+    </script>
+  </body>
+</html>

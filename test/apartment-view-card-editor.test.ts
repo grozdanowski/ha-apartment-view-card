@@ -41,6 +41,7 @@ async function mount(patch: Partial<ApartmentViewConfig> = {}) {
     areas: { living_room: { area_id: 'living_room', name: 'Living Room' } },
     config: { latitude: 45.81, longitude: 15.98 },
     localize: (key: string) => key,
+    callService: async () => { throw new Error('Editor previews must not call services'); },
   };
   element.setConfig({ ...config(), ...patch });
   document.body.append(element);
@@ -89,6 +90,8 @@ describe('apartment-view-card-editor', () => {
   it('assigns every Element to a searchable room and reports unassigned Elements in Review', async () => {
     const element = await mount();
     element._addSpatialElement('custom');
+    const elementId = element.config.spatial.plan.elements[0].id;
+    element._openElementEditor(elementId);
     await element.updateComplete;
 
     const roomPicker = element.shadowRoot.querySelector('studio-searchable-select[label="Room"]') as any;
@@ -102,6 +105,8 @@ describe('apartment-view-card-editor', () => {
       composed: true,
     }));
     await element.updateComplete;
+    expect(element.config.spatial.plan.elements[0].zoneId).toBe('living');
+    element._closeElementEditor(true);
     expect(element.config.spatial.plan.elements[0].zoneId).toBeUndefined();
 
     element._setSetupStep('review');
@@ -253,6 +258,7 @@ describe('apartment-view-card-editor', () => {
     element._updateGlbSurface({ entityId: 'fan.purifier' });
     element._addGlbSurfaceRule('luminosity');
     element._updateGlbSurfaceRule('luminosity', 0, { attribute: 'percentage', operator: 'above', compare: 50, value: 0.8 });
+    element._openElementEditor('glb-1');
     await element.updateComplete;
 
     const surface = element.config.spatial.plan.elements[0].glb.surfaces[0];
@@ -309,6 +315,8 @@ describe('apartment-view-card-editor', () => {
     element._updateGlbSurfaceGroup({ entityId: 'fan.purifier' });
     surfaces = element.config.spatial.plan.elements[0].glb.surfaces;
     expect(surfaces.map((item: any) => item.entityId)).toEqual(['fan.purifier', 'fan.purifier', 'fan.purifier', undefined]);
+    element._openElementEditor('glb-1');
+    element._glbSurfaceScope = 'color';
     await element.updateComplete;
     expect(element.shadowRoot.textContent).toContain('Color · 3');
     expect(element.shadowRoot.textContent).toContain('Changes affect all 3 matching surfaces.');
@@ -359,7 +367,7 @@ describe('apartment-view-card-editor', () => {
     expect(element.shadowRoot.querySelectorAll('.room-mapping')).toHaveLength(1);
   });
 
-  it('uses searchable pickers instead of long item inventories throughout setup', async () => {
+  it('uses a compact Element inventory and searchable pickers inside the dedicated editor', async () => {
     const element = await mount({ quickActions: [
       { name: 'Movie night', entity: 'scene.movie_night', icon: 'mdi:movie-open' },
       { name: 'All lights off', entity: 'script.all_lights_off', icon: 'mdi:lightbulb-off-outline' },
@@ -379,9 +387,18 @@ describe('apartment-view-card-editor', () => {
     element._addElementPrimitive('sphere');
     element._setupStep = 'elements';
     await element.updateComplete;
+    expect(element.shadowRoot.querySelectorAll('.element-row')).toHaveLength(1);
+    expect(element.shadowRoot.querySelector('.element-dialog-form')).toBeNull();
+
+    const edit = element.shadowRoot.querySelector('.element-edit') as HTMLButtonElement;
+    edit.click();
+    await element.updateComplete;
     const elementPickers = Array.from(element.shadowRoot.querySelectorAll('studio-searchable-select')) as any[];
-    expect(elementPickers.map((picker) => picker.label)).toEqual(['Element to edit', 'Room', 'Part to edit']);
+    expect(elementPickers.map((picker) => picker.label)).toEqual(['Room', 'Part to edit']);
     expect(element.shadowRoot.querySelector('.primitive-list')).toBeNull();
+
+    element._closeElementEditor(false);
+    await element.updateComplete;
 
     element._setupStep = 'devices';
     await element.updateComplete;
@@ -510,6 +527,7 @@ describe('apartment-view-card-editor', () => {
     element._addSpatialElement('custom');
     element._setupStep = 'elements';
     element._addPrimitiveRule('color');
+    element._openElementEditor(element.config.spatial.plan.elements[0].id);
     await element.updateComplete;
     expect(element.shadowRoot.querySelectorAll('.conditional-control')).toHaveLength(3);
     expect(element.shadowRoot.querySelector('.condition-row')).toBeTruthy();
@@ -569,12 +587,93 @@ describe('apartment-view-card-editor', () => {
     expect(element._validateBackup(broken).errors).toContain('Element empty has no primitives.');
   });
 
+  it('keeps Element edits in a draft until Apply and restores focus after Cancel', async () => {
+    const element = await mount();
+    element._addSpatialElement('custom');
+    await element.updateComplete;
+    const originalName = element.config.spatial.plan.elements[0].name;
+    const edit = element.shadowRoot.querySelector('.element-edit') as HTMLButtonElement;
+    edit.focus();
+    edit.click();
+    await element.updateComplete;
+
+    const name = element.shadowRoot.querySelector('.element-dialog-form .asset-fields input') as HTMLInputElement;
+    name.value = 'Draft table';
+    name.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(element.config.spatial.plan.elements[0].name).toBe(originalName);
+    expect(element._config.spatial.plan.elements[0].name).toBe('Draft table');
+
+    element._closeElementEditor(false);
+    await element.updateComplete;
+    expect(element.config.spatial.plan.elements[0].name).toBe(originalName);
+    expect(element.shadowRoot.activeElement).toBe(edit);
+
+    edit.click();
+    await element.updateComplete;
+    const appliedName = element.shadowRoot.querySelector('.element-dialog-form .asset-fields input') as HTMLInputElement;
+    appliedName.value = 'Applied table';
+    appliedName.dispatchEvent(new Event('change', { bubbles: true }));
+    element._closeElementEditor(true);
+    expect(element.config.spatial.plan.elements[0].name).toBe('Applied table');
+  });
+
+  it('edits responsive Experience settings through a dedicated surface', async () => {
+    const element = await mount();
+    element._setMode('experience');
+    await element.updateComplete;
+    expect(element.shadowRoot.textContent).toContain('Responsive layout');
+    expect(element.shadowRoot.textContent).toContain('Motion and rendering');
+
+    const title = element.shadowRoot.querySelector('.settings-grid input[type="text"]') as HTMLInputElement;
+    title.value = 'Apartment';
+    title.dispatchEvent(new Event('change', { bubbles: true }));
+    const quality = element.shadowRoot.querySelector('.settings-grid select') as HTMLSelectElement;
+    quality.value = 'balanced';
+    quality.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(element.config.experience.intro.title).toBe('Apartment');
+    expect(element.config.experience.quality).toBe('balanced');
+  });
+
+  it('adds, edits, reorders, and removes overview and room Content blocks', async () => {
+    const element = await mount();
+    element._setMode('content');
+    element._contentAddType = 'heading';
+    element._addContentBlock();
+    element._contentAddType = 'lovelace-card';
+    element._addContentBlock();
+    element._contentAddType = 'spacer';
+    element._addContentBlock();
+    expect(element.config.content.overview.map((block: any) => block.type)).toEqual(['heading', 'lovelace-card', 'spacer']);
+
+    element._setStructuredContent(1, 'card', '{"type":"tile","entity":"light.pendant"}', 'object');
+    element._moveContentBlock(2, -1);
+    expect(element.config.content.overview.map((block: any) => block.type)).toEqual(['heading', 'spacer', 'lovelace-card']);
+    expect((element.config.content.overview[2] as any).card).toEqual({ type: 'tile', entity: 'light.pendant' });
+    element._removeContentBlock(1);
+    expect(element.config.content.overview).toHaveLength(2);
+
+    element._contentScope = 'living';
+    element._contentAddType = 'spatial-controls';
+    element._addContentBlock();
+    expect(element.config.content.rooms.living).toEqual([{ type: 'spatial-controls', entities: [] }]);
+  });
+
   it('never wires a callable Home Assistant service into either editor preview', async () => {
     const element = await mount();
     element._previewMode = '3d';
     await element.updateComplete;
     const preview = element.shadowRoot.querySelector('spatial-preview') as any;
     expect(preview).toBeTruthy();
+    expect(preview.hass.callService).not.toBe(element.hass.callService);
+    await expect(preview.hass.callService('light', 'turn_on')).resolves.toBeUndefined();
+
+    element._addSpatialElement('custom');
+    element._openElementEditor(element.config.spatial.plan.elements[0].id);
+    await element.updateComplete;
+    const previews = element.shadowRoot.querySelectorAll('spatial-preview') as NodeListOf<any>;
+    expect(previews).toHaveLength(1);
+    expect(previews[0].isolatedElementId).toBe(element.config.spatial.plan.elements[0].id);
+    expect(previews[0].hass.callService).not.toBe(element.hass.callService);
     expect(element.shadowRoot.textContent).toContain('device actions disabled');
   });
 });

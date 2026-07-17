@@ -35,7 +35,7 @@ Minimum Home Assistant: **2024.3.0**.
 
 ## Setup
 
-The visual editor is the recommended configuration surface.
+The visual editor is the recommended configuration surface. Version 4 adds dedicated **Experience** and **Content** workspaces alongside the architectural setup.
 
 1. **Structure**: start with a dimensioned rectangle or draw walls from scratch. Drag shared corners to adjust the plan.
 2. **Rooms**: every enclosed wall face becomes a room. Give it a name or connect it to a Home Assistant Area.
@@ -43,6 +43,71 @@ The visual editor is the recommended configuration surface.
 4. **Elements**: build objects from primitives or GLB geometry, drag them into place, then adjust X/Y/Z, rotation, scale, materials, luminosity, and state effects.
 5. **Devices**: import entities from linked Areas. The editor suggests an appropriate floor, wall, ceiling, surface, or free mount.
 6. **Review**: validate architecture, room links, object placement, and entity placement before daily use.
+
+Elements are shown as a compact inventory. **Edit** opens a large transactional workspace with an isolated 3D preview; **Apply** commits the draft and **Cancel** restores the saved Element. On phones this workspace becomes full-screen.
+
+## Immersive Experience
+
+The spatial card is a full-viewport home surface rather than a conventional dashboard tile.
+
+- On phones, the configurable greeting and supporting paragraphs lead into the 3D home. As supporting controls scroll, the 3D stage becomes a compact sticky viewport.
+- In landscape, the greeting, 3D home, and room navigation stay in the left column while contextual controls scroll independently on the right.
+- Selecting a room animates to a canonical architectural view. A single **Back** control appears inside the canvas, and the room's content replaces the overview content.
+- Camera motion pauses immediately when the user orbits or zooms, then returns to the canonical pose and slow orbit after the configured idle period.
+- The final content inset is configurable and defaults to 100 px so floating dashboard navigation never covers the last control.
+
+Greeting templates support `{{ user.name }}`, `{{ timeOfDay }}`, `{{ room }}`, and `{{ states('sensor.example') }}`. Wrap short informational fragments in `**double asterisks**` for emphasis and separate paragraphs with a blank line.
+
+```yaml
+experience:
+  intro:
+    title: "**Good evening, {{ user.name }}.**"
+    subtitle: |-
+      The apartment is settled. **Two lights are on.**
+
+      No rain is expected tonight.
+  mobile:
+    expandedHeight: 480
+    compactHeight: 220
+    bottomInset: 100
+  landscape:
+    spatialRatio: 0.46
+  motion:
+    resetSeconds: 10
+    transitionMs: 900
+    orbitSeconds: 90
+  quality: auto
+```
+
+## Contextual Content
+
+Overview and room content are ordered independently in the **Content** workspace. A sequence can contain headings, state-aware spatial controls, explicit Home Assistant actions, conditions, spacers, and complete nested Lovelace cards.
+
+```yaml
+content:
+  overview:
+    - type: heading
+      title: At a glance
+      subtitle: The controls you use most, kept close.
+    - type: spatial-controls
+      entities:
+        - light.living_room
+        - media_player.naim
+    - type: lovelace-card
+      card:
+        type: weather-forecast
+        entity: weather.home
+  rooms:
+    living-room:
+      - type: heading
+        title: Living Room
+      - type: lovelace-card
+        card:
+          type: media-control
+          entity: media_player.naim
+```
+
+Nested cards are created with Home Assistant's own card helpers and receive live `hass` updates. In every editor preview they are inert and receive a service-blocking Home Assistant facade, so editing cannot activate a device.
 
 The editor is preview-only. It does not call Home Assistant services.
 
@@ -189,7 +254,7 @@ The model reads entity state from Home Assistant:
 
 ## Legacy Migration
 
-Version 3 keeps parsing the previous `images`, percentage `zones`, and percentage entity positions so existing dashboards do not fail during migration. Those fields are not required once `spatial.plan` or `spatial.shell` exists.
+Version 4 keeps parsing the previous `images`, percentage `zones`, and percentage entity positions so existing dashboards do not fail during migration. Those fields are not required once `spatial.plan` or `spatial.shell` exists.
 
 - New cards start with a generated 3D shell and require no image.
 - A config without `spatial.plan` or `spatial.shell` remains a legacy image config and still requires `images.base`.

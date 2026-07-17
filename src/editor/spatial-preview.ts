@@ -39,6 +39,7 @@ interface CameraTween {
   toPosition: THREE.Vector3;
   fromTarget: THREE.Vector3;
   toTarget: THREE.Vector3;
+  controlPosition?: THREE.Vector3;
 }
 
 interface SmoothWallPathSegment {
@@ -128,6 +129,11 @@ export class SpatialPreview extends LitElement {
   @property({ type: Boolean }) showRoomControls = true;
   @property({ type: Boolean }) hideWalls = false;
   @property({ type: Number }) overviewResetSeconds = 10;
+  @property({ type: Boolean }) autoOrbit = true;
+  @property({ type: Number }) orbitSeconds = 90;
+  @property({ type: Number }) cameraTransitionMs = 900;
+  @property() quality: 'auto' | 'mobile' | 'balanced' | 'high' = 'auto';
+  @property({ type: Boolean, reflect: true }) fill = false;
   @property({ type: Number }) latitude = 0;
   @property({ type: Number }) longitude = 0;
   @property() weatherEntity = '';
@@ -146,6 +152,8 @@ export class SpatialPreview extends LitElement {
   private _controls?: OrbitControls;
   private _model?: THREE.Group;
   private _observer?: ResizeObserver;
+  private _intersectionObserver?: IntersectionObserver;
+  private _isVisible = true;
   private _frame = 0;
   private _cameraTween?: CameraTween;
   private _sun?: THREE.DirectionalLight;
@@ -165,6 +173,7 @@ export class SpatialPreview extends LitElement {
   private readonly _glbElementCache = new Map<string, Promise<THREE.Object3D>>();
   private _elementLoadGeneration = 0;
   private _prefersReducedMotion = false;
+  private _contextLost = false;
   private _beaconsDirty = true;
   private readonly _raycaster = new THREE.Raycaster();
   private readonly _pointer = new THREE.Vector2();
@@ -201,6 +210,7 @@ export class SpatialPreview extends LitElement {
       border: 0;
       background: transparent;
     }
+    :host([fill]) .viewport { height: 100%; min-height: 0; aspect-ratio: auto; }
     :host([isolated-element-id]:not([isolated-element-id=''])) .viewport { min-height: 420px; aspect-ratio: 1 / 1; }
     .isolated-light-beacon {
       position: absolute;
@@ -219,7 +229,7 @@ export class SpatialPreview extends LitElement {
       pointer-events: none;
     }
     .isolated-light-beacon ha-icon { --mdc-icon-size: 27px; }
-    canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; -webkit-tap-highlight-color: transparent; }
+    canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: pan-y; -webkit-tap-highlight-color: transparent; }
     button {
       appearance: none;
       border: 0;
@@ -319,9 +329,9 @@ export class SpatialPreview extends LitElement {
       pointer-events: none;
     }
     .entity-beacon {
-      --entity-marker-size: 36px;
-      --entity-marker-half: 18px;
-      --entity-icon-size: 19px;
+      --entity-marker-size: calc(36px * var(--entity-user-scale, 1));
+      --entity-marker-half: calc(18px * var(--entity-user-scale, 1));
+      --entity-icon-size: calc(19px * var(--entity-user-scale, 1));
       position: absolute;
       top: 0;
       left: 0;
@@ -346,9 +356,9 @@ export class SpatialPreview extends LitElement {
     .entity-beacon[data-activity='attention'] { color: #ffc8bf; }
     .entity-beacon[data-activity='unavailable'] { color: #8a9496; opacity: calc(var(--entity-visible, 0) * 0.68); }
     .entity-beacon[data-context='overview'] {
-      --entity-marker-size: 28.8px;
-      --entity-marker-half: 14.4px;
-      --entity-icon-size: 15px;
+      --entity-marker-size: calc(28.8px * var(--entity-user-scale, 1));
+      --entity-marker-half: calc(14.4px * var(--entity-user-scale, 1));
+      --entity-icon-size: calc(15px * var(--entity-user-scale, 1));
     }
     .entity-beacon[data-domain='light'] {
       color: var(--entity-accent, #aebabc);
@@ -422,8 +432,8 @@ export class SpatialPreview extends LitElement {
       .room-divider { height: 24px; }
       .room-rail { gap: 28px; }
       .room-rail button { min-height: 52px; padding: 2px 0 10px; font-size: 19px; }
-      .entity-beacon { --entity-marker-size: 40px; --entity-marker-half: 20px; --entity-icon-size: 20px; }
-      .entity-beacon[data-context='overview'] { --entity-marker-size: 32px; --entity-marker-half: 16px; --entity-icon-size: 16px; }
+      .entity-beacon { --entity-marker-size: calc(40px * var(--entity-user-scale, 1)); --entity-marker-half: calc(20px * var(--entity-user-scale, 1)); --entity-icon-size: calc(20px * var(--entity-user-scale, 1)); }
+      .entity-beacon[data-context='overview'] { --entity-marker-size: calc(32px * var(--entity-user-scale, 1)); --entity-marker-half: calc(16px * var(--entity-user-scale, 1)); --entity-icon-size: calc(16px * var(--entity-user-scale, 1)); }
     }
     @media (prefers-reduced-motion: reduce) {
       button { transition: none; }
@@ -431,9 +441,20 @@ export class SpatialPreview extends LitElement {
   `;
 
   protected firstUpdated(): void {
+    this._initializeRenderer();
+  }
+
+  connectedCallback(): void {
+    super.connectedCallback();
+    if (this.hasUpdated && !this._renderer) queueMicrotask(() => this._initializeRenderer());
+  }
+
+  private _initializeRenderer(): void {
+    if (this._renderer || !this.isConnected) return;
     const canvas = this.renderRoot.querySelector('canvas');
     if (!(canvas instanceof HTMLCanvasElement)) return;
     try {
+      this._contextLost = false;
       this._prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
       this._renderer = new THREE.WebGLRenderer({
         canvas,
@@ -464,6 +485,7 @@ export class SpatialPreview extends LitElement {
       this._controls.maxPolarAngle = Math.PI * 0.47;
       this._controls.target.set(0, 0, 0);
       this._controls.autoRotate = false;
+      this._controls.autoRotateSpeed = this.orbitSeconds > 0 ? 60 / this.orbitSeconds : 0;
       this._controls.addEventListener('start', () => {
         this._cameraTween = undefined;
         this._clearOverviewReset();
@@ -471,14 +493,12 @@ export class SpatialPreview extends LitElement {
       });
       this._controls.addEventListener('end', this._scheduleOverviewReset);
 
-      this._composer = new EffectComposer(this._renderer);
-      this._composer.addPass(new RenderPass(this._scene, this._camera));
-      this._grainPass = new ShaderPass(GRAIN_SHADER);
-      this._composer.addPass(this._grainPass);
-      this._composer.addPass(new OutputPass());
+      this._configureComposer();
 
       canvas.addEventListener('pointerdown', this._onPointerDown);
       canvas.addEventListener('pointerup', this._onPointerUp);
+      canvas.addEventListener('webglcontextlost', this._onContextLost);
+      canvas.addEventListener('webglcontextrestored', this._onContextRestored);
 
       RectAreaLightUniformsLib.init();
       this._sky = new THREE.HemisphereLight(0xc7d8df, 0x0b0e10, 0);
@@ -499,17 +519,79 @@ export class SpatialPreview extends LitElement {
 
       this._observer = new ResizeObserver(() => this._resize());
       this._observer.observe(this);
+      if (typeof IntersectionObserver !== 'undefined') {
+        this._intersectionObserver = new IntersectionObserver((entries) => {
+          this._isVisible = entries.some((entry) => entry.isIntersecting);
+          if (this._isVisible) this._beaconsDirty = true;
+        }, { rootMargin: '160px' });
+        this._intersectionObserver.observe(this);
+      }
       this._buildModel();
       this._resize();
       this._moveCameraTo(null);
       if (this.modelUrl) void this._loadModel();
+      this._error = '';
       this._animate();
     } catch (error) {
+      canvas.removeEventListener('pointerdown', this._onPointerDown);
+      canvas.removeEventListener('pointerup', this._onPointerUp);
+      canvas.removeEventListener('webglcontextlost', this._onContextLost);
+      canvas.removeEventListener('webglcontextrestored', this._onContextRestored);
+      cancelAnimationFrame(this._frame);
+      this._observer?.disconnect();
+      this._intersectionObserver?.disconnect();
+      this._controls?.dispose();
+      this._composer?.dispose();
+      this._renderer?.dispose();
+      this._renderer = undefined;
+      this._composer = undefined;
+      this._grainPass = undefined;
+      this._controls = undefined;
+      this._scene = undefined;
+      this._camera = undefined;
+      this._observer = undefined;
+      this._intersectionObserver = undefined;
+      this._contextLost = false;
       const message = error instanceof Error ? error.message : '3D preview is unavailable.';
       queueMicrotask(() => {
         if (this.isConnected) this._error = message;
       });
     }
+  }
+
+  private _configureComposer(): void {
+    this._composer?.dispose();
+    this._composer = undefined;
+    this._grainPass = undefined;
+    this._grainPass = undefined;
+    if (!this._renderer || !this._scene || !this._camera) return;
+    const mobile = this.clientWidth < 700 || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    const requestedSamples = this.quality === 'mobile' ? 2
+      : this.quality === 'high' ? 4
+        : this.quality === 'balanced' ? 2
+          : mobile ? 2 : 4;
+    const gl = this._renderer.getContext();
+    const maxSamples = this._renderer.capabilities.isWebGL2
+      ? Number((gl as WebGL2RenderingContext).getParameter((gl as WebGL2RenderingContext).MAX_SAMPLES) ?? 0)
+      : 0;
+    const samples = Math.max(0, Math.min(requestedSamples, maxSamples));
+    // WebGL1 cannot multisample offscreen targets. Render directly instead so
+    // the renderer's native antialiasing remains active.
+    if (samples === 0) return;
+    const renderTarget = new THREE.WebGLRenderTarget(1, 1, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      // Half-float multisampled targets can yield a transparent frame on
+      // mobile WebKit even though context creation succeeds.
+      type: THREE.UnsignedByteType,
+    });
+    renderTarget.samples = samples;
+    this._composer = new EffectComposer(this._renderer, renderTarget);
+    this._composer.addPass(new RenderPass(this._scene, this._camera));
+    this._grainPass = new ShaderPass(GRAIN_SHADER);
+    this._composer.addPass(this._grainPass);
+    this._composer.addPass(new OutputPass());
   }
 
   protected willUpdate(changed: Map<PropertyKey, unknown>): void {
@@ -535,6 +617,14 @@ export class SpatialPreview extends LitElement {
         this._applyFocus();
         this._moveCameraTo(this.focusedZoneId);
       }
+    }
+    if (changed.has('orbitSeconds') && this._controls) {
+      this._controls.autoRotateSpeed = this.orbitSeconds > 0 ? 60 / this.orbitSeconds : 0;
+      if (this.orbitSeconds <= 0) this._controls.autoRotate = false;
+    }
+    if (changed.has('quality') && this._renderer) {
+      this._configureComposer();
+      this._resize();
     }
     if (isolatedElementChanged && this._scene) this._moveCameraTo(null);
     if (changed.has('hideWalls') && this._scene) this._applyWallCutaway();
@@ -823,14 +913,26 @@ export class SpatialPreview extends LitElement {
     const canvas = this.renderRoot.querySelector('canvas');
     canvas?.removeEventListener('pointerdown', this._onPointerDown);
     canvas?.removeEventListener('pointerup', this._onPointerUp);
+    canvas?.removeEventListener('webglcontextlost', this._onContextLost);
+    canvas?.removeEventListener('webglcontextrestored', this._onContextRestored);
     super.disconnectedCallback();
     cancelAnimationFrame(this._frame);
     this._observer?.disconnect();
+    this._intersectionObserver?.disconnect();
     this._clearOverviewReset();
     this._controls?.dispose();
     this._disposeModel();
     this._composer?.dispose();
     this._renderer?.dispose();
+    this._controls = undefined;
+    this._composer = undefined;
+    this._renderer = undefined;
+    this._scene = undefined;
+    this._camera = undefined;
+    this._observer = undefined;
+    this._intersectionObserver = undefined;
+    this._isVisible = true;
+    this._contextLost = false;
   }
 
   private _disposeModel(): void {
@@ -2591,13 +2693,33 @@ export class SpatialPreview extends LitElement {
       : Math.max(this._controls.minDistance + 1, poseDistance * OVERVIEW_ZOOM_OUT_MARGIN);
     this._camera.far = Math.max(50, this._controls.maxDistance * 3);
     this._camera.updateProjectionMatrix();
+    const fromPosition = this._camera.position.clone();
+    const midpoint = fromPosition.clone().lerp(position, 0.5);
+    const travel = Math.max(0.1, fromPosition.distanceTo(position));
+    const tangent = new THREE.Vector3().crossVectors(
+      position.clone().sub(fromPosition).normalize(),
+      this._camera.up,
+    ).normalize();
+    const controlPosition = midpoint
+      .addScaledVector(tangent, travel * (zone ? 0.34 : -0.24))
+      .addScaledVector(this._camera.up, travel * 0.12);
+    if (this.cameraTransitionMs <= 0 || this._prefersReducedMotion) {
+      this._camera.position.copy(position);
+      this._controls.target.copy(target);
+      this._controls.update();
+      this._cameraTween = undefined;
+      this._controls.autoRotate = this.autoOrbit && !this._prefersReducedMotion && !this.isolatedElementId;
+      this._beaconsDirty = true;
+      return;
+    }
     this._cameraTween = {
       started: performance.now(),
-      duration: this._prefersReducedMotion ? 1 : 520,
-      fromPosition: this._camera.position.clone(),
+      duration: THREE.MathUtils.clamp(this.cameraTransitionMs, 160, 1_400),
+      fromPosition,
       toPosition: position,
       fromTarget: this._controls.target.clone(),
       toTarget: target,
+      controlPosition,
     };
     this._controls.autoRotate = false;
   }
@@ -2674,11 +2796,27 @@ export class SpatialPreview extends LitElement {
 
   private _scheduleOverviewReset = (): void => {
     this._clearOverviewReset();
-    if (this.focusedZoneId !== null || this.overviewResetSeconds <= 0) return;
+    if (this.overviewResetSeconds <= 0) return;
     this._overviewResetTimer = window.setTimeout(() => {
       this._overviewResetTimer = undefined;
-      if (this.focusedZoneId === null) this._moveCameraTo(null);
+      this._moveCameraTo(this.focusedZoneId);
     }, this.overviewResetSeconds * 1_000);
+  };
+
+  private _onContextLost = (event: Event): void => {
+    event.preventDefault();
+    this._contextLost = true;
+    this._error = 'The 3D view paused to recover graphics memory.';
+    cancelAnimationFrame(this._frame);
+  };
+
+  private _onContextRestored = (): void => {
+    this._contextLost = false;
+    this._error = '';
+    this._buildModel();
+    this._resize();
+    this._moveCameraTo(this.focusedZoneId);
+    this._animate();
   };
 
   private _applyFocus(): void {
@@ -2885,6 +3023,8 @@ export class SpatialPreview extends LitElement {
     const width = Math.min(188, Math.max(118, Math.max(presentation.name.length, presentation.status.length) * 5.4 + 42));
     const lightColor = domain === 'light' && resolved.activity === 'active' ? resolveLightColor(fallbackState) : null;
     const accent = lightColor ? `rgb(${lightColor.r} ${lightColor.g} ${lightColor.b})` : '#91a0a3';
+    const size = roomFocused ? entity.roomSize ?? entity.size : entity.overviewSize ?? entity.size;
+    const sizeScale = size === 'tiny' ? 0.72 : size === 'small' ? 0.86 : size === 'large' ? 1.18 : size === 'huge' ? 1.36 : 1;
     return html`<button
       type="button"
       class="entity-beacon ${expanded ? 'expanded' : ''}"
@@ -2892,7 +3032,7 @@ export class SpatialPreview extends LitElement {
       data-activity=${resolved.activity}
       data-domain=${domain}
       data-context=${roomFocused ? 'room' : 'overview'}
-      style=${`--entity-width:${width}px;--entity-accent:${accent}`}
+      style=${`--entity-width:${width}px;--entity-accent:${accent};--entity-user-scale:${sizeScale}`}
       aria-label=${`${presentation.name}: ${presentation.status}`}
       aria-expanded=${roomFocused ? String(expanded) : nothing}
       @click=${(event: Event) => this._activateEntityBeacon(event, entity.entity, roomFocused, expanded)}
@@ -2993,15 +3133,28 @@ export class SpatialPreview extends LitElement {
   }
 
   private _animate = () => {
+    if (this._contextLost) return;
     this._frame = requestAnimationFrame(this._animate);
+    if (!this._isVisible || document.visibilityState === 'hidden') return;
     const tweening = Boolean(this._cameraTween);
     if (this._cameraTween && this._camera && this._controls) {
       const elapsed = (performance.now() - this._cameraTween.started) / this._cameraTween.duration;
       const progress = Math.min(1, elapsed);
       const eased = 1 - Math.pow(1 - progress, 3);
-      this._camera.position.lerpVectors(this._cameraTween.fromPosition, this._cameraTween.toPosition, eased);
+      if (this._cameraTween.controlPosition) {
+        const inverse = 1 - eased;
+        this._camera.position
+          .copy(this._cameraTween.fromPosition).multiplyScalar(inverse * inverse)
+          .addScaledVector(this._cameraTween.controlPosition, 2 * inverse * eased)
+          .addScaledVector(this._cameraTween.toPosition, eased * eased);
+      } else {
+        this._camera.position.lerpVectors(this._cameraTween.fromPosition, this._cameraTween.toPosition, eased);
+      }
       this._controls.target.lerpVectors(this._cameraTween.fromTarget, this._cameraTween.toTarget, eased);
-      if (progress >= 1) this._cameraTween = undefined;
+      if (progress >= 1) {
+        this._cameraTween = undefined;
+        this._controls.autoRotate = this.autoOrbit && !this._prefersReducedMotion && !this.isolatedElementId;
+      }
     }
     const cameraChanged = this._controls?.update() ?? false;
     this._animateEntityEffects(performance.now());

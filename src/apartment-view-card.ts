@@ -4,9 +4,10 @@ import { repeat } from 'lit/directives/repeat.js';
 import { guard } from 'lit/directives/guard.js';
 import { fireEvent } from 'custom-card-helpers';
 import type { HassLike } from './core/ha-types';
-import { normalizeConfig, zoneForEntity, zoneForPoint, type ApartmentViewConfig, type EntityConfig, type ZoneConfig, type QuickAction, type ImagesConfig } from './core/config';
+import { normalizeConfig, zoneForEntity, zoneForPoint, type ApartmentViewConfig, type ContentBlock, type EntityConfig, type ZoneConfig, type QuickAction, type ImagesConfig, type SpatialConfig } from './core/config';
 import './editor/apartment-view-card-editor';
 import './editor/spatial-preview';
+import './runtime/immersive-content';
 import { renderBaseLayer, weatherTint } from './render/base-layer';
 import { renderLightLayer } from './render/light-layer';
 import { renderEffect, EFFECT_STYLES } from './render/effect-layer';
@@ -93,7 +94,22 @@ export class ApartmentViewCard extends LitElement {
   // with mouse-anchored wheel zoom and no zone awareness (old src/ApartmentViewCard.ts).
   // v2 unifies this into a single `_transform: ZoomTransform`. Free pan/zoom (Phase 3)
   // drives `_transform` directly; zone focus (Phase 5) drives it via geometry.zoomToZone.
-  @property({ attribute: false }) public hass?: HassLike;
+  private _hass?: HassLike;
+  @property({ attribute: false })
+  public get hass(): HassLike | undefined {
+    return this._hass;
+  }
+  public set hass(value: HassLike | undefined) {
+    const previous = this._hass;
+    if (previous === value) return;
+    this._hass = value;
+    this.requestUpdate('hass', previous);
+    // `shouldUpdate` deliberately skips unrelated dashboard ticks. Children
+    // still need the current HA object because nested cards, content
+    // conditions, and spatial Element surfaces may reference any entity.
+    this.renderRoot?.querySelectorAll<HTMLElement>('spatial-preview, av-immersive-content')
+      .forEach((child) => { (child as HTMLElement & { hass?: HassLike }).hass = value; });
+  }
   @property({ attribute: false }) public config!: ApartmentViewConfig;
   @state() private _cardWidth = 600;
   @state() private _editorElementPreviewId: string | null = null;
@@ -133,6 +149,7 @@ export class ApartmentViewCard extends LitElement {
   @state() private _isGesturing = false;
   @state() private _focusedZone: ZoneConfig | null = null;
   @state() private _spatialFocusedZoneId: string | null = null;
+  @state() private _immersiveCompact = false;
   /** Entities currently driven by the control surface (empty = closed). */
   @state() private _controlled: string[] = [];
   /** "Lights control" multi-select mode. */
@@ -165,6 +182,7 @@ export class ApartmentViewCard extends LitElement {
   private _inPreview: boolean | null = null;
 
   private _ro?: ResizeObserver;
+  private _immersiveScrollRaf = 0;
   private _mql?: MediaQueryList;
   /** The .wrapper currently carrying the non-passive multi-touch guards. */
   private _wrapperTouchTarget: HTMLElement | null = null;
@@ -1005,6 +1023,240 @@ export class ApartmentViewCard extends LitElement {
       }
     }
   `,
+    css`
+      .immersive-card {
+        --ha-card-background: transparent;
+        --ha-card-border-color: transparent;
+        --ha-card-box-shadow: none;
+        box-sizing: border-box;
+        display: block;
+        width: 100%;
+        height: calc(100dvh - var(--header-height, 0px));
+        min-height: min(560px, calc(100dvh - var(--header-height, 0px)));
+        overflow: hidden;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+        outline: none;
+      }
+      .immersive-card.editor-preview { height: min(780px, 86vh); }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      .immersive-shell {
+        box-sizing: border-box;
+        width: 100%;
+        height: 100%;
+        min-width: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+        color: var(--primary-text-color, #f1f4f4);
+        background: transparent;
+        scrollbar-width: thin;
+        overscroll-behavior: contain;
+      }
+      .immersive-spatial-column { display: contents; }
+      .immersive-intro {
+        box-sizing: border-box;
+        display: grid;
+        gap: 14px;
+        padding: max(28px, env(safe-area-inset-top)) 20px 20px;
+      }
+      .immersive-intro h1 {
+        max-width: 18ch;
+        margin: 0;
+        color: var(--primary-text-color, #f1f4f4);
+        font-size: 32px;
+        font-weight: 700;
+        line-height: 1.12;
+        letter-spacing: 0;
+      }
+      .immersive-intro-copy {
+        display: grid;
+        max-width: 65ch;
+        gap: 10px;
+        color: var(--secondary-text-color, #a7b0b3);
+        font-size: 17px;
+        line-height: 1.4;
+      }
+      .immersive-intro-copy p { margin: 0; }
+      .immersive-intro-copy strong { color: var(--primary-text-color, #f1f4f4); font-weight: 650; }
+      .immersive-spatial-cluster {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        padding: 0 0 2px;
+        background: var(--lovelace-background, #080b0d);
+        contain: layout paint;
+      }
+      .immersive-stage {
+        position: relative;
+        box-sizing: border-box;
+        width: 100%;
+        height: var(--immersive-expanded-height, 480px);
+        min-height: 0;
+        overflow: hidden;
+        transition: height 320ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      .immersive-spatial-cluster.compact .immersive-stage { height: var(--immersive-compact-height, 240px); }
+      .immersive-stage spatial-preview {
+        display: block;
+        width: 100%;
+        height: 100%;
+        --spatial-aspect: auto;
+        --spatial-aspect-mobile: auto;
+      }
+      .immersive-stage spatial-preview::part(viewport) { height: 100%; }
+      .immersive-back {
+        position: absolute;
+        z-index: 8;
+        top: 12px;
+        left: 16px;
+        display: inline-flex;
+        min-width: 44px;
+        min-height: 44px;
+        align-items: center;
+        gap: 7px;
+        padding: 0 12px;
+        border: 1px solid color-mix(in srgb, var(--primary-text-color, #f1f4f4) 18%, transparent);
+        border-radius: 6px;
+        color: var(--primary-text-color, #f1f4f4);
+        background: rgba(8, 11, 13, 0.88);
+        font: inherit;
+        font-size: 14px;
+        font-weight: 620;
+        cursor: pointer;
+        backdrop-filter: blur(10px);
+      }
+      .immersive-back ha-icon { --mdc-icon-size: 19px; }
+      .immersive-back:focus-visible { outline: 2px solid #9fd8df; outline-offset: 2px; }
+      .immersive-room-nav {
+        display: flex;
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        gap: 26px;
+        padding: 0 20px;
+        overflow-x: auto;
+        background: var(--lovelace-background, #080b0d);
+        scrollbar-width: none;
+        scroll-snap-type: x proximity;
+      }
+      .immersive-room-nav::-webkit-scrollbar { display: none; }
+      .immersive-room-nav button {
+        appearance: none;
+        flex: 0 0 auto;
+        min-height: 52px;
+        padding: 4px 0 10px;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        color: var(--secondary-text-color, #8d989b);
+        background: transparent;
+        font: inherit;
+        font-size: 17px;
+        font-weight: 520;
+        white-space: nowrap;
+        cursor: pointer;
+        scroll-snap-align: start;
+      }
+      .immersive-room-nav button[aria-pressed='true'] {
+        color: var(--primary-text-color, #f1f4f4);
+        border-bottom-color: #9fd8df;
+      }
+      .immersive-room-nav button:focus-visible { outline: 2px solid #9fd8df; outline-offset: -2px; }
+      .immersive-navigation {
+        display: flex;
+        min-width: 0;
+        align-items: stretch;
+        background: var(--lovelace-background, #080b0d);
+      }
+      .immersive-navigation .immersive-room-nav { flex: 1 1 auto; }
+      .immersive-floor-select {
+        display: inline-flex;
+        flex: 0 0 auto;
+        align-items: center;
+        gap: 6px;
+        min-height: 52px;
+        padding: 0 4px 0 20px;
+        color: var(--secondary-text-color, #a7b0b3);
+      }
+      .immersive-floor-select ha-icon { --mdc-icon-size: 18px; }
+      .immersive-floor-select select {
+        max-width: 132px;
+        min-height: 40px;
+        border: 0;
+        color: inherit;
+        background: transparent;
+        font: inherit;
+        font-size: 14px;
+      }
+      .immersive-content-column {
+        box-sizing: border-box;
+        min-width: 0;
+        padding: 34px 20px calc(var(--immersive-bottom-inset, 100px) + env(safe-area-inset-bottom));
+      }
+      .immersive-empty-content {
+        display: grid;
+        gap: 6px;
+        min-height: 120px;
+        align-content: start;
+      }
+      .immersive-empty-content h2 { margin: 0; font-size: 22px; font-weight: 650; }
+      .immersive-empty-content p { max-width: 48ch; margin: 0; color: var(--secondary-text-color, #a7b0b3); line-height: 1.45; }
+      @media (orientation: landscape) and (min-width: 760px) {
+        .immersive-shell {
+          display: grid;
+          grid-template-columns: minmax(0, var(--immersive-spatial-ratio, 45%)) minmax(0, 1fr);
+          overflow: hidden;
+        }
+        .immersive-spatial-column {
+          display: grid;
+          min-width: 0;
+          min-height: 0;
+          grid-template-rows: auto minmax(0, 1fr);
+          overflow: hidden;
+        }
+        .immersive-intro { padding: 38px 34px 18px; }
+        .immersive-intro h1 { font-size: 38px; }
+        .immersive-spatial-cluster {
+          position: relative;
+          display: grid;
+          min-height: 0;
+          grid-template-rows: minmax(0, 1fr) auto;
+          background: transparent;
+        }
+        .immersive-stage,
+        .immersive-spatial-cluster.compact .immersive-stage { height: 100%; }
+        .immersive-navigation { background: transparent; }
+        .immersive-room-nav { padding: 0 34px; background: transparent; }
+        .immersive-floor-select { padding-left: 34px; }
+        .immersive-content-column {
+          min-height: 0;
+          padding: 48px 42px calc(var(--immersive-bottom-inset, 100px) + env(safe-area-inset-bottom));
+          overflow-x: hidden;
+          overflow-y: auto;
+          border-left: 1px solid color-mix(in srgb, var(--primary-text-color, #f1f4f4) 10%, transparent);
+          scrollbar-width: thin;
+          overscroll-behavior: contain;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .immersive-stage { transition: none; }
+      }
+    `,
     unsafeCSS(EFFECT_STYLES),
   ];
 
@@ -1043,7 +1295,19 @@ export class ApartmentViewCard extends LitElement {
   private _setSpatialRoomFocus = (zoneId: string | null): void => {
     if (this._spatialFocusedZoneId === zoneId) return;
     this._spatialFocusedZoneId = zoneId;
-    this._scheduleIdleReset();
+    void this.updateComplete.then(() => {
+      const content = this.renderRoot.querySelector<HTMLElement>('.immersive-content-column');
+      const shell = this.renderRoot.querySelector<HTMLElement>('.immersive-shell');
+      if (!content || !shell) return;
+      if (getComputedStyle(content).overflowY !== 'visible') {
+        content.scrollTo({ top: 0, behavior: this._reducedMotion() ? 'auto' : 'smooth' });
+        return;
+      }
+      const intro = shell.querySelector<HTMLElement>('.immersive-intro');
+      if (shell.scrollTop > (intro?.offsetHeight ?? 0)) {
+        shell.scrollTo({ top: intro?.offsetHeight ?? 0, behavior: this._reducedMotion() ? 'auto' : 'smooth' });
+      }
+    });
   };
 
   static getConfigElement(): HTMLElement {
@@ -1176,6 +1440,8 @@ export class ApartmentViewCard extends LitElement {
     window.removeEventListener('keydown', this._handleKeyDown);
     clearTimeout(this._pulseTimer);
     clearTimeout(this._floorFadeTimer);
+    cancelAnimationFrame(this._immersiveScrollRaf);
+    this._immersiveScrollRaf = 0;
     this._wheelHintTimers.forEach(clearTimeout);
     this._wheelHintTimers = [];
     this._clearAnimating();
@@ -1257,8 +1523,15 @@ export class ApartmentViewCard extends LitElement {
       ...configuredIds,
       ...inferredEnvironmentIds,
       ...fallbackGroupIds,
+      ...this._introTemplateEntityIds(),
     ];
     return ids.some((id) => prev.states?.[id] !== next.states?.[id]);
+  }
+
+  private _introTemplateEntityIds(): string[] {
+    const intro = this.config?.experience?.intro;
+    const source = `${intro?.title ?? ''}\n${intro?.subtitle ?? ''}`;
+    return [...source.matchAll(/states\(['"]([^'"]+)['"]\)/g)].map((match) => match[1]);
   }
 
   protected willUpdate(changed: PropertyValues): void {
@@ -1724,6 +1997,11 @@ export class ApartmentViewCard extends LitElement {
       this._quickOpen = false;
       return;
     }
+    if (this._spatialFocusedZoneId !== null) {
+      e.preventDefault();
+      this._setSpatialRoomFocus(null);
+      return;
+    }
     if (this._controlled.length || this._selectMode) {
       e.preventDefault();
       this._closeControl();
@@ -1859,7 +2137,6 @@ export class ApartmentViewCard extends LitElement {
       this._quickOpen = false;
       this._controlled = [];
       this._selectMode = false;
-      if (this._spatialFocusedZoneId !== null) this._spatialFocusedZoneId = null;
       if (this._focusedZone !== null) {
         this._exitFocus();
       } else if (this._transform.scale !== 1 || this._transform.panX !== 0 || this._transform.panY !== 0) {
@@ -2069,8 +2346,8 @@ export class ApartmentViewCard extends LitElement {
     return list;
   }
 
-  /** The active floor's images/entities/zones (or the top-level config when single-floor). */
-  private get _floorData(): { images: ImagesConfig; entities: EntityConfig[]; zones: ZoneConfig[] } {
+  /** The active floor's complete model (or the top-level config when single-floor). */
+  private get _floorData(): { images: ImagesConfig; entities: EntityConfig[]; zones: ZoneConfig[]; spatial?: SpatialConfig } {
     const f = this.config.floors;
     if (f && f.length) return f[Math.min(this._floor, f.length - 1)];
     return this.config;
@@ -2082,6 +2359,7 @@ export class ApartmentViewCard extends LitElement {
     this._exitFocus();
     this._controlled = [];
     this._selectMode = false;
+    this._spatialFocusedZoneId = null;
     this._floor = i;
     // New floor image: hide markers until its aspect is known, then re-reveal.
     this._revealed = false;
@@ -2091,6 +2369,161 @@ export class ApartmentViewCard extends LitElement {
     this._floorFadeTimer = setTimeout(() => {
       this._floorFading = false;
     }, 420);
+  }
+
+  private _templateValue(token: string): string {
+    const key = token.trim();
+    const now = new Date();
+    if (key === 'user' || key === 'user.name') return this.hass?.user?.name ?? 'there';
+    if (key === 'timeOfDay') {
+      const hour = now.getHours();
+      if (hour < 5) return 'Night';
+      if (hour < 12) return 'Morning';
+      if (hour < 18) return 'Afternoon';
+      return 'Evening';
+    }
+    if (key === 'room') return this._floorData.zones.find((zone) => zone.id === this._spatialFocusedZoneId)?.name ?? 'Home';
+    const stateMatch = /^states\(['"]([^'"]+)['"]\)$/.exec(key);
+    if (stateMatch) return this.hass?.states[stateMatch[1]]?.state ?? 'unavailable';
+    return `{{ ${key} }}`;
+  }
+
+  private _renderInlineEmphasis(value: string): TemplateResult {
+    const parts = value.split(/(\*\*[^*]+\*\*)/g);
+    return html`${parts.map((part) => part.startsWith('**') && part.endsWith('**')
+      ? html`<strong>${part.slice(2, -2)}</strong>`
+      : part)}`;
+  }
+
+  private _renderTemplateParagraphs(source: string): TemplateResult {
+    const resolved = source.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_match: string, token: string) => this._templateValue(token));
+    const paragraphs = resolved.split(/\n\s*\n/g).map((paragraph) => paragraph.trim()).filter(Boolean);
+    return html`${paragraphs.map((paragraph) => html`<p>${this._renderInlineEmphasis(paragraph)}</p>`)}`;
+  }
+
+  private _defaultImmersiveBlocks(zoneId: string | null): ContentBlock[] {
+    const zone = this._floorData.zones.find((candidate) => candidate.id === zoneId);
+    const entities = this._floorData.entities
+      .filter((entity) => zoneId === null || entity.zoneId === zoneId)
+      .slice(0, zoneId === null ? 6 : 12)
+      .map((entity) => entity.entity);
+    const blocks: ContentBlock[] = [{
+      type: 'heading',
+      title: zone?.name ?? 'At a glance',
+      subtitle: zone ? 'Live controls and context for this room.' : 'Choose a room or explore the live home.',
+    }];
+    if (entities.length) blocks.push({ type: 'spatial-controls', entities });
+    if (zoneId === null) {
+      this.config.quickActions.forEach((quickAction) => {
+        const action = quickAction.service
+          ? { action: 'call-service', service: quickAction.service, service_data: quickAction.data ?? {} }
+          : quickAction.entity
+            ? { action: 'call-service', service: 'homeassistant.turn_on', service_data: { entity_id: quickAction.entity } }
+            : { action: 'none' };
+        blocks.push({ type: 'action', title: quickAction.name, icon: quickAction.icon, action });
+      });
+    }
+    return blocks;
+  }
+
+  private _immersiveBlocks(zoneId: string | null): ContentBlock[] {
+    const configured = zoneId === null
+      ? this.config.content?.overview ?? []
+      : this.config.content?.rooms?.[zoneId] ?? [];
+    return configured.length ? configured : this._defaultImmersiveBlocks(zoneId);
+  }
+
+  private _onImmersiveScroll = (event: Event): void => {
+    const scroller = event.currentTarget as HTMLElement;
+    if (this._immersiveScrollRaf) cancelAnimationFrame(this._immersiveScrollRaf);
+    this._immersiveScrollRaf = requestAnimationFrame(() => {
+      this._immersiveScrollRaf = 0;
+      const intro = scroller.querySelector<HTMLElement>('.immersive-intro');
+      const next = scroller.scrollTop > Math.max(24, (intro?.offsetHeight ?? 0) - 24);
+      if (next !== this._immersiveCompact) this._immersiveCompact = next;
+    });
+  };
+
+  private _renderImmersiveSpatialCard(spatial: SpatialConfig, inspectingElement?: { id: string }): TemplateResult {
+    const experience = this.config.experience!;
+    const title = experience.intro.title || 'Home';
+    const subtitle = experience.intro.subtitle;
+    const focusedZone = this._floorData.zones.find((zone) => zone.id === this._spatialFocusedZoneId);
+    const preview = this._isCardEditorPreview();
+    const style = [
+      `--immersive-expanded-height:${experience.mobile.expandedHeight}px`,
+      `--immersive-compact-height:${experience.mobile.compactHeight}px`,
+      `--immersive-bottom-inset:${experience.mobile.bottomInset}px`,
+      `--immersive-spatial-ratio:${Math.round(experience.landscape.spatialRatio * 100)}%`,
+    ].join(';');
+    return html`<ha-card class="immersive-card ${preview ? 'editor-preview' : ''}" style=${style}>
+      <div class="immersive-shell" @scroll=${this._onImmersiveScroll}>
+        <section class="immersive-spatial-column" aria-label="Spatial home">
+          <header class="immersive-intro">
+            <h1>${this._renderInlineEmphasis(title.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_match: string, token: string) => this._templateValue(token)))}</h1>
+            ${subtitle ? html`<div class="immersive-intro-copy">${this._renderTemplateParagraphs(subtitle)}</div>` : nothing}
+          </header>
+          <div class="immersive-spatial-cluster ${this._immersiveCompact ? 'compact' : ''}">
+            <div class="immersive-stage">
+              ${this._spatialFocusedZoneId !== null ? html`<button type="button" class="immersive-back spatial-room-back"
+                aria-label="Back to apartment overview" @click=${() => this._setSpatialRoomFocus(null)}>
+                <ha-icon icon="mdi:arrow-left"></ha-icon><span>Back</span>
+              </button>` : nothing}
+              <spatial-preview
+                .zones=${this._floorData.zones}
+                .entities=${this._floorData.entities}
+                .openings=${spatial.openings}
+                .walls=${spatial.walls}
+                .site=${spatial.site}
+                .dimensions=${spatial.dimensions}
+                .plan=${spatial.plan}
+                .shell=${spatial.shell ?? null}
+                .hass=${this.hass}
+                .hideWalls=${this.config.options.hideWalls}
+                .overviewResetSeconds=${experience.motion.resetSeconds}
+                .cameraTransitionMs=${experience.motion.transitionMs}
+                .autoOrbit=${experience.motion.orbitSeconds > 0}
+                .orbitSeconds=${experience.motion.orbitSeconds}
+                .quality=${experience.quality}
+                .latitude=${spatial.site.latitude ?? this.hass?.config?.latitude ?? 0}
+                .longitude=${spatial.site.longitude ?? this.hass?.config?.longitude ?? 0}
+                .weatherEntity=${this.config.options.weatherEntity ?? ''}
+                .illuminanceEntity=${this.config.options.illuminanceEntity ?? ''}
+                .spatialLightingMode=${this.config.options.spatialLightingMode}
+                .isolatedElementId=${inspectingElement?.id ?? ''}
+                .focusedZoneId=${this._spatialFocusedZoneId}
+                .showRoomControls=${false}
+                .fill=${true}
+                @spatial-entity-selected=${this._onSpatialEntitySelected}
+                @spatial-room-selected=${this._onSpatialRoomSelected}
+              ></spatial-preview>
+            </div>
+            ${!inspectingElement && this._floorData.zones.length ? html`<div class="immersive-navigation">
+              ${this.config.floors && this.config.floors.length > 1 ? html`<label class="immersive-floor-select">
+                <ha-icon icon="mdi:layers-outline"></ha-icon><span class="sr-only">Floor</span>
+                <select aria-label="Floor" .value=${String(this._floor)}
+                  @change=${(event: Event) => this._switchFloor(Number((event.target as HTMLSelectElement).value))}>
+                  ${this.config.floors.map((floor, index) => html`<option value=${String(index)}>${floor.name}</option>`)}
+                </select>
+              </label>` : nothing}
+              <nav class="immersive-room-nav spatial-room-navigation spatial-room-rail" aria-label="Rooms">
+                ${this._floorData.zones.map((zone) => html`<button type="button"
+                  aria-pressed=${this._spatialFocusedZoneId === zone.id}
+                  @click=${() => this._setSpatialRoomFocus(zone.id ?? null)}>${zone.name}</button>`)}
+              </nav>
+            </div>` : nothing}
+          </div>
+        </section>
+        <main class="immersive-content-column" aria-label=${focusedZone ? `${focusedZone.name} controls` : 'Home controls'}>
+          <av-immersive-content
+            .hass=${this.hass}
+            .blocks=${this._immersiveBlocks(this._spatialFocusedZoneId)}
+            .entities=${this._floorData.entities}
+            .preview=${preview}
+          ></av-immersive-content>
+        </main>
+      </div>
+    </ha-card>`;
   }
 
   private _runQuickAction(qa: QuickAction): void {
@@ -2401,47 +2834,13 @@ export class ApartmentViewCard extends LitElement {
   // ---------------------------------------------------------------------------
 
   protected render(): TemplateResult {
-    const spatial = this.config?.spatial;
+    if (!this.config) return html`<ha-card><div class="warning">Please configure the card.</div></ha-card>`;
+    const spatial = this._floorData.spatial ?? this.config?.spatial;
     if (spatial?.plan || spatial?.shell) {
       const inspectingElement = this._editorElementPreviewId
         ? spatial.plan?.elements.find((element) => element.id === this._editorElementPreviewId)
         : undefined;
-      return html`<ha-card>
-        ${!inspectingElement && this.config.zones.length ? html`<nav class="spatial-room-navigation" aria-label="Rooms">
-          ${this._spatialFocusedZoneId !== null ? html`<button type="button" class="spatial-room-back"
-            aria-label="Back to apartment overview" title="Overview"
-            @click=${() => this._setSpatialRoomFocus(null)}>
-            <ha-icon icon="mdi:arrow-left"></ha-icon>
-          </button><span class="spatial-room-divider" aria-hidden="true"></span>` : nothing}
-          <div class="spatial-room-rail">
-            ${this.config.zones.map((zone) => html`<button type="button"
-              aria-pressed=${this._spatialFocusedZoneId === zone.id}
-              @click=${() => this._setSpatialRoomFocus(zone.id ?? null)}>${zone.name}</button>`)}
-          </div>
-        </nav>` : nothing}
-        <spatial-preview
-        .zones=${this.config.zones}
-        .entities=${this.config.entities}
-        .openings=${spatial.openings}
-        .walls=${spatial.walls}
-        .site=${spatial.site}
-        .dimensions=${spatial.dimensions}
-        .plan=${spatial.plan}
-        .shell=${spatial.shell ?? null}
-        .hass=${this.hass}
-        .hideWalls=${this.config.options.hideWalls}
-        .overviewResetSeconds=${this.config.options.idleTimeout}
-        .latitude=${spatial.site.latitude ?? this.hass?.config?.latitude ?? 0}
-        .longitude=${spatial.site.longitude ?? this.hass?.config?.longitude ?? 0}
-        .weatherEntity=${this.config.options.weatherEntity ?? ''}
-        .illuminanceEntity=${this.config.options.illuminanceEntity ?? ''}
-        .spatialLightingMode=${this.config.options.spatialLightingMode}
-        .isolatedElementId=${inspectingElement?.id ?? ''}
-        .focusedZoneId=${this._spatialFocusedZoneId}
-        .showRoomControls=${false}
-        @spatial-entity-selected=${this._onSpatialEntitySelected}
-        @spatial-room-selected=${this._onSpatialRoomSelected}
-      ></spatial-preview></ha-card>`;
+      return this._renderImmersiveSpatialCard(spatial, inspectingElement);
     }
     if (!this.config?.images?.base) {
       return html`<ha-card><div class="warning">Please configure images.base.</div></ha-card>`;
@@ -2750,7 +3149,7 @@ if (!window.customCards.find((c) => c.type === 'apartment-view-card')) {
     type: 'apartment-view-card',
     name: 'Apartment View Card',
     description:
-      'Interactive, state-aware device markers and lighting over a floorplan render.',
+      'An immersive, state-aware 3D home with contextual Lovelace controls.',
     preview: true,
     documentationURL: 'https://github.com/grozdanowski/ha-apartment-view-card',
   });

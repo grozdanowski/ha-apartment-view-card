@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spatial Home Editor</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --primary-background-color: #090d0e;
+        --card-background-color: #111718;
+        --secondary-background-color: #182022;
+        --primary-text-color: #edf2f3;
+        --secondary-text-color: #9eabad;
+        --divider-color: #283234;
+        --primary-color: #b8d2d7;
+        --warning-color: #d6a653;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 18px; color: var(--primary-text-color); background: var(--primary-background-color); }
+      main { width: min(920px, 100%); margin: 0 auto; }
+      ha-button { display: inline-flex; align-items: center; min-height: 40px; padding: 0 12px; border: 1px solid var(--divider-color); border-radius: 6px; cursor: pointer; }
+      ha-icon { display: inline-block; width: 18px; height: 18px; }
+      ha-icon-button { display: inline-block; width: 40px; height: 40px; }
+      @media (max-width: 600px) { body { padding: 10px; } ha-button { min-height: 44px; } }
+    </style>
+  </head>
+  <body>
+    <main><apartment-view-card-editor id="editor"></apartment-view-card-editor></main>
+    <script type="module">
+      import '@/editor/apartment-view-card-editor.ts';
+      for (const name of ['ha-button', 'ha-icon', 'ha-icon-button', 'ha-form']) {
+        if (!customElements.get(name)) customElements.define(name, class extends HTMLElement {});
+      }
+      const editor = document.querySelector('#editor');
+      editor.hass = {
+        states: {}, localize: (key) => key,
+        areas: {
+          living_room: { area_id: 'living_room', name: 'Living Room' },
+          office: { area_id: 'office', name: 'Office' },
+        },
+        entities: {}, devices: {}, config: { latitude: 45.791, longitude: 15.928 },
+      };
+      editor.setConfig({
+        type: 'custom:apartment-view-card',
+        images: { base: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==' },
+        zones: [
+          { id: 'living', name: 'Living Room / Kitchen', areaId: 'living_room', x: 0, y: 0, width: 67, height: 100 },
+          { id: 'office', name: 'Office', areaId: 'office', x: 67, y: 0, width: 33, height: 100 },
+        ],
+        entities: [],
+        spatial: {
+          plan: { version: 1, vertices: [], walls: [], rooms: [], objects: [] },
+          shell: {
+            outer: [[0, 0], [8, 0], [8, 5], [0, 5]], holes: [], floor: [[0, 0], [8, 0], [8, 5], [0, 5]],
+            rooms: [
+              { zoneId: 'living', floor: [[0, 0], [5.4, 0], [5.4, 5], [0, 5]] },
+              { zoneId: 'office', floor: [[5.4, 0], [8, 0], [8, 5], [5.4, 5]] },
+            ],
+            openings: [],
+          },
+          openings: [], walls: [], site: { north: 18 }, dimensions: { width: 8, aspectRatio: 1.6, wallHeight: 2.7 },
+        },
+      });
+      await editor.updateComplete;
+      editor._setupStep = 'rooms';
+    </script>
+  </body>
+</html>
