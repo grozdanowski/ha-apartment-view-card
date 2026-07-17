@@ -361,6 +361,7 @@ describe('3D spatial runtime', () => {
     preview._model = model;
     preview._updateEntityStateVisuals();
     expect(practical.intensity).toBeGreaterThan(10);
+    expect(practical.visible).toBe(true);
     expect(practical.color.r).toBeCloseTo(1);
     expect(practical.color.g).toBeCloseTo(180 / 255);
   });
@@ -381,6 +382,7 @@ describe('3D spatial runtime', () => {
     preview._model = model;
     preview._updateEntityStateVisuals();
     expect(practical.intensity).toBe(0);
+    expect(practical.visible).toBe(false);
   });
 
   it('ignores stale brightness and colour attributes while a fixture is off', () => {
@@ -401,6 +403,7 @@ describe('3D spatial runtime', () => {
     preview._model = model;
     preview._updateEntityStateVisuals();
     expect(practical.intensity).toBe(0);
+    expect(practical.visible).toBe(false);
   });
 
   it('configures practical lights to be occluded by architectural walls', () => {
@@ -411,6 +414,24 @@ describe('3D spatial runtime', () => {
     expect(practical.castShadow).toBe(true);
     expect(practical.shadow.mapSize.x).toBe(256);
     expect(practical.shadow.camera.far).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('caps active point-light shadows to a mobile-safe texture budget', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    Object.defineProperty(preview, 'clientWidth', { configurable: true, value: 390 });
+    preview._renderer = { capabilities: { maxTextures: 16 } };
+    const model = new THREE.Group();
+    for (let index = 0; index < 12; index += 1) {
+      const practical = new THREE.PointLight(0xffffff, 12 - index, 4, 1.65);
+      practical.userData.spatialShadowLayer = 0;
+      practical.castShadow = true;
+      model.add(practical);
+    }
+    preview._model = model;
+    preview._rebalancePracticalLightShadows();
+    const lights = model.children as THREE.PointLight[];
+    expect(lights.filter((light) => light.castShadow)).toHaveLength(6);
+    expect(lights.every((light) => light.visible)).toBe(true);
   });
 
   it('keeps practical lights visible to the main camera while scoping their shadow casters by room', () => {

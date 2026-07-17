@@ -609,6 +609,25 @@ export class SpatialPreview extends LitElement {
     light.userData.spatialShadowLayer = roomLayer ?? 0;
   }
 
+  private _rebalancePracticalLightShadows(): void {
+    const practicalLights: THREE.PointLight[] = [];
+    this._model?.traverse((node) => {
+      if (node instanceof THREE.PointLight && node.userData.spatialShadowLayer !== undefined) {
+        practicalLights.push(node);
+      }
+    });
+    const maxTextureUnits = this._renderer?.capabilities.maxTextures ?? 16;
+    const viewportBudget = this.clientWidth < 600 ? 6 : 10;
+    const shadowBudget = Math.max(1, Math.min(viewportBudget, maxTextureUnits - 6));
+    const activeLights = practicalLights
+      .filter((light) => light.visible && light.intensity > 0)
+      .sort((left, right) => right.intensity - left.intensity);
+    const shadowLights = new Set(activeLights.slice(0, shadowBudget));
+    practicalLights.forEach((light) => {
+      light.castShadow = shadowLights.has(light);
+    });
+  }
+
   private _isConfiguredGroupWithPlacedChildren(entityId: string): boolean {
     const state = this.hass?.states?.[entityId];
     const members = state?.attributes?.entity_id;
@@ -690,6 +709,11 @@ export class SpatialPreview extends LitElement {
       if (node instanceof THREE.PointLight && node.userData.entityLight) {
         node.color.copy(this._entityLightColor(entityId));
         node.intensity = this._entityLightIntensity(entityId);
+        // Invisible lights are omitted from Three.js' light and shadow shader
+        // budgets. This is essential on mobile WebKit, which otherwise counts
+        // every configured (but off) point-light shadow sampler and rejects the
+        // complete material program once it exceeds the GPU texture-unit limit.
+        node.visible = node.intensity > 0;
         return;
       }
       if (!(node instanceof THREE.Mesh)) return;
@@ -730,6 +754,7 @@ export class SpatialPreview extends LitElement {
         }
       });
     });
+    this._rebalancePracticalLightShadows();
     this._updateSun();
   }
 
