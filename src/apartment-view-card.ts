@@ -1135,6 +1135,58 @@ export class ApartmentViewCard extends LitElement {
       }
       .immersive-intro-copy p { margin: 0; }
       .immersive-intro-copy strong { color: var(--primary-text-color, #f1f4f4); font-weight: 650; }
+      .immersive-presence {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 2px;
+      }
+      .immersive-presence-chip {
+        display: inline-flex;
+        min-height: 32px;
+        align-items: center;
+        gap: 8px;
+        padding: 0 11px;
+        border: 1px solid color-mix(in srgb, var(--primary-text-color, #f1f4f4) 12%, transparent);
+        border-radius: 999px;
+        color: var(--secondary-text-color, #a7b0b3);
+        background: color-mix(in srgb, var(--primary-text-color, #f1f4f4) 4%, transparent);
+        font-size: 14px;
+        font-weight: 560;
+      }
+      .immersive-presence-chip[data-state='home'] {
+        color: var(--primary-text-color, #f1f4f4);
+        border-color: color-mix(in srgb, #9fd8df 30%, transparent);
+        background: color-mix(in srgb, #9fd8df 10%, transparent);
+      }
+      .immersive-presence-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: currentColor;
+        opacity: 0.75;
+      }
+      .immersive-edit-dashboard {
+        position: absolute;
+        z-index: 12;
+        top: max(14px, env(safe-area-inset-top));
+        right: 16px;
+        display: inline-grid;
+        width: 40px;
+        height: 40px;
+        place-items: center;
+        padding: 0;
+        border: 1px solid color-mix(in srgb, var(--primary-text-color, #f1f4f4) 14%, transparent);
+        border-radius: 50%;
+        color: var(--secondary-text-color, #a7b0b3);
+        background: color-mix(in srgb, #0b1012 76%, transparent);
+        cursor: pointer;
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+      }
+      .immersive-edit-dashboard:hover { color: var(--primary-text-color, #f1f4f4); }
+      .immersive-edit-dashboard:focus-visible { outline: 2px solid #9fd8df; outline-offset: 3px; }
+      .immersive-edit-dashboard ha-icon { --mdc-icon-size: 18px; }
       .immersive-spatial-cluster {
         position: sticky;
         top: 0;
@@ -1628,6 +1680,7 @@ export class ApartmentViewCard extends LitElement {
       ...inferredEnvironmentIds,
       ...fallbackGroupIds,
       ...this._introTemplateEntityIds(),
+      ...(this.config?.experience?.intro?.presenceEntities ?? []),
     ];
     return ids.some((id) => prev.states?.[id] !== next.states?.[id]);
   }
@@ -1635,7 +1688,7 @@ export class ApartmentViewCard extends LitElement {
   private _introTemplateEntityIds(): string[] {
     const intro = this.config?.experience?.intro;
     const source = `${intro?.title ?? ''}\n${intro?.subtitle ?? ''}`;
-    return [...source.matchAll(/states\(['"]([^'"]+)['"]\)/g)].map((match) => match[1]);
+    return [...source.matchAll(/(?:states|state_attr)\(['"]([^'"]+)['"]/g)].map((match) => match[1]);
   }
 
   protected willUpdate(changed: PropertyValues): void {
@@ -2489,8 +2542,59 @@ export class ApartmentViewCard extends LitElement {
     if (key === 'room') return this._floorData.zones.find((zone) => zone.id === this._spatialFocusedZoneId)?.name ?? 'Home';
     const stateMatch = /^states\(['"]([^'"]+)['"]\)$/.exec(key);
     if (stateMatch) return this.hass?.states[stateMatch[1]]?.state ?? 'unavailable';
+    const attributeMatch = /^state_attr\(['"]([^'"]+)['"],\s*['"]([^'"]+)['"]\)$/.exec(key);
+    if (attributeMatch) {
+      const value = this.hass?.states[attributeMatch[1]]?.attributes?.[attributeMatch[2]];
+      return value === undefined || value === null ? '—' : String(value);
+    }
     return `{{ ${key} }}`;
   }
+
+  private _presenceLabel(entityId: string): string {
+    const state = this.hass?.states?.[entityId];
+    return String(state?.attributes?.friendly_name ?? entityId.split('.')[1]?.replaceAll('_', ' ') ?? entityId)
+      .replace(/\b\w/g, (character) => character.toUpperCase());
+  }
+
+  private _presenceState(entityId: string): 'home' | 'away' | 'unknown' {
+    const state = this.hass?.states?.[entityId]?.state;
+    if (state === 'home') return 'home';
+    if (state === 'not_home' || state === 'away') return 'away';
+    return 'unknown';
+  }
+
+  private _renderPresenceChips(entityIds: string[]): TemplateResult {
+    if (!entityIds.length) return html``;
+    return html`<div class="immersive-presence" aria-label="Presence">
+      ${entityIds.map((entityId) => {
+        const state = this._presenceState(entityId);
+        const label = this._presenceLabel(entityId);
+        const status = state === 'home' ? 'Home' : state === 'away' ? 'Away' : 'Unknown';
+        return html`<span class="immersive-presence-chip" data-state=${state}>
+          <span class="immersive-presence-dot" aria-hidden="true"></span>${label} · ${status}
+        </span>`;
+      })}
+    </div>`;
+  }
+
+  private _requestDashboardEdit = (): void => {
+    this.dispatchEvent(new CustomEvent('edit-dashboard', {
+      detail: { config: this.config },
+      bubbles: true,
+      composed: true,
+    }));
+    let node: Node | null = this.parentNode;
+    while (node) {
+      if (node instanceof HTMLElement && node.matches('ha-panel-lovelace')) {
+        const panel = node as HTMLElement & { editMode?: boolean; requestUpdate?: () => void };
+        panel.editMode = true;
+        panel.requestUpdate?.();
+        break;
+      }
+      const root = node.getRootNode();
+      node = node.parentNode ?? (root instanceof ShadowRoot ? root.host : null);
+    }
+  };
 
   private _renderInlineEmphasis(value: string): TemplateResult {
     const parts = value.split(/(\*\*[^*]+\*\*)/g);
@@ -2562,11 +2666,14 @@ export class ApartmentViewCard extends LitElement {
       `--immersive-spatial-ratio:${Math.round(experience.landscape.spatialRatio * 100)}%`,
     ].join(';');
     return html`<ha-card class="immersive-card ${preview ? 'editor-preview' : ''} ${fixedPosition ? 'fixed-position' : 'in-flow'} ${this._dashboardEditing ? 'dashboard-editing' : ''}" style=${style}>
+      ${!preview ? html`<button type="button" class="immersive-edit-dashboard" aria-label="Edit dashboard" title="Edit dashboard"
+        @click=${this._requestDashboardEdit}><ha-icon icon="mdi:pencil-outline"></ha-icon></button>` : nothing}
       <div class="immersive-shell" @scroll=${this._onImmersiveScroll}>
         <section class="immersive-spatial-column" aria-label="Spatial home">
           <header class="immersive-intro">
             <h1>${this._renderInlineEmphasis(title.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_match: string, token: string) => this._templateValue(token)))}</h1>
             ${subtitle ? html`<div class="immersive-intro-copy">${this._renderTemplateParagraphs(subtitle)}</div>` : nothing}
+            ${this._renderPresenceChips(experience.intro.presenceEntities ?? [])}
           </header>
           <div class="immersive-spatial-cluster ${this._immersiveCompact ? 'compact' : ''}">
             <div class="immersive-stage">

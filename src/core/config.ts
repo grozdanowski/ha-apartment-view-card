@@ -397,6 +397,8 @@ export interface ImmersiveExperienceConfig {
   intro: {
     title: string;
     subtitle: string;
+    /** Person entities rendered as compact live presence chips below the intro. */
+    presenceEntities?: string[];
     [key: string]: unknown;
   };
   mobile: {
@@ -1261,6 +1263,9 @@ export function normalizeExperienceConfig(
       ...intro,
       title: typeof intro.title === 'string' ? intro.title : 'Home',
       subtitle: typeof intro.subtitle === 'string' ? intro.subtitle : '',
+      presenceEntities: Array.isArray(intro.presenceEntities)
+        ? intro.presenceEntities.filter((id): id is string => typeof id === 'string' && id.length > 0).slice(0, 12)
+        : [],
     },
     mobile: {
       ...mobile,

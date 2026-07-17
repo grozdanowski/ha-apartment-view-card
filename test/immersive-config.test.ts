@@ -16,7 +16,7 @@ describe('immersive experience config', () => {
 
     expect(config.experience).toEqual({
       version: CURRENT_EXPERIENCE_VERSION,
-      intro: { title: 'Home', subtitle: '' },
+      intro: { title: 'Home', subtitle: '', presenceEntities: [] },
       mobile: {
         expandedHeight: 480,
         compactHeight: 240,
@@ -98,7 +98,7 @@ describe('immersive experience config', () => {
       }),
     );
 
-    expect(config.experience.intro).toEqual({ title: 'Home', subtitle: '' });
+    expect(config.experience.intro).toEqual({ title: 'Home', subtitle: '', presenceEntities: [] });
     expect(config.experience.mobile.expandedHeight).toBe(480);
     expect(config.experience.landscape.spatialRatio).toBe(0.45);
     expect(config.experience.motion.transitionMs).toBe(900);
