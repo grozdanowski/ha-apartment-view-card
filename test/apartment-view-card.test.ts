@@ -103,3 +103,22 @@ describe('getGridOptions', () => {
     expect(typeof opts.columns).toBe('number');
   });
 });
+
+describe('dashboard edit affordance', () => {
+  it('enters dashboard edit mode when the card is nested in HA shadow roots', async () => {
+    const panel = document.createElement('ha-panel-lovelace') as HTMLElement & { editMode?: boolean; requestUpdate?: () => void };
+    const panelShadow = panel.attachShadow({ mode: 'open' });
+    const view = document.createElement('hui-view');
+    const viewShadow = view.attachShadow({ mode: 'open' });
+    const card = document.createElement('apartment-view-card') as Card & { _requestDashboardEdit: () => void };
+    card.setConfig({ type: 'custom:apartment-view-card', images: { base: '/b.png' }, entities: [] });
+    panelShadow.append(view);
+    viewShadow.append(card);
+    document.body.append(panel);
+    await (card as any).updateComplete;
+
+    card._requestDashboardEdit();
+
+    expect(panel.editMode).toBe(true);
+  });
+});

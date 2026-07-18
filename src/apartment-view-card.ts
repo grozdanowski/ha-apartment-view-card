@@ -1623,6 +1623,22 @@ export class ApartmentViewCard extends LitElement {
     if (next !== this._dashboardEditing) this._dashboardEditing = next;
   };
 
+  /** Find the Lovelace panel across the shadow-root boundaries used by HA. */
+  private _dashboardPanel(): (HTMLElement & { editMode?: boolean; requestUpdate?: () => void }) | null {
+    let node: Node | null = this.parentNode
+      ?? ((this.getRootNode() instanceof ShadowRoot) ? (this.getRootNode() as ShadowRoot).host : null);
+    const visited = new Set<Node>();
+    while (node && !visited.has(node)) {
+      visited.add(node);
+      if (node instanceof HTMLElement && node.matches('ha-panel-lovelace')) {
+        return node as HTMLElement & { editMode?: boolean; requestUpdate?: () => void };
+      }
+      const root = node.getRootNode();
+      node = node.parentNode ?? (root instanceof ShadowRoot ? root.host : null);
+    }
+    return null;
+  };
+
   private _immersiveUsesFixedPosition(experience: ImmersiveExperienceConfig): boolean {
     if (this._isCardEditorPreview() || this._dashboardEditing) return false;
     return this._isMobileScreen ? experience.fixedPosition.mobile : experience.fixedPosition.desktop;
@@ -2577,17 +2593,10 @@ export class ApartmentViewCard extends LitElement {
       bubbles: true,
       composed: true,
     }));
-    let node: Node | null = this.parentNode;
-    while (node) {
-      if (node instanceof HTMLElement && node.matches('ha-panel-lovelace')) {
-        const panel = node as HTMLElement & { editMode?: boolean; requestUpdate?: () => void };
-        panel.editMode = true;
-        panel.requestUpdate?.();
-        break;
-      }
-      const root = node.getRootNode();
-      node = node.parentNode ?? (root instanceof ShadowRoot ? root.host : null);
-    }
+    const panel = this._dashboardPanel();
+    if (!panel) return;
+    panel.editMode = true;
+    panel.requestUpdate?.();
   };
 
   private _renderInlineEmphasis(value: string): TemplateResult {
