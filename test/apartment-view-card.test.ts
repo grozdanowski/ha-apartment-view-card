@@ -106,7 +106,11 @@ describe('getGridOptions', () => {
 
 describe('dashboard edit affordance', () => {
   it('enters dashboard edit mode when the card is nested in HA shadow roots', async () => {
-    const panel = document.createElement('ha-panel-lovelace') as HTMLElement & { editMode?: boolean; requestUpdate?: () => void };
+    const panel = document.createElement('ha-panel-lovelace') as HTMLElement & {
+      editMode?: boolean;
+      requestUpdate?: () => void;
+      lovelace?: { editMode?: boolean; setEditMode?: (editing: boolean) => void };
+    };
     const panelShadow = panel.attachShadow({ mode: 'open' });
     const view = document.createElement('hui-view');
     const viewShadow = view.attachShadow({ mode: 'open' });
@@ -117,8 +121,10 @@ describe('dashboard edit affordance', () => {
     document.body.append(panel);
     await (card as any).updateComplete;
 
+    let requested = false;
+    panel.lovelace = { setEditMode: (editing) => { requested = editing; } };
     card._requestDashboardEdit();
 
-    expect(panel.editMode).toBe(true);
+    expect(requested).toBe(true);
   });
 });

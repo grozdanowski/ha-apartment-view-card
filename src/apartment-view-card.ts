@@ -1032,6 +1032,7 @@ export class ApartmentViewCard extends LitElement {
         position: relative;
         inset: auto;
         z-index: 0;
+        isolation: isolate;
         display: block;
         width: 100%;
         height: 100dvh;
@@ -1166,7 +1167,7 @@ export class ApartmentViewCard extends LitElement {
       }
       .immersive-edit-dashboard {
         position: absolute;
-        z-index: 12;
+        z-index: 100;
         top: max(14px, env(safe-area-inset-top));
         right: 16px;
         display: inline-grid;
@@ -1179,6 +1180,7 @@ export class ApartmentViewCard extends LitElement {
         color: var(--secondary-text-color, #a7b0b3);
         background: color-mix(in srgb, #0b1012 76%, transparent);
         cursor: pointer;
+        pointer-events: auto;
         backdrop-filter: blur(14px);
         -webkit-backdrop-filter: blur(14px);
       }
@@ -1624,14 +1626,22 @@ export class ApartmentViewCard extends LitElement {
   };
 
   /** Find the Lovelace panel across the shadow-root boundaries used by HA. */
-  private _dashboardPanel(): (HTMLElement & { editMode?: boolean; requestUpdate?: () => void }) | null {
+  private _dashboardPanel(): (HTMLElement & {
+    editMode?: boolean;
+    requestUpdate?: () => void;
+    lovelace?: { editMode?: boolean; setEditMode?: (editing: boolean) => void };
+  }) | null {
     let node: Node | null = this.parentNode
       ?? ((this.getRootNode() instanceof ShadowRoot) ? (this.getRootNode() as ShadowRoot).host : null);
     const visited = new Set<Node>();
     while (node && !visited.has(node)) {
       visited.add(node);
       if (node instanceof HTMLElement && node.matches('ha-panel-lovelace')) {
-        return node as HTMLElement & { editMode?: boolean; requestUpdate?: () => void };
+        return node as HTMLElement & {
+          editMode?: boolean;
+          requestUpdate?: () => void;
+          lovelace?: { editMode?: boolean; setEditMode?: (editing: boolean) => void };
+        };
       }
       const root = node.getRootNode();
       node = node.parentNode ?? (root instanceof ShadowRoot ? root.host : null);
@@ -2595,7 +2605,11 @@ export class ApartmentViewCard extends LitElement {
     }));
     const panel = this._dashboardPanel();
     if (!panel) return;
-    panel.editMode = true;
+    if (typeof panel.lovelace?.setEditMode === 'function') {
+      panel.lovelace.setEditMode(true);
+    } else {
+      panel.editMode = true;
+    }
     panel.requestUpdate?.();
   };
 
