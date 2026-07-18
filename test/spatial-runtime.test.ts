@@ -90,6 +90,32 @@ describe('3D spatial runtime', () => {
     expect(meshes.every((mesh) => mesh.userData.architecturalRoomFloor)).toBe(true);
   });
 
+  it('keeps imported-model rooms tappable with invisible semantic floor targets', () => {
+    const preview = document.createElement('spatial-preview') as any;
+    preview.dimensions = { width: 8, aspectRatio: 1.33, wallHeight: 2.7 };
+    preview.zones = [{ id: 'living', name: 'Living Room', x: 0, y: 0, width: 100, height: 100 }];
+    preview.shell = {
+      outer: [[0, 0], [8, 0], [8, 6], [0, 6]],
+      floor: [[0, 0], [8, 0], [8, 6], [0, 6]],
+      openings: [],
+      rooms: [{ zoneId: 'living', floor: [[0, 0], [8, 0], [8, 6], [0, 6]] }],
+    };
+    preview._importedModel = new THREE.Group();
+    preview._scene = new THREE.Scene();
+
+    preview._buildModel();
+
+    const targets: THREE.Mesh[] = [];
+    preview._model.traverse((node: THREE.Object3D) => {
+      if (node instanceof THREE.Mesh && node.userData.roomInteractionFloor) targets.push(node);
+    });
+    expect(targets).toHaveLength(1);
+    expect(targets[0].userData.zoneId).toBe('living');
+    const material = targets[0].material as THREE.MeshBasicMaterial;
+    expect(material.opacity).toBe(0);
+    expect(material.colorWrite).toBe(false);
+  });
+
   it('uses wall-free room floors to center placed 3D content', () => {
     const preview = document.createElement('spatial-preview') as any;
     const plan = {

@@ -1382,6 +1382,14 @@ export class SpatialPreview extends LitElement {
       const room = new THREE.Group();
       room.userData.zoneId = zone.id;
       const points = this._zonePoints(zone).map((point) => this._worldPoint(point));
+      const shellRoom = activeShell?.rooms?.find((candidate) => candidate.zoneId === zone.id);
+      const shellRegions = shellRoom
+        ? [shellRoom.floor, ...(shellRoom.floors ?? [])].filter((floorPoints) => floorPoints.length >= 3)
+        : [];
+      const center = shellRegions.length ? this._spatialCenter() : undefined;
+      const interactionRegions = shellRegions.length
+        ? shellRegions.map((floorPoints) => floorPoints.map(([x, z]) => new THREE.Vector2(x - center!.x, z - center!.y)))
+        : [points];
       if (!activeShell?.rooms?.length) {
         const floorShape = new THREE.Shape();
         floorShape.moveTo(points[0].x, points[0].y);
@@ -1406,8 +1414,14 @@ export class SpatialPreview extends LitElement {
         if (!activeShell) room.add(this._createCeilingShadowOccluder(points, zone.id));
       }
 
+      // Imported shells provide the visible floor, but imported meshes are not
+      // guaranteed to contain a raycastable floor surface. Keep semantic room
+      // hit targets separate from the render geometry so every room remains
+      // tappable without changing the visual output.
+      if (zone.id) interactionRegions.forEach((region) => room.add(this._createRoomInteractionFloor(region, zone.id)));
+
       if (usesImportedModel || activeShell) {
-        // Invisible room footprints remain as interaction targets over imported geometry.
+        // The semantic interaction floors above cover imported/survey geometry.
       } else if (zone.footprint?.length) {
         points.forEach((start, pointIndex) => {
           const end = points[(pointIndex + 1) % points.length];
@@ -1751,6 +1765,31 @@ export class SpatialPreview extends LitElement {
     this._applyZoneLightLayers(ceiling, [zoneId]);
     ceiling.raycast = () => {};
     return ceiling;
+  }
+
+  private _createRoomInteractionFloor(points: THREE.Vector2[], zoneId?: string): THREE.Mesh {
+    const shape = new THREE.Shape();
+    shape.moveTo(points[0].x, points[0].y);
+    points.slice(1).forEach((point) => shape.lineTo(point.x, point.y));
+    shape.closePath();
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    // Keep this mesh fully invisible while retaining a normal Three.js
+    // raycast target for room selection over imported GLB geometry.
+    material.colorWrite = false;
+    const floor = new THREE.Mesh(new THREE.ShapeGeometry(shape), material);
+    floor.geometry.rotateX(Math.PI / 2);
+    floor.position.y = 0.012;
+    floor.userData.zoneId = zoneId;
+    floor.userData.roomFloor = true;
+    floor.userData.roomInteractionFloor = true;
+    floor.raycast = THREE.Mesh.prototype.raycast;
+    return floor;
   }
 
   private _createSurveyWalls(
