@@ -2602,7 +2602,6 @@ export class ApartmentViewCard extends LitElement {
     const zone = this._floorData.zones.find((candidate) => candidate.id === zoneId);
     const entities = this._floorData.entities
       .filter((entity) => zoneId === null || entity.zoneId === zoneId)
-      .slice(0, zoneId === null ? 6 : 12)
       .map((entity) => entity.entity);
     const blocks: ContentBlock[] = [{
       type: 'heading',

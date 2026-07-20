@@ -24,7 +24,7 @@ function config() {
     content: {
       overview: [
         { type: 'heading', title: 'Home' },
-        { type: 'lovelace-card', card: { type: 'markdown', content: 'Ready' } },
+        { type: 'lovelace-card', card: { type: 'apartment-controls', entities: ['light.living'] } },
       ],
       rooms: { living: [{ type: 'spatial-controls', entities: ['light.living'] }] },
     },
@@ -56,7 +56,8 @@ describe('immersive spatial shell', () => {
     expect(card.shadowRoot.querySelector('h1')?.textContent).toBe('Hello, Matej.');
     expect(card.shadowRoot.querySelector('.immersive-intro-copy')?.textContent).toContain('Everything is calm.');
     const content = card.shadowRoot.querySelector('av-immersive-content') as HTMLElement;
-    expect(content.shadowRoot?.querySelector('av-lovelace-card-host')).toBeTruthy();
+    expect(content.shadowRoot?.querySelector('av-control-surface')).toBeTruthy();
+    expect((content.shadowRoot?.querySelector('av-control-surface') as any).entityIds).toEqual(['light.living']);
     expect((card.shadowRoot.querySelector('spatial-preview') as any).fill).toBe(true);
     expect((card.shadowRoot.querySelector('spatial-preview') as any).cameraTransitionMs).toBe(880);
     expect(card.shadowRoot.querySelectorAll('.immersive-room-nav')).toHaveLength(1);

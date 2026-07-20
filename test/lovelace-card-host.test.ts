@@ -65,6 +65,18 @@ describe('LovelaceCardHost', () => {
     expect(host.getCardSize()).toBe(3);
   });
 
+  it('applies a semantic presentation tone without changing the native card config', async () => {
+    const card = testCard();
+    const createCardElement = vi.fn(() => card);
+    window.loadCardHelpers = vi.fn().mockResolvedValue({ createCardElement });
+    const host = hostWith({ type: 'tile', entity: 'media_player.naim' });
+
+    await vi.waitFor(() => expect(host.cardElement).toBe(card));
+    expect(host.dataset.cardType).toBe('tile');
+    expect(host.dataset.tone).toBe('media');
+    expect(createCardElement).toHaveBeenCalledWith({ type: 'tile', entity: 'media_player.naim' });
+  });
+
   it('reuses cards for equivalent configs and propagates later hass updates', async () => {
     const cards: LovelaceCard[] = [];
     const createCardElement = vi.fn(() => {

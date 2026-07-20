@@ -88,6 +88,7 @@ const EDITOR_MODES: { id: EditorMode; label: string }[] = [
   { id: 'advanced', label: 'Advanced' },
 ];
 const BUILT_IN_CARD_TYPES: SearchableSelectOption[] = [
+  { value: 'apartment-controls', label: 'Apartment controls', description: 'The same contextual controls used on room pages', icon: 'mdi:tune-variant' },
   { value: 'markdown', label: 'Markdown', description: 'Text, notes, and lightweight rich content', icon: 'mdi:language-markdown' },
   { value: 'tile', label: 'Tile', description: 'A compact entity control', icon: 'mdi:view-dashboard-outline' },
   { value: 'button', label: 'Button', description: 'A single action or entity button', icon: 'mdi:gesture-tap-button' },
@@ -914,6 +915,7 @@ export class ApartmentViewCardEditor extends LitElement {
     .nested-card-builder-heading strong { color: var(--primary-text-color); font-size: 14px; font-weight: 650; }
     .nested-card-builder-heading span { color: var(--secondary-text-color); font-size: 12px; line-height: 1.4; }
     .nested-card-builder-heading ha-icon { color: var(--studio-accent); --mdc-icon-size: 22px; }
+    .nested-card-help { margin: 0; color: var(--secondary-text-color); font-size: 12px; line-height: 1.45; }
     .nested-card-text { min-height: 96px; }
     .nested-card-advanced { border-top: 1px solid var(--studio-line); padding-top: 10px; }
     .nested-card-advanced summary { color: var(--secondary-text-color); cursor: pointer; font-size: 12px; font-weight: 600; }
@@ -4108,6 +4110,7 @@ export class ApartmentViewCardEditor extends LitElement {
     const current = this._contentBlocks()[index];
     if (!current || current.type !== 'lovelace-card') return;
     const defaults: Record<string, Record<string, unknown>> = {
+      'apartment-controls': { type, entities: [] },
       markdown: { type, content: '' },
       tile: { type, entity: '' },
       button: { type, name: '', entity: '', icon: 'mdi:gesture-tap-button' },
@@ -4142,8 +4145,9 @@ export class ApartmentViewCardEditor extends LitElement {
     const entities = Array.isArray(card.entities) ? card.entities.filter((value): value is string => typeof value === 'string').join('\n') : '';
     const showEntity = ['tile', 'button', 'media-control', 'weather-forecast', 'picture-entity', 'gauge'].includes(type);
     const showText = type === 'markdown';
-    const showEntities = ['entities', 'history-graph', 'statistics-graph', 'calendar'].includes(type);
+    const showEntities = ['apartment-controls', 'entities', 'history-graph', 'statistics-graph', 'calendar'].includes(type);
     const showUrl = type === 'iframe';
+    const isApartmentControls = type === 'apartment-controls';
     return html`
       <div class="nested-card-builder">
         <div class="nested-card-builder-heading">
@@ -4159,13 +4163,13 @@ export class ApartmentViewCardEditor extends LitElement {
         ></studio-searchable-select>
         ${showEntity ? html`<label class="content-field"><span>Entity</span><input type="text" placeholder="light.living_room" .value=${entity} @change=${(event: Event) => this._nestedCardValueChanged(index, 'entity', (event.target as HTMLInputElement).value.trim())} /></label>` : nothing}
         ${showText ? html`<label class="content-field"><span>Content</span><textarea class="nested-card-text" placeholder="Add a note or supporting context…" .value=${text} @change=${(event: Event) => this._nestedCardValueChanged(index, 'content', (event.target as HTMLTextAreaElement).value)}></textarea></label>` : nothing}
-        ${showEntities ? html`<label class="content-field"><span>Entities, one per line</span><textarea placeholder="sensor.temperature\nlight.living_room" .value=${entities} @change=${(event: Event) => this._nestedCardValueChanged(index, 'entities', (event.target as HTMLTextAreaElement).value.split(/[\n,]/).map((value) => value.trim()).filter(Boolean))}></textarea></label>` : nothing}
+        ${showEntities ? html`<label class="content-field"><span>${isApartmentControls ? 'Devices to control, one per line' : 'Entities, one per line'}</span><textarea placeholder="light.living_room\nmedia_player.naim" .value=${entities} @change=${(event: Event) => this._nestedCardValueChanged(index, 'entities', (event.target as HTMLTextAreaElement).value.split(/[\n,]/).map((value) => value.trim()).filter(Boolean))}></textarea></label>` : nothing}
         ${showUrl ? html`<label class="content-field"><span>URL</span><input type="url" placeholder="https://example.com" .value=${typeof card.url === 'string' ? card.url : ''} @change=${(event: Event) => this._nestedCardValueChanged(index, 'url', (event.target as HTMLInputElement).value.trim())} /></label>` : nothing}
-        <studio-nested-card-editor
+        ${isApartmentControls ? html`<p class="nested-card-help">This uses the same live contextual lights, media, climate, cover, fan, lock, vacuum, and alarm controls shown inside room pages.</p>` : html`<studio-nested-card-editor
           .hass=${this.hass}
           .config=${card}
           @config-changed=${(event: CustomEvent<{ config: NestedLovelaceCardConfig }>) => this._updateContentBlock(index, { card: event.detail.config })}
-        ></studio-nested-card-editor>
+        ></studio-nested-card-editor>`}
         <details class="nested-card-advanced">
           <summary>Advanced card configuration</summary>
           <p>Use YAML or JSON for card-specific options. The card type above stays synchronized.</p>

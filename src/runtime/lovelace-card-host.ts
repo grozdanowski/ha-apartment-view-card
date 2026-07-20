@@ -74,8 +74,34 @@ export class LovelaceCardHost extends HTMLElement {
     const root = this.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = `
-      :host { display: block; min-width: 0; }
-      .mount { min-width: 0; }
+      :host {
+        --nested-accent: #9fd8df;
+        --nested-surface: color-mix(in srgb, var(--nested-accent) 6%, transparent);
+        --ha-card-background: transparent;
+        --ha-card-border-width: 0;
+        --ha-card-border-color: transparent;
+        --ha-card-box-shadow: none;
+        --ha-card-border-radius: 0;
+        --ha-card-padding: 0;
+        display: block;
+        min-width: 0;
+      }
+      :host([data-tone='media']) { --nested-accent: #c6b0ff; }
+      :host([data-tone='climate']) { --nested-accent: #83d5dc; }
+      :host([data-tone='light']) { --nested-accent: #ffd27e; }
+      :host([data-tone='weather']) { --nested-accent: #9cc9ff; }
+      :host([data-tone='security']) { --nested-accent: #f0ae8a; }
+      .mount {
+        box-sizing: border-box;
+        min-width: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+        color: var(--primary-text-color, #f1f4f4);
+      }
+      .mount > * { display: block; min-width: 0; margin: 0 !important; }
       :host([data-preview]) .mount { pointer-events: none; user-select: none; }
       .error {
         box-sizing: border-box;
@@ -123,7 +149,26 @@ export class LovelaceCardHost extends HTMLElement {
 
   public set config(value: NestedLovelaceCardConfig | undefined) {
     this._cardConfig = value;
+    this._syncPresentation();
     if (this.isConnected) void this._renderCard();
+  }
+
+  private _syncPresentation(): void {
+    const config = this._cardConfig;
+    if (!config) {
+      this.removeAttribute('data-card-type');
+      this.removeAttribute('data-tone');
+      return;
+    }
+    const type = config.type;
+    const domain = typeof config.entity === 'string' ? config.entity.split('.')[0] : '';
+    const tone = type === 'media-control' || domain === 'media_player' ? 'media'
+      : type === 'weather-forecast' || domain === 'weather' ? 'weather'
+        : domain === 'climate' ? 'climate'
+          : ['light', 'switch', 'input_boolean'].includes(domain) ? 'light'
+            : ['camera', 'lock', 'alarm_control_panel'].includes(domain) ? 'security' : 'neutral';
+    this.dataset.cardType = type;
+    this.dataset.tone = tone;
   }
 
   /** Lovelace-style setter for callers that do not bind element properties. */

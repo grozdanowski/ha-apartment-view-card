@@ -1,11 +1,12 @@
 import { LitElement, css, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { handleActionConfig, type ActionConfig, type HomeAssistant } from 'custom-card-helpers';
-import type { ActionContentBlock, ConditionContentBlock, ContentBlock, EntityConfig, SpatialControlsContentBlock } from '../core/config';
+import type { ActionContentBlock, ConditionContentBlock, ContentBlock, EntityConfig, NestedLovelaceCardConfig, SpatialControlsContentBlock } from '../core/config';
 import type { HassLike } from '../core/ha-types';
 import { iconForEntity } from '../core/entity-state';
 import { spatialEntityPresentation } from '../core/spatial-state';
 import './lovelace-card-host';
+import '../render/control-surface';
 
 @customElement('av-immersive-content')
 export class ImmersiveContent extends LitElement {
@@ -20,7 +21,7 @@ export class ImmersiveContent extends LitElement {
       min-width: 0;
       color: var(--primary-text-color, #f1f4f4);
     }
-    .stack { display: grid; gap: 24px; min-width: 0; }
+    .stack { display: grid; gap: 0; min-width: 0; }
     .heading { display: grid; gap: 6px; }
     .heading h2 {
       margin: 0;
@@ -37,7 +38,16 @@ export class ImmersiveContent extends LitElement {
       font-size: 14px;
       line-height: 1.45;
     }
-    .controls { display: grid; gap: 8px; }
+    .nested-controls-empty {
+      margin: 0;
+      padding: 18px;
+      border: 1px dashed color-mix(in srgb, var(--primary-text-color, #f1f4f4) 18%, transparent);
+      border-radius: 14px;
+      color: var(--secondary-text-color, #a7b0b3);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    .controls { display: grid; gap: 10px; }
     .entity,
     .action {
       box-sizing: border-box;
@@ -45,11 +55,11 @@ export class ImmersiveContent extends LitElement {
       grid-template-columns: 40px minmax(0, 1fr) auto;
       align-items: center;
       width: 100%;
-      min-height: 64px;
+      min-height: 72px;
       gap: 12px;
-      padding: 10px 12px;
+      padding: 12px 14px;
       border: 1px solid color-mix(in srgb, var(--primary-text-color, #f1f4f4) 14%, transparent);
-      border-radius: 6px;
+      border-radius: 18px;
       color: inherit;
       background: color-mix(in srgb, var(--primary-text-color, #f1f4f4) 4%, transparent);
       font: inherit;
@@ -120,15 +130,6 @@ export class ImmersiveContent extends LitElement {
     return true;
   }
 
-  private _showEntity(entityId: string): void {
-    if (this.preview) return;
-    this.dispatchEvent(new CustomEvent('hass-more-info', {
-      detail: { entityId },
-      bubbles: true,
-      composed: true,
-    }));
-  }
-
   private _runAction(event: Event, block: Extract<ContentBlock, { type: 'action' }>): void {
     if (this.preview || !this.hass) return;
     const action = block.action as unknown as ActionConfig & { entity?: string };
@@ -138,6 +139,15 @@ export class ImmersiveContent extends LitElement {
       { entity: typeof action.entity === 'string' ? action.entity : undefined },
       action,
     );
+  }
+
+  private _showEntity(entityId: string): void {
+    if (this.preview) return;
+    this.dispatchEvent(new CustomEvent('hass-more-info', {
+      detail: { entityId },
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   private _renderEntity(entityId: string): TemplateResult {
@@ -167,6 +177,23 @@ export class ImmersiveContent extends LitElement {
     </button>`;
   }
 
+  private _renderApartmentControls(card: NestedLovelaceCardConfig): TemplateResult {
+    const entityIds = Array.isArray(card.entities)
+      ? card.entities.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : typeof card.entity === 'string' && card.entity.trim().length > 0
+        ? [card.entity.trim()]
+        : [];
+    if (!entityIds.length) {
+      return html`<p class="nested-controls-empty">Choose one or more entities for this control surface.</p>`;
+    }
+    return html`<av-control-surface
+      .hass=${this.hass}
+      .entityIds=${entityIds}
+      .selectMode=${false}
+      @surface-close=${(event: Event) => event.stopPropagation()}
+    ></av-control-surface>`;
+  }
+
   private _renderBlock(block: ContentBlock): TemplateResult | typeof nothing {
     switch (block.type) {
       case 'heading':
@@ -183,7 +210,9 @@ export class ImmersiveContent extends LitElement {
           <ha-icon class="chevron" icon="mdi:chevron-right"></ha-icon>
         </button>`;
       case 'lovelace-card':
-        return html`<av-lovelace-card-host .config=${block.card} .hass=${this.hass as HomeAssistant | undefined} .preview=${this.preview}></av-lovelace-card-host>`;
+        return block.card.type === 'apartment-controls'
+          ? this._renderApartmentControls(block.card)
+          : html`<av-lovelace-card-host .config=${block.card} .hass=${this.hass as HomeAssistant | undefined} .preview=${this.preview}></av-lovelace-card-host>`;
       case 'condition':
         return (block as ConditionContentBlock).conditions.every((condition: Record<string, unknown>) => this._conditionMet(condition))
           ? html`${(block as ConditionContentBlock).blocks.map((child: ContentBlock) => this._renderBlock(child))}`
