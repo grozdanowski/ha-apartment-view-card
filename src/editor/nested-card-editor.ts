@@ -2,18 +2,7 @@ import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from 'custom-card-helpers';
 import type { NestedLovelaceCardConfig } from '../core/config';
-
-interface CardHelpers {
-  createCardElement(config: NestedLovelaceCardConfig): HTMLElement & {
-    getConfigElement?: () => HTMLElement | Promise<HTMLElement | null> | null;
-  };
-}
-
-declare global {
-  interface Window {
-    loadCardHelpers?: () => Promise<CardHelpers>;
-  }
-}
+import type { LovelaceCardHelpers } from '../runtime/lovelace-card-host';
 
 @customElement('studio-nested-card-editor')
 export class StudioNestedCardEditor extends LitElement {
@@ -43,7 +32,7 @@ export class StudioNestedCardEditor extends LitElement {
       return;
     }
     try {
-      const helpers = await window.loadCardHelpers();
+      const helpers = await window.loadCardHelpers() as LovelaceCardHelpers;
       const card = helpers.createCardElement(this.config);
       const editor = await card.getConfigElement?.();
       if (token !== this._loadToken || !editor) {

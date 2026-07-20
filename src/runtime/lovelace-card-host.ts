@@ -7,8 +7,10 @@ import type { NestedLovelaceCardConfig } from '../core/config';
 
 export const LOVELACE_CARD_HOST_TAG = 'av-lovelace-card-host';
 
-interface LovelaceCardHelpers {
-  createCardElement(config: LovelaceCardConfig): LovelaceCard;
+export interface LovelaceCardHelpers {
+  createCardElement(config: LovelaceCardConfig): LovelaceCard & {
+    getConfigElement?: () => HTMLElement | Promise<HTMLElement | null> | null;
+  };
 }
 
 declare global {
