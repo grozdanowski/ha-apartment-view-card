@@ -404,16 +404,8 @@ export interface ImmersiveExperienceConfig {
   mobile: {
     /** Expanded spatial stage height in CSS pixels. */
     expandedHeight: number;
-    /** Sticky stage height after supporting content starts scrolling, in CSS pixels. */
-    compactHeight: number;
     /** End padding before the platform safe-area inset, in CSS pixels. */
     bottomInset: number;
-    [key: string]: unknown;
-  };
-  /** Pin the live shell to the viewport independently per screen class. */
-  fixedPosition: {
-    mobile: boolean;
-    desktop: boolean;
     [key: string]: unknown;
   };
   landscape: {
@@ -1243,21 +1235,19 @@ export function normalizeExperienceConfig(
   raw: unknown,
 ): ImmersiveExperienceConfig {
   const source = objectConfig(raw) ?? {};
+  // The shell is always rendered in dashboard flow. Drop the retired viewport
+  // pinning keys so old saved configs cannot resurrect the removed behavior.
+  const normalizedSource = { ...source };
+  delete normalizedSource.fixedPosition;
+  delete normalizedSource.fixed_position;
   const intro = objectConfig(source.intro) ?? {};
   const mobile = objectConfig(source.mobile) ?? {};
-  const fixedPosition = objectConfig(source.fixedPosition) ?? {};
   const landscape = objectConfig(source.landscape) ?? {};
   const motion = objectConfig(source.motion) ?? {};
   const expandedHeight = clamp(mobile.expandedHeight, 240, 1_000, 340);
-  const compactHeight = clamp(
-    mobile.compactHeight,
-    120,
-    Math.min(600, expandedHeight),
-    Math.min(200, expandedHeight),
-  );
 
   return {
-    ...source,
+    ...normalizedSource,
     version: CURRENT_EXPERIENCE_VERSION,
     intro: {
       ...intro,
@@ -1270,13 +1260,7 @@ export function normalizeExperienceConfig(
     mobile: {
       ...mobile,
       expandedHeight,
-      compactHeight,
       bottomInset: clamp(mobile.bottomInset, 0, 400, 100),
-    },
-    fixedPosition: {
-      ...fixedPosition,
-      mobile: typeof fixedPosition.mobile === 'boolean' ? fixedPosition.mobile : false,
-      desktop: typeof fixedPosition.desktop === 'boolean' ? fixedPosition.desktop : false,
     },
     landscape: {
       ...landscape,

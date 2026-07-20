@@ -16,8 +16,7 @@ function config() {
     spatial: { plan },
     experience: {
       intro: { title: 'Hello, {{ user }}.', subtitle: '**Everything is calm.**\n\nChoose a room.' },
-      mobile: { expandedHeight: 510, compactHeight: 220, bottomInset: 112 },
-      fixedPosition: { mobile: false, desktop: false },
+      mobile: { expandedHeight: 510, bottomInset: 112 },
       landscape: { spatialRatio: 0.48 },
       motion: { resetSeconds: 10, transitionMs: 880, orbitSeconds: 120 },
       quality: 'balanced',

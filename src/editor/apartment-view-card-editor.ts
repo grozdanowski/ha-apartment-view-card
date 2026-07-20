@@ -33,6 +33,7 @@ import {
   type ImmersiveExperienceConfig,
   type ImmersiveContentConfig,
   type ContentBlock,
+  type NestedLovelaceCardConfig,
   type ExperienceQuality,
 } from '../core/config';
 import {
@@ -86,10 +87,28 @@ const EDITOR_MODES: { id: EditorMode; label: string }[] = [
   { id: 'content', label: 'Content' },
   { id: 'advanced', label: 'Advanced' },
 ];
+const BUILT_IN_CARD_TYPES: SearchableSelectOption[] = [
+  { value: 'markdown', label: 'Markdown', description: 'Text, notes, and lightweight rich content', icon: 'mdi:language-markdown' },
+  { value: 'tile', label: 'Tile', description: 'A compact entity control', icon: 'mdi:view-dashboard-outline' },
+  { value: 'button', label: 'Button', description: 'A single action or entity button', icon: 'mdi:gesture-tap-button' },
+  { value: 'entities', label: 'Entities', description: 'A list of entity rows', icon: 'mdi:format-list-bulleted' },
+  { value: 'media-control', label: 'Media control', description: 'Playback controls for a media player', icon: 'mdi:play-box-outline' },
+  { value: 'weather-forecast', label: 'Weather forecast', description: 'Forecast for a weather entity', icon: 'mdi:weather-partly-cloudy' },
+  { value: 'picture-entity', label: 'Picture entity', description: 'An image with entity state', icon: 'mdi:image-outline' },
+  { value: 'gauge', label: 'Gauge', description: 'A visual numeric reading', icon: 'mdi:gauge' },
+  { value: 'history-graph', label: 'History graph', description: 'History for one or more entities', icon: 'mdi:chart-line' },
+  { value: 'statistics-graph', label: 'Statistics graph', description: 'Long-term statistics', icon: 'mdi:chart-bell-curve-cumulative' },
+  { value: 'calendar', label: 'Calendar', description: 'Upcoming calendar events', icon: 'mdi:calendar-month-outline' },
+  { value: 'iframe', label: 'Web page', description: 'Embed a trusted web page', icon: 'mdi:web' },
+  { value: 'vertical-stack', label: 'Vertical stack', description: 'Stack other cards vertically', icon: 'mdi:view-agenda-outline' },
+  { value: 'horizontal-stack', label: 'Horizontal stack', description: 'Place other cards side by side', icon: 'mdi:view-column-outline' },
+  { value: 'grid', label: 'Grid', description: 'Arrange other cards in a grid', icon: 'mdi:grid' },
+];
 import './spatial-preview';
 import './spatial-plan-editor';
 import './searchable-select';
 import './element-editor-dialog';
+import './nested-card-editor';
 import type { SearchableSelectOption } from './searchable-select';
 
 @customElement('apartment-view-card-editor')
@@ -877,6 +896,28 @@ export class ApartmentViewCardEditor extends LitElement {
     .content-block-actions button[disabled] { opacity: .35; cursor: default; }
     .content-block-actions button.danger { color: var(--error-color, #e18478); }
     .content-block-actions ha-icon { --mdc-icon-size: 19px; }
+    .nested-card-builder {
+      display: grid;
+      gap: 14px;
+      padding: 14px;
+      border: 1px solid color-mix(in srgb, var(--studio-accent) 22%, var(--studio-line));
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--studio-accent) 5%, transparent);
+    }
+    .nested-card-builder-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .nested-card-builder-heading div { display: grid; gap: 4px; }
+    .nested-card-builder-heading strong { color: var(--primary-text-color); font-size: 14px; font-weight: 650; }
+    .nested-card-builder-heading span { color: var(--secondary-text-color); font-size: 12px; line-height: 1.4; }
+    .nested-card-builder-heading ha-icon { color: var(--studio-accent); --mdc-icon-size: 22px; }
+    .nested-card-text { min-height: 96px; }
+    .nested-card-advanced { border-top: 1px solid var(--studio-line); padding-top: 10px; }
+    .nested-card-advanced summary { color: var(--secondary-text-color); cursor: pointer; font-size: 12px; font-weight: 600; }
+    .nested-card-advanced p { margin: 8px 0 10px; color: var(--secondary-text-color); font-size: 12px; line-height: 1.4; }
     .content-empty { padding: 28px 0; color: var(--secondary-text-color); font-size: 14px; text-align: center; }
     .content-error { color: var(--error-color, #e18478); font-size: 12px; line-height: 1.4; }
     @media (max-width: 420px) {
@@ -2607,6 +2648,12 @@ export class ApartmentViewCardEditor extends LitElement {
       : entity));
   }
 
+  private _removeSelectedEntity(): void {
+    if (!this._config.entities[this._selectedEntity]) return;
+    this._commitEntities(this._config.entities.filter((_entity, index) => index !== this._selectedEntity));
+    this._selectedEntity = -1;
+  }
+
   private _renderMarkerVisibilitySelect(
     label: string,
     value: MarkerVisibility,
@@ -3783,7 +3830,10 @@ export class ApartmentViewCardEditor extends LitElement {
         <h4>Tooltip content</h4><p>Keep markers icon-only, or show the entity name and live state persistently in each context. Media detail appears only while the player is active.</p>
         <div class="marker-policy-grid">${this._renderTooltipContentSelect('Apartment overview', selected.tooltipContentInOverview ?? 'none', 'tooltipContentInOverview')}${this._renderTooltipContentSelect('Inside its room', selected.tooltipContentInRoom ?? 'none', 'tooltipContentInRoom')}</div>
       </div>` : nothing}
-      <div class="setup-actions"><ha-button @click=${this._inspectIn3d}>Inspect in 3D</ha-button></div>
+      <div class="setup-actions">
+        <ha-button @click=${this._inspectIn3d}>Inspect in 3D</ha-button>
+        <ha-button @click=${this._removeSelectedEntity}>Remove from plan</ha-button>
+      </div>
     </div>`;
   }
 
@@ -3895,8 +3945,7 @@ export class ApartmentViewCardEditor extends LitElement {
     return this._config.experience ?? {
       version: 1,
       intro: { title: 'Home', subtitle: '' },
-      mobile: { expandedHeight: 340, compactHeight: 200, bottomInset: 100 },
-      fixedPosition: { mobile: false, desktop: false },
+      mobile: { expandedHeight: 340, bottomInset: 100 },
       landscape: { spatialRatio: 0.45 },
       motion: { resetSeconds: 10, transitionMs: 900, orbitSeconds: 90 },
       quality: 'auto',
@@ -3923,18 +3972,12 @@ export class ApartmentViewCardEditor extends LitElement {
       </div>
       <div class="setup-card">
         <h3>Responsive layout</h3>
-        <p>Use stable pixel heights on mobile and reserve a deliberate share of landscape width for the spatial stage. Dashboard edit mode always disables fixed positioning so the card stays inside the layout.</p>
+        <p>Use stable pixel heights on mobile and reserve a deliberate share of landscape width for the spatial stage. The card always stays in normal dashboard flow, including while you edit the dashboard.</p>
         <div class="settings-grid">
           <label><span>Mobile expanded height (px)</span><input type="number" min="240" max="1000" step="10" .value=${String(experience.mobile.expandedHeight)}
             @change=${(event: Event) => this._updateExperience({ mobile: { ...experience.mobile, expandedHeight: Number((event.target as HTMLInputElement).value) } })} /></label>
           <label><span>Mobile bottom inset (px)</span><input type="number" min="0" max="400" step="10" .value=${String(experience.mobile.bottomInset)}
             @change=${(event: Event) => this._updateExperience({ mobile: { ...experience.mobile, bottomInset: Number((event.target as HTMLInputElement).value) } })} /></label>
-          <label class="checkbox-field"><input type="checkbox" aria-label="Fixed position on mobile"
-            .checked=${experience.fixedPosition.mobile}
-            @change=${(event: Event) => this._updateExperience({ fixedPosition: { ...experience.fixedPosition, mobile: (event.target as HTMLInputElement).checked } })} /><span>Fixed position on mobile</span></label>
-          <label class="checkbox-field"><input type="checkbox" aria-label="Fixed position on desktop"
-            .checked=${experience.fixedPosition.desktop}
-            @change=${(event: Event) => this._updateExperience({ fixedPosition: { ...experience.fixedPosition, desktop: (event.target as HTMLInputElement).checked } })} /><span>Fixed position on desktop</span></label>
           <label><span>Landscape spatial ratio</span><input type="range" min="0.25" max="0.75" step="0.01" .value=${String(experience.landscape.spatialRatio)}
             @change=${(event: Event) => this._updateExperience({ landscape: { ...experience.landscape, spatialRatio: Number((event.target as HTMLInputElement).value) } })} /><output>${Math.round(experience.landscape.spatialRatio * 100)}%</output></label>
         </div>
@@ -4049,6 +4092,88 @@ export class ApartmentViewCardEditor extends LitElement {
       ${this._contentErrors[key] ? html`<span class="content-error" role="alert">${this._contentErrors[key]}</span>` : nothing}</label>`;
   }
 
+  private _nestedCardOptions(): SearchableSelectOption[] {
+    const customCards = ((window as unknown as { customCards?: Array<{ type?: string; name?: string; description?: string; preview?: boolean }> }).customCards ?? [])
+      .filter((card): card is { type: string; name?: string; description?: string; preview?: boolean } => typeof card.type === 'string' && card.type.length > 0)
+      .map((card) => ({
+        value: card.type,
+        label: card.name ?? card.type,
+        description: card.description ?? 'Custom card installed in Home Assistant',
+        icon: 'mdi:puzzle-outline',
+      }));
+    return [...BUILT_IN_CARD_TYPES, ...customCards.filter((card) => !BUILT_IN_CARD_TYPES.some((builtIn) => builtIn.value === card.value))];
+  }
+
+  private _nestedCardTypeChanged(index: number, type: string): void {
+    const current = this._contentBlocks()[index];
+    if (!current || current.type !== 'lovelace-card') return;
+    const defaults: Record<string, Record<string, unknown>> = {
+      markdown: { type, content: '' },
+      tile: { type, entity: '' },
+      button: { type, name: '', entity: '', icon: 'mdi:gesture-tap-button' },
+      entities: { type, title: '', entities: [] },
+      'media-control': { type, entity: '' },
+      'weather-forecast': { type, entity: '' },
+      'picture-entity': { type, entity: '', camera_image: '' },
+      gauge: { type, entity: '', min: 0, max: 100 },
+      'history-graph': { type, entities: [], hours_to_show: 24 },
+      'statistics-graph': { type, entities: [], days_to_show: 7 },
+      calendar: { type, entities: [] },
+      iframe: { type, url: '' },
+      'vertical-stack': { type, cards: [] },
+      'horizontal-stack': { type, cards: [] },
+      grid: { type, cards: [], columns: 2 },
+    };
+    this._updateContentBlock(index, { card: defaults[type] ?? { type } });
+    this._contentTextDrafts = {};
+  }
+
+  private _nestedCardValueChanged(index: number, key: string, value: unknown): void {
+    const block = this._contentBlocks()[index];
+    if (!block || block.type !== 'lovelace-card') return;
+    this._updateContentBlock(index, { card: { ...block.card, [key]: value } });
+  }
+
+  private _renderNestedCardEditor(index: number, block: Extract<ContentBlock, { type: 'lovelace-card' }>) {
+    const card = block.card;
+    const type = card.type;
+    const entity = typeof card.entity === 'string' ? card.entity : '';
+    const text = typeof card.content === 'string' ? card.content : '';
+    const entities = Array.isArray(card.entities) ? card.entities.filter((value): value is string => typeof value === 'string').join('\n') : '';
+    const showEntity = ['tile', 'button', 'media-control', 'weather-forecast', 'picture-entity', 'gauge'].includes(type);
+    const showText = type === 'markdown';
+    const showEntities = ['entities', 'history-graph', 'statistics-graph', 'calendar'].includes(type);
+    const showUrl = type === 'iframe';
+    return html`
+      <div class="nested-card-builder">
+        <div class="nested-card-builder-heading">
+          <div><strong>Nested card</strong><span>Build this card with the familiar Home Assistant card vocabulary.</span></div>
+          <ha-icon icon="mdi:cards-outline"></ha-icon>
+        </div>
+        <studio-searchable-select
+          .options=${this._nestedCardOptions()}
+          .value=${type}
+          label="Card type"
+          placeholder="Search card types"
+          @value-changed=${(event: CustomEvent<{ value: string }>) => this._nestedCardTypeChanged(index, event.detail.value)}
+        ></studio-searchable-select>
+        ${showEntity ? html`<label class="content-field"><span>Entity</span><input type="text" placeholder="light.living_room" .value=${entity} @change=${(event: Event) => this._nestedCardValueChanged(index, 'entity', (event.target as HTMLInputElement).value.trim())} /></label>` : nothing}
+        ${showText ? html`<label class="content-field"><span>Content</span><textarea class="nested-card-text" placeholder="Add a note or supporting context…" .value=${text} @change=${(event: Event) => this._nestedCardValueChanged(index, 'content', (event.target as HTMLTextAreaElement).value)}></textarea></label>` : nothing}
+        ${showEntities ? html`<label class="content-field"><span>Entities, one per line</span><textarea placeholder="sensor.temperature\nlight.living_room" .value=${entities} @change=${(event: Event) => this._nestedCardValueChanged(index, 'entities', (event.target as HTMLTextAreaElement).value.split(/[\n,]/).map((value) => value.trim()).filter(Boolean))}></textarea></label>` : nothing}
+        ${showUrl ? html`<label class="content-field"><span>URL</span><input type="url" placeholder="https://example.com" .value=${typeof card.url === 'string' ? card.url : ''} @change=${(event: Event) => this._nestedCardValueChanged(index, 'url', (event.target as HTMLInputElement).value.trim())} /></label>` : nothing}
+        <studio-nested-card-editor
+          .hass=${this.hass}
+          .config=${card}
+          @config-changed=${(event: CustomEvent<{ config: NestedLovelaceCardConfig }>) => this._updateContentBlock(index, { card: event.detail.config })}
+        ></studio-nested-card-editor>
+        <details class="nested-card-advanced">
+          <summary>Advanced card configuration</summary>
+          <p>Use YAML or JSON for card-specific options. The card type above stays synchronized.</p>
+          ${this._structuredContentField(index, 'card', card, 'Configuration', 'object')}
+        </details>
+      </div>`;
+  }
+
   private _renderContentBlock(block: ContentBlock, index: number, count: number) {
     const icon = block.type === 'heading' ? 'mdi:format-header-pound'
       : block.type === 'spatial-controls' ? 'mdi:tune-variant'
@@ -4074,7 +4199,7 @@ export class ApartmentViewCardEditor extends LitElement {
           ${this._structuredContentField(index, 'action', block.action, 'Home Assistant action (YAML or JSON)', 'object')}`;
         break;
       case 'lovelace-card':
-        fields = this._structuredContentField(index, 'card', block.card, 'Nested Lovelace card (YAML or JSON)', 'object');
+        fields = this._renderNestedCardEditor(index, block);
         break;
       case 'condition':
         fields = html`

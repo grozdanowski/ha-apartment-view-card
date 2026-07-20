@@ -4,7 +4,7 @@ import { repeat } from 'lit/directives/repeat.js';
 import { guard } from 'lit/directives/guard.js';
 import { fireEvent } from 'custom-card-helpers';
 import type { HassLike } from './core/ha-types';
-import { normalizeConfig, zoneForEntity, zoneForPoint, type ApartmentViewConfig, type ContentBlock, type EntityConfig, type ZoneConfig, type QuickAction, type ImagesConfig, type SpatialConfig, type ImmersiveExperienceConfig } from './core/config';
+import { normalizeConfig, zoneForEntity, zoneForPoint, type ApartmentViewConfig, type ContentBlock, type EntityConfig, type ZoneConfig, type QuickAction, type ImagesConfig, type SpatialConfig } from './core/config';
 import './editor/apartment-view-card-editor';
 import './editor/spatial-preview';
 import './runtime/immersive-content';
@@ -295,17 +295,6 @@ export class ApartmentViewCard extends LitElement {
       outline: 2px solid #d8e5e7;
       outline-offset: 2px;
     }
-    .spatial-room-back {
-      display: grid;
-      flex-basis: 48px !important;
-      width: 48px;
-      height: 48px;
-      place-items: center;
-      padding: 0 !important;
-      border-bottom-color: transparent !important;
-      color: var(--primary-text-color, #f8fbfb) !important;
-    }
-    .spatial-room-back ha-icon { --mdc-icon-size: 24px; }
     .spatial-room-divider {
       flex: 0 0 1px;
       width: 1px;
@@ -1070,21 +1059,6 @@ export class ApartmentViewCard extends LitElement {
         height: min(780px, 86vh);
         min-height: 0;
       }
-      .immersive-card.fixed-position {
-        position: fixed;
-        inset: 0;
-        width: 100vw;
-        height: 100dvh;
-        min-height: 100dvh;
-      }
-      @media (min-width: 769px) {
-        .immersive-card.fixed-position {
-          inset: 40px;
-          width: calc(100vw - 80px);
-          height: calc(100dvh - 80px);
-          min-height: calc(100dvh - 80px);
-        }
-      }
       .sr-only {
         position: absolute;
         width: 1px;
@@ -1221,6 +1195,7 @@ export class ApartmentViewCard extends LitElement {
         z-index: 8;
         top: 12px;
         left: 16px;
+        box-sizing: border-box;
         display: inline-flex;
         min-width: 44px;
         min-height: 44px;
@@ -1234,6 +1209,8 @@ export class ApartmentViewCard extends LitElement {
         font: inherit;
         font-size: 14px;
         font-weight: 620;
+        line-height: 1;
+        white-space: nowrap;
         cursor: pointer;
         backdrop-filter: blur(10px);
       }
@@ -1648,11 +1625,6 @@ export class ApartmentViewCard extends LitElement {
     }
     return null;
   };
-
-  private _immersiveUsesFixedPosition(experience: ImmersiveExperienceConfig): boolean {
-    if (this._isCardEditorPreview() || this._dashboardEditing) return false;
-    return this._isMobileScreen ? experience.fixedPosition.mobile : experience.fixedPosition.desktop;
-  }
 
   private _onEditorElementPreview = (event: CustomEvent<{ elementId: string | null }>): void => {
     if (!this._isCardEditorPreview()) return;
@@ -2664,13 +2636,12 @@ export class ApartmentViewCard extends LitElement {
     const subtitle = experience.intro.subtitle;
     const focusedZone = this._floorData.zones.find((zone) => zone.id === this._spatialFocusedZoneId);
     const preview = this._isCardEditorPreview();
-    const fixedPosition = this._immersiveUsesFixedPosition(experience);
     const style = [
       `--immersive-expanded-height:${experience.mobile.expandedHeight}px`,
       `--immersive-bottom-inset:${experience.mobile.bottomInset}px`,
       `--immersive-spatial-ratio:${Math.round(experience.landscape.spatialRatio * 100)}%`,
     ].join(';');
-    return html`<ha-card class="immersive-card ${preview ? 'editor-preview' : ''} ${fixedPosition ? 'fixed-position' : 'in-flow'} ${this._dashboardEditing ? 'dashboard-editing' : ''}" style=${style}>
+    return html`<ha-card class="immersive-card ${preview ? 'editor-preview' : ''} in-flow ${this._dashboardEditing ? 'dashboard-editing' : ''}" style=${style}>
       ${!preview ? html`<button type="button" class="immersive-edit-dashboard" aria-label="Edit dashboard" title="Edit dashboard"
         @click=${this._requestDashboardEdit}><ha-icon icon="mdi:pencil-outline"></ha-icon></button>` : nothing}
       <div class="immersive-shell">

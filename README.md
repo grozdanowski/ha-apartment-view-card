@@ -50,9 +50,9 @@ Elements are shown as a compact inventory. **Edit** opens a large transactional 
 
 ## Immersive Experience
 
-The spatial card is a full-viewport home surface rather than a conventional dashboard tile.
+The spatial card can fill its dashboard surface without escaping normal dashboard flow.
 
-- On phones, the configurable greeting and supporting paragraphs lead into the 3D home. As supporting controls scroll, the 3D stage becomes a compact sticky viewport.
+- On phones, the configurable greeting and supporting paragraphs lead into the 3D home. The card remains an ordinary scrollable dashboard surface, including in dashboard edit mode.
 - In landscape, the greeting, 3D home, and room navigation stay in the left column while contextual controls scroll independently on the right.
 - Selecting a room animates to a canonical architectural view. A single **Back** control appears inside the canvas, and the room's content replaces the overview content.
 - Camera motion pauses immediately when the user orbits or zooms, then returns to the canonical pose and slow orbit after the configured idle period.
@@ -70,7 +70,6 @@ experience:
       No rain is expected tonight.
   mobile:
     expandedHeight: 480
-    compactHeight: 220
     bottomInset: 100
   landscape:
     spatialRatio: 0.46
@@ -109,7 +108,7 @@ content:
           entity: media_player.naim
 ```
 
-Nested cards are created with Home Assistant's own card helpers and receive live `hass` updates. In every editor preview they are inert and receive a service-blocking Home Assistant facade, so editing cannot activate a device.
+Nested cards are created with Home Assistant's own card helpers and receive live `hass` updates. In the visual editor, choose a card type through the searchable card picker, fill in the common fields, and open **Advanced card configuration** only when that card needs specialist options. In every editor preview they are inert and receive a service-blocking Home Assistant facade, so editing cannot activate a device.
 
 The editor is preview-only. It does not call Home Assistant services.
 

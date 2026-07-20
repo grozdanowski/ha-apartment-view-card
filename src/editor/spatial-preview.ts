@@ -650,7 +650,10 @@ export class SpatialPreview extends LitElement {
     if (!this._entityIsActive(entityId)) return 0;
     const brightness = Number(resolveDirectSpatialEntityState(this.hass?.states ?? {}, entityId).state?.attributes?.brightness);
     const level = Number.isFinite(brightness) ? Math.max(0.02, brightness / 255) : 1;
-    return 18 * level;
+    // Keep HA brightness as the live control, but leave headroom for the
+    // scene's ambient/daylight contribution so practical lights do not wash
+    // out nearby rooms.
+    return 14.4 * level;
   }
 
   private _configureZoneLightLayers(): void {
